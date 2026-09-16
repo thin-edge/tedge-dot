@@ -528,8 +528,15 @@ Send Trap
     [Arguments]    ${service}    @{args}    ${community}=public    ${expect_rc}=0    ${env}=${EMPTY}
     ${project}=    DeviceLibrary.Get Compose Project Name
     ${argline}=    Catenate    @{args}
+    # `timeout` bounds the notification: snmpinform's own -r/-t bound each request, but a
+    # receiver that keeps answering a confirmed message with a Report leaves net-snmp
+    # re-synchronising and re-sending forever. Without this the whole suite wedges on one
+    # notification instead of failing the test that sent it; 124 is timeout's own exit code.
     ${rc}    ${output}=    Run And Return Rc And Output
-    ...    docker compose -p ${project} exec -T -e COMMUNITY=${community} ${env} ${service} send-trap ${argline}
+    ...    timeout 30 docker compose -p ${project} exec -T -e COMMUNITY=${community} ${env} ${service} send-trap ${argline}
+    IF    ${rc} == 124
+        Fail    send-trap ${argline} from ${service} did not return within 30s: ${output}
+    END
     Log    send-trap ${argline} (${community} ${env}) from ${service}: rc=${rc} ${output}
     IF    "${expect_rc}" != "any"
         Should Be Equal As Integers    ${rc}    ${expect_rc}    msg=send-trap failed: ${output}
