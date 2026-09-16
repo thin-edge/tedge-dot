@@ -160,12 +160,12 @@ A v1 noSuchName Fails Only The Point It Names
     [Documentation]    SNMPv1 answers an unserved OID with error-status noSuchName for the whole
     ...    request; the connector marks that point bad and re-requests the others.
     ${mark}=    Get Message Mark
-    ${sample}=    Wait For Fresh Message With Field    ${{ $sample_topic('agent-v1', 'missing_object') }}
+    ${sample}=    Wait For Fresh Message With Field    te/device/agent-v1/ot/${PROTOCOL}/sample/missing_object
     ...    quality    bad    timeout=${SAMPLE_TIMEOUT}    since=${mark}
     ${error}=    Get Json Field    ${sample}    error
     Should Not Be Empty    ${error}
     FOR    ${point}    IN    sys_descr    int_seed    ticks
-        Wait For Fresh Message With Field    ${{ $sample_topic('agent-v1', $point) }}    quality    good
+        Wait For Fresh Message With Field    te/device/agent-v1/ot/${PROTOCOL}/sample/${point}    quality    good
         ...    timeout=${SAMPLE_TIMEOUT}    since=${mark}
     END
     Good Sample Value Should Be    agent-v1    int_seed    1234
@@ -192,7 +192,7 @@ Writes An Integer And Reads It Back
 Writes A String And Reads It Back
     ${result}=    Write Point    agent    label    "written by tedge-dot"    set-str-1
     Json Field Should Be    ${result}    status    successful
-    ${sample}=    Wait For Fresh Message With Field    ${{ $sample_topic('agent', 'label') }}
+    ${sample}=    Wait For Fresh Message With Field    te/device/agent/ot/${PROTOCOL}/sample/label
     ...    value    written by tedge-dot    timeout=${SAMPLE_TIMEOUT}
     Agent Value Should Be    agent    ${E}.21.0    STRING: "written by tedge-dot"
 
@@ -253,7 +253,7 @@ Polls And Writes An SNMPv3 AuthPriv Device
     Json Field Should Be    ${sample}    value    ${SYS_DESCR}
     ${result}=    Write Point    agent-v3-priv    label    "over authPriv"    set-v3-1
     Json Field Should Be    ${result}    status    successful
-    Wait For Fresh Message With Field    ${{ $sample_topic('agent-v3-priv', 'label') }}
+    Wait For Fresh Message With Field    te/device/agent-v3-priv/ot/${PROTOCOL}/sample/label
     ...    value    over authPriv    timeout=${SAMPLE_TIMEOUT}
     Agent Value Should Be    agent-v3-priv    ${E}.21.0    STRING: "over authPriv"
     Agent Should Have Received    agent-v3-priv    v3 SetRequestPDU (authPriv)
@@ -267,12 +267,12 @@ Polls An SNMPv3 SHA-256 AES-256 Device
 A Wrong SNMPv3 Password Degrades The Link
     [Documentation]    Every request fails USM authentication: bad samples, a degraded link, and
     ...    never a good sample.
-    ${topic}=    Set Variable    ${{ $link_topic('agent-badauth') }}
+    ${topic}=    Set Variable    te/device/agent-badauth/ot/${PROTOCOL}/status/link
     ${link}=    Wait For Fresh Message With Field    ${topic}    status    degraded    disconnected
     ...    timeout=${READY_TIMEOUT}    since=0
-    ${sample}=    Wait For Fresh Message With Field    ${{ $sample_topic('agent-badauth', 'sys_descr') }}
+    ${sample}=    Wait For Fresh Message With Field    te/device/agent-badauth/ot/${PROTOCOL}/sample/sys_descr
     ...    quality    bad    timeout=${READY_TIMEOUT}    since=0
-    ${samples}=    Get Messages    ${{ $sample_topic('agent-badauth', 'sys_descr') }}
+    ${samples}=    Get Messages    te/device/agent-badauth/ot/${PROTOCOL}/sample/sys_descr
     FOR    ${payload}    IN    @{samples}
         ${quality}=    Get Json Field    ${payload}    quality
         Should Be Equal    ${quality}    bad    msg=a device with a wrong password produced a good sample
@@ -281,15 +281,15 @@ A Wrong SNMPv3 Password Degrades The Link
 A Stopped Agent Gives Bad Samples And The Link Recovers
     ${mark}=    Get Message Mark
     Stop Stack Service    agent-v1
-    Wait For Fresh Message With Field    ${{ $link_topic('agent-v1') }}    status    degraded    disconnected
+    Wait For Fresh Message With Field    te/device/agent-v1/ot/${PROTOCOL}/status/link    status    degraded    disconnected
     ...    timeout=${OUTAGE_TIMEOUT}    since=${mark}
-    Wait For Fresh Message With Field    ${{ $sample_topic('agent-v1', 'ticks') }}    quality    bad
+    Wait For Fresh Message With Field    te/device/agent-v1/ot/${PROTOCOL}/sample/ticks    quality    bad
     ...    timeout=${OUTAGE_TIMEOUT}    since=${mark}
     ${mark}=    Get Message Mark
     Start Stack Service    agent-v1
-    Wait For Fresh Message With Field    ${{ $link_topic('agent-v1') }}    status    connected
+    Wait For Fresh Message With Field    te/device/agent-v1/ot/${PROTOCOL}/status/link    status    connected
     ...    timeout=${RECOVERY_TIMEOUT}    since=${mark}
-    Wait For Fresh Message With Field    ${{ $sample_topic('agent-v1', 'ticks') }}    quality    good
+    Wait For Fresh Message With Field    te/device/agent-v1/ot/${PROTOCOL}/sample/ticks    quality    good
     ...    timeout=${RECOVERY_TIMEOUT}    since=${mark}
     [Teardown]    Run Keyword And Ignore Error    Start Stack Service    agent-v1
 
@@ -445,7 +445,7 @@ A Trusted Forwarder's Notification Is Routed By snmpTrapAddress
     ...    the forwarder, but the sample belongs to `branch-switch` (host `forwarded`).
     ${forwarder_ip}=    Service Address    forwarder
     ${sender_ip}=    Service Address    forwarded
-    ${topic}=    Set Variable    ${{ $sample_topic('branch-switch', 'link_down') }}
+    ${topic}=    Set Variable    te/device/branch-switch/ot/${PROTOCOL}/sample/link_down
     ${mark}=    Get Message Mark
     Send Trap    forwarded    linkdown-addressed    31
     ${sample}=    Wait For Fresh Message With Field    ${topic}    quality    good
@@ -453,7 +453,7 @@ A Trusted Forwarder's Notification Is Routed By snmpTrapAddress
     Json Field Should Be    ${sample}    value    ${LINK_DOWN}
     Json Field Should Be    ${sample}    addr.forwarder    ${forwarder_ip}
     Json Field Should Be    ${sample}    addr.source    ${sender_ip}
-    Wait For Fresh Message With Field    ${{ $sample_topic('branch-switch', 'if_index') }}    value    ${31}    ${31.0}
+    Wait For Fresh Message With Field    te/device/branch-switch/ot/${PROTOCOL}/sample/if_index    value    ${31}    ${31.0}
     ...    timeout=${SAMPLE_TIMEOUT}    since=${mark}
     Run Keyword And Expect Error    *timed out*
     ...    Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/if_index    value    ${31}    ${31.0}
@@ -466,7 +466,7 @@ A Forwarder's Notification Without snmpTrapAddress Is Dropped
     ${mark}=    Get Message Mark
     Send Trap    forwarded    linkdown    32
     Run Keyword And Expect Error    *timed out*
-    ...    Wait For Fresh Message With Field    ${{ $sample_topic('branch-switch', 'if_index') }}    value    ${32}    ${32.0}
+    ...    Wait For Fresh Message With Field    te/device/branch-switch/ot/${PROTOCOL}/sample/if_index    value    ${32}    ${32.0}
     ...    timeout=3    since=${mark}
     Run Keyword And Expect Error    *timed out*
     ...    Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/if_index    value    ${32}    ${32.0}
@@ -515,14 +515,14 @@ LinkDown Raises An Alarm That LinkUp Clears
 *** Keywords ***
 Setup SNMP Stack
     Setup OT Stack    snmp
-    # Topic builders usable inline as ${{ $sample_topic('agent', 'ticks') }}.
+    # Topic builders usable inline as te/device/agent/ot/${PROTOCOL}/sample/ticks.
     ${sample_topic}=    Evaluate    lambda device, point: f"te/device/{device}/ot/snmp/sample/{point}"
     ${link_topic}=    Evaluate    lambda device: f"te/device/{device}/ot/snmp/status/link"
     Set Suite Variable    $sample_topic    ${sample_topic}
     Set Suite Variable    $link_topic    ${link_topic}
     Wait For Fresh Message With Field    ${LINK_TOPIC}    status    connected
     ...    timeout=${READY_TIMEOUT}    since=0
-    Wait For Fresh Message With Field    ${{ $link_topic('agent') }}    status    connected
+    Wait For Fresh Message With Field    te/device/agent/ot/${PROTOCOL}/status/link    status    connected
     ...    timeout=${READY_TIMEOUT}    since=0
 
 Send Trap
@@ -602,7 +602,7 @@ Write Batch
 
 Link Info Should Be
     [Arguments]    ${device}    ${host}    ${port}    ${version}
-    ${payload}=    Wait For Retained    ${{ $link_topic($device) }}    timeout=${READY_TIMEOUT}
+    ${payload}=    Wait For Retained    te/device/${device}/ot/${PROTOCOL}/status/link    timeout=${READY_TIMEOUT}
     ${info}=    Get Json Field    ${payload}    info
     ${expected}=    Create Dictionary    host=${host}    port=${{ int($port) }}    version=${version}
     Dictionaries Should Be Equal    ${info}    ${expected}
@@ -610,14 +610,14 @@ Link Info Should Be
 Good Sample
     [Documentation]    The next fresh sample of a point; it must be good.
     [Arguments]    ${device}    ${point}
-    ${sample}=    Wait For Fresh Message With Field    ${{ $sample_topic($device, $point) }}    quality    good    bad
+    ${sample}=    Wait For Fresh Message With Field    te/device/${device}/ot/${PROTOCOL}/sample/${point}    quality    good    bad
     ...    timeout=${SAMPLE_TIMEOUT}
     Json Field Should Be    ${sample}    quality    good
     RETURN    ${sample}
 
 Bad Sample
     [Arguments]    ${device}    ${point}
-    ${sample}=    Wait For Fresh Message With Field    ${{ $sample_topic($device, $point) }}    quality    good    bad
+    ${sample}=    Wait For Fresh Message With Field    te/device/${device}/ot/${PROTOCOL}/sample/${point}    quality    good    bad
     ...    timeout=${SAMPLE_TIMEOUT}
     Json Field Should Be    ${sample}    quality    bad
     RETURN    ${sample}
@@ -636,7 +636,7 @@ Good Sample Value Should Be
 Fresh Sample Value Should Be
     [Documentation]    Wait for a sample carrying the value (the write may land a poll later).
     [Arguments]    ${device}    ${point}    ${expected}
-    Wait For Fresh Message With Field    ${{ $sample_topic($device, $point) }}    value
+    Wait For Fresh Message With Field    te/device/${device}/ot/${PROTOCOL}/sample/${point}    value
     ...    ${{ int($expected) }}    ${{ float($expected) }}    timeout=${SAMPLE_TIMEOUT}    since=0
 
 Trap Raises Event
