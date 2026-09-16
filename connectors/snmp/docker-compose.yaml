@@ -26,23 +26,20 @@
 # Ports are published WITHOUT a fixed host port (parallel-safe). Pin them for manual work with
 # BROKER_PORT (`just e2e-up snmp`) and SNMP_SIM_PORT (`just sim snmp`, the demo config's 1161).
 
-# Two images serve ten services. Exactly ONE service per image carries the `build:` (the
-# `agent` and the `simulator`); the others reference the built tag and wait for that builder,
-# because compose builds services in parallel and two builds writing one tag fail with
-# `image ... already exists` — on every cold image cache, for everyone.
+# Ten services run two images. Each carries its own `build:` and its own image tag: compose
+# builds services in parallel, and several builds writing ONE tag fail with
+# `image ... already exists`, while several services merely *referencing* one built tag fail to
+# create with `No such image: ...:latest`. Per-service tags cost nothing — the layers are
+# cached, so only the first service of each image actually builds.
 x-agent: &agent
-  image: tedge-dot-snmp-agent-sim
-  pull_policy: never
-  depends_on:
-    agent:
-      condition: service_healthy
+  build:
+    context: ../..
+    dockerfile: connectors/snmp/agent/Dockerfile
 
 x-notifier: &notifier
-  image: tedge-dot-snmp-sim
-  pull_policy: never
-  depends_on:
-    simulator:
-      condition: service_started
+  build:
+    context: ../..
+    dockerfile: connectors/snmp/sim/Dockerfile
 
 services:
   broker:
@@ -54,12 +51,9 @@ services:
         published: "${BROKER_PORT:-}"
 
   # v1/v2c agent: device `agent` (v2c, GETBULK) — every value type and the writable objects.
-  # This service builds the agent image the other five reference.
   agent:
+    <<: *agent
     image: tedge-dot-snmp-agent-sim
-    build:
-      context: ../..
-      dockerfile: connectors/snmp/agent/Dockerfile
     environment:
       SNMP_ENGINE_ID: 80001f8880e2e0000000000001
     ports:
@@ -97,12 +91,9 @@ services:
     environment:
       SNMP_ENGINE_ID: 80001f8880e2e0000000000006
 
-  # Builds the notification image the other three reference.
   simulator:
+    <<: *notifier
     image: tedge-dot-snmp-sim
-    build:
-      context: ../..
-      dockerfile: connectors/snmp/sim/Dockerfile
     environment:
       TRAP_TARGET: connector:162
       TRAP_ENGINE_ID: 80001f8880e2e000000000a001
