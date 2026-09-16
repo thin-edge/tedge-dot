@@ -26,20 +26,18 @@
 # Ports are published WITHOUT a fixed host port (parallel-safe). Pin them for manual work with
 # BROKER_PORT (`just e2e-up snmp`) and SNMP_SIM_PORT (`just sim snmp`, the demo config's 1161).
 
-# Ten services run two images. Each carries its own `build:` and its own image tag: compose
-# builds services in parallel, and several builds writing ONE tag fail with
-# `image ... already exists`, while several services merely *referencing* one built tag fail to
-# create with `No such image: ...:latest`. Per-service tags cost nothing — the layers are
-# cached, so only the first service of each image actually builds.
+# Ten services run two images, and exactly one service per image builds it (`agent`,
+# `simulator`); the rest only reference the built tag. Ten services building two identical
+# contexts is what must be avoided: compose builds in parallel, so several builds writing one
+# tag fail with `image ... already exists`, and giving each service its own tag instead makes
+# BuildKit dedupe the identical builds and leave some per-project tags untagged, which fails
+# creation with `No such image: ...:latest`. `just test-e2e` pre-builds these tags (see the
+# `_e2e` recipe), so they exist before any container is created.
 x-agent: &agent
-  build:
-    context: ../..
-    dockerfile: connectors/snmp/agent/Dockerfile
+  image: tedge-dot-snmp-agent-sim
 
 x-notifier: &notifier
-  build:
-    context: ../..
-    dockerfile: connectors/snmp/sim/Dockerfile
+  image: tedge-dot-snmp-sim
 
 services:
   broker:
@@ -53,7 +51,9 @@ services:
   # v1/v2c agent: device `agent` (v2c, GETBULK) — every value type and the writable objects.
   agent:
     <<: *agent
-    image: tedge-dot-snmp-agent-sim
+    build:
+      context: ../..
+      dockerfile: connectors/snmp/agent/Dockerfile
     environment:
       SNMP_ENGINE_ID: 80001f8880e2e0000000000001
     ports:
@@ -93,7 +93,9 @@ services:
 
   simulator:
     <<: *notifier
-    image: tedge-dot-snmp-sim
+    build:
+      context: ../..
+      dockerfile: connectors/snmp/sim/Dockerfile
     environment:
       TRAP_TARGET: connector:162
       TRAP_ENGINE_ID: 80001f8880e2e000000000a001
