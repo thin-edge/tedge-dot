@@ -77,11 +77,21 @@ static long unhex(const char *hex, uint8_t **out) {
     return (long)(n / 2);
 }
 
-static void tohex(const uint8_t *b, size_t len, char *dst) {
+/* `cap` is the size of dst, NUL included: a length taken from a decoded datagram (a community
+ * string is as long as the message says) would otherwise run off the end of a fixed buffer. */
+static void tohex_cap(const uint8_t *b, size_t len, char *dst, size_t cap) {
+    if (cap == 0)
+        return;
+    if (len > (cap - 1) / 2)
+        len = (cap - 1) / 2;
     for (size_t i = 0; i < len; i++)
         sprintf(dst + 2 * i, "%02x", b[i]);
     dst[2 * len] = '\0';
 }
+
+/* No sizeof() macro wrapper: several destinations here are pointers (a parameter, a malloc'd
+ * buffer), where sizeof would silently cap the output at a few bytes. Each caller passes the
+ * capacity it actually has. */
 
 static const char *jstr(const cJSON *obj, const char *key) {
     const cJSON *v = cJSON_GetObjectItem(obj, key);
@@ -134,7 +144,7 @@ static const char *value_text(tsnmp_type_t type, const uint8_t *content,
         return buf;
     case TSNMP_TYPE_OCTET_STRING:
     case TSNMP_TYPE_OPAQUE:
-        tohex(content, len, buf);
+        tohex_cap(content, len, buf, cap);
         return buf;
     case TSNMP_TYPE_OID:
         if (tsnmp_oid_decode(content, len, &oid, err, sizeof err) != 0)
@@ -189,7 +199,7 @@ static bool raw_ok(tsnmp_type_t type, const char *want_hex, const char *got_hex)
     }
     free(want);
     if (len)
-        tohex(canon, len, text);
+        tohex_cap(canon, len, text, sizeof text);
     bool ok = len && strcmp(text, got_hex) == 0;
     if (ok)
         tolerated_raw++;
@@ -222,7 +232,7 @@ static void check_message(const cJSON *v) {
     char small[64];
     CHECK(field_is(e, "version", tsnmp_version_name(n.version)), "[%s] version",
           name);
-    tohex(pdu->community, pdu->community_len, big);
+    tohex_cap(pdu->community, pdu->community_len, big, sizeof big);
     CHECK(field_is(e, "community", big), "[%s] community %s", name, big);
     CHECK(field_is(e, "pdu", n.kind == TSNMP_PDU_INFORM ? "inform" : "trap"),
           "[%s] pdu", name);
@@ -239,7 +249,7 @@ static void check_message(const cJSON *v) {
     tsnmp_oid_format(&n.trap, big, sizeof big);
     CHECK(field_is(e, "trap", big), "[%s] trap %s", name, big);
     uint8_t enc[TSNMP_CANON_MAX];
-    tohex(enc, tsnmp_oid_encode(&n.trap, enc, sizeof enc), big);
+    tohex_cap(enc, tsnmp_oid_encode(&n.trap, enc, sizeof enc), big, sizeof big);
     CHECK(field_is(e, "trap_raw", big), "[%s] trap_raw %s", name, big);
 
     const cJSON *vbs = cJSON_GetObjectItem(e, "varbinds");
@@ -269,7 +279,7 @@ static void check_message(const cJSON *v) {
         if (type == TSNMP_TYPE_OCTET_STRING || type == TSNMP_TYPE_OPAQUE) {
             /* long strings: compare the hex directly */
             char *hex = malloc(clen * 2 + 1);
-            tohex(content, clen, hex);
+            tohex_cap(content, clen, hex, clen * 2 + 1);
             CHECK(field_is(w, "value", hex), "[%s] varbind %d value", name, i);
             CHECK(field_is(w, "raw", hex), "[%s] varbind %d raw", name, i);
             free(hex);
@@ -277,7 +287,7 @@ static void check_message(const cJSON *v) {
         }
         CHECK(field_is(w, "value", value), "[%s] varbind %d value %s", name, i,
               value ? value : "null");
-        tohex(content, clen, big);
+        tohex_cap(content, clen, big, sizeof big);
         CHECK(raw_ok(type, jstr(w, "raw"), big), "[%s] varbind %d raw %s (want %s)",
               name, i, big, jstr(w, "raw"));
     }
@@ -801,7 +811,7 @@ static void capture_sink(void *ctx, tdot_device_t *dev, tdot_point_t *pt,
     snprintf(it->point, sizeof it->point, "%s", pt->id);
     it->quality = s->quality;
     it->value = s->value;
-    tohex(s->raw, s->raw_len, it->raw);
+    tohex_cap(s->raw, s->raw_len, it->raw, sizeof it->raw);
     /* a received sample carries its own addr; a polled one uses the point's */
     snprintf(it->addr, sizeof it->addr, "%s",
              s->addr_json      ? s->addr_json

@@ -300,6 +300,11 @@ static int string_or_list(const toml_table_t *tab, const char *key,
     toml_datum_t d = toml_string_in(tab, key);
     if (d.ok) {
         *out = malloc(sizeof **out);
+        if (!*out) {
+            free(d.u.s);
+            snprintf(err, errlen, "%s: out of memory reading %s", where, key);
+            return -1;
+        }
         (*out)[0] = d.u.s;
         return 1;
     }
@@ -1858,6 +1863,14 @@ static bool v3_prepare(snmpc_device_t *sd, const tsnmp_v3_header_t *h,
         snprintf(why, whylen, "its engine ID is not the device's");
         return false;
     }
+    /* Authenticating the message needs keys localized to the engine it CLAIMS, so this install
+     * cannot wait until the message is verified. net-snmp's user table and engine-time cache
+     * are process-wide and never shrink, so a spoofed source sending forged engine IDs grows
+     * them without bound (see TODO.md). Removing the stale entries again is not the fix it
+     * appears to be: net-snmp's free_enginetime() empties the whole 1-of-23 hash bucket
+     * without comparing engine IDs, so it would discard the boots/time of unrelated engines --
+     * this connector's own among them -- and usm_remove_user() would delete an entry another
+     * device's session owns and never rebuilds. */
     tsnmp_usm_install(&sd->v3, h->engine, h->engine_len, true);
     return true;
 }
