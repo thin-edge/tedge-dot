@@ -421,13 +421,18 @@ A v3 Trap With A Wrong Key Is Dropped
     Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/if_index    value    ${24}    ${24.0}
     ...    timeout=${SAMPLE_TIMEOUT}    since=${mark}
 
-An Unauthenticated v3 Trap Is Dropped And Teaches The Device Nothing
-    [Documentation]    The device is configured authPriv. A noAuthNoPriv trap carrying its user
-    ...    name (which travels in the clear in every v3 message) must be dropped -- and must not
-    ...    disturb the device's trap security state: authenticating a v3 message needs keys
-    ...    localized to the engine ID the message CLAIMS, so a receiver that adopts that engine
-    ...    before checking the level can be made to forget the real one by a single spoofed
-    ...    datagram, silencing the device's traps until a restart.
+An Unauthenticated v3 Trap Is Dropped And The Device Keeps Working
+    [Documentation]    The device is configured authPriv, so a noAuthNoPriv trap carrying its
+    ...    user name -- which travels in the clear in every v3 message -- must be dropped, and
+    ...    the device must keep accepting properly authenticated traps afterwards.
+    ...
+    ...    What this case does NOT establish: every trap device in connector.toml pins
+    ...    `engine_id`, and the simulator sends this trap from that same engine, so the
+    ...    receiver's engine-LEARNING branch is never reached and the case passes with or
+    ...    without the fix that guards it. Discriminating that needs a device whose engine is
+    ...    unpinned when the case runs (see TODO.md); the property is covered at unit level by
+    ...    `an_unauthenticated_notification_teaches_an_authenticated_user_nothing`, which does
+    ...    fail without the fix.
     ${mark}=    Get Message Mark
     Send Trap    simulator    v3-linkdown-noauth    31
     Run Keyword And Expect Error    *timed out*

@@ -61,6 +61,33 @@
       - The receiver's `LocalEngine` state is not rolled back when a forwarded v3 notification
         is tried against a device it turns out not to belong to (`listener.rs`), unlike the
         per-device security state beside it.
+      - **The C build's USM tables grow with every engine ID a spoofed source claims.**
+        Authenticating a v3 notification needs keys localized to the engine the message *claims*,
+        so `v3_prepare` (`impl/c/connectors/snmp/connector_snmp.c`) installs them before the
+        message can be verified — and net-snmp's user table and engine-time cache are
+        process-wide and never shrink. A source spoofing a configured device's address (the only
+        routing check) and sending forged engine IDs with the device's user name — which every
+        v3 message carries in the clear — grows the process without bound and slows the linear
+        `usm_get_user` scan on every message. Not fixed, because the obvious cleanup is worse:
+        `free_enginetime()` frees the whole 1-of-23 hash bucket without comparing engine IDs, so
+        it discards the boots and time of unrelated engines (this connector's own among them),
+        and `usm_remove_user()` deletes an entry another device's session owns and that net-snmp
+        never rebuilds (it returns early once `SNMP_FLAGS_USER_CREATED` is set). A safe fix needs
+        a per-engine removal primitive upstream, or a design that does not install until the
+        level check has passed. The Rust build is unaffected: it localizes keys itself and rolls
+        the state back on any failure.
+      - **The e2e case `An Unauthenticated v3 Trap Is Dropped And Teaches The Device Nothing`
+        does not discriminate the fix it was written for.** Every v3 trap device in
+        `connectors/snmp/connector.toml` pins `engine_id`, and the simulator sends the
+        unauthenticated trap from that same engine, so the engine-learning branch is never
+        reached and the case passes with or without the receiver-side fix — it currently proves
+        only that a below-level notification is dropped, which is worth having but is not the
+        security property. Discriminating it needs a trap device whose engine is *unpinned* at
+        the moment the case runs (so the case must also precede any authenticated trap from that
+        device), which means a new device and notification sender in the stack. The property
+        itself is covered at unit level by
+        `an_unauthenticated_notification_teaches_an_authenticated_user_nothing`
+        (`impl/rust/vendor/snmp2/src/tedge_dot_tests.rs`), which does fail without the fix.
       - **Push recovery ends when a re-subscribe fails** (`retain_pushed`, `impl/rust/crates/sdk/src/runtime.rs`):
         a device drops out of `pushed_devices` the moment it has no subscribed points, which is
         exactly when a failed re-subscribe means recovery should keep trying — so a mixed device

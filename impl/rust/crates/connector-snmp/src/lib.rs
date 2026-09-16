@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use config::Connection;
 use listener::{Route, Routes, V3Receive};
 use poll::{error_name, RequestError, Session};
-use snmp2::v3::LocalEngine;
+use snmp2::v3::{LocalEngine, SecurityLevel};
 use snmp2::Value as SnmpValue;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -223,14 +223,29 @@ impl Connector for SnmpConnector {
         // answering at the device's address can choose it. Pinning that would hand an attacker
         // the same permanent trap rejection through the poll path that TEDGE-DOT-PATCH(8)
         // closes on the listener path: every genuine trap would then fail `EngineIdMismatch`
-        // until the connector restarts. A good sample is proof: under v3 its response passed
-        // USM verification with keys localized to this engine.
-        let verified = samples.iter().any(|s| s.quality != Quality::Bad);
+        // until the connector restarts.
+        //
+        // A good sample is that proof only from authNoPriv up, where the response carried an
+        // HMAC over keys localized to this engine. At `level = "noAuthNoPriv"` nothing is
+        // verified at all (`Security::need_auth` is false), so a good sample says only that
+        // something answered -- exactly the case this guard exists to exclude.
+        let authenticated = model
+            .v3
+            .as_ref()
+            .is_some_and(|v3| v3.level >= SecurityLevel::AuthNoPriv);
+        let verified = authenticated && samples.iter().any(|s| s.quality != Quality::Bad);
         let discovered = verified.then(|| session.engine_id().map(<[u8]>::to_vec)).flatten();
         if let Some(engine_id) = discovered {
             let mut routes = listener::lock(&self.routes);
             if let Some(v3) = routes.devices.get_mut(index).and_then(|r| r.v3.as_mut()) {
-                if v3.trap.engine_id().is_empty() {
+                // Re-pin when it CHANGES, not only when it is empty: an agent that reboots with
+                // a new engine ID (one derived from a MAC or a boot identity, so a redeployed
+                // container has a different one) would otherwise keep the old pin for the life
+                // of the process -- every trap failing `EngineIdMismatch` behind a link the
+                // runtime reports as connected, with no reconnect able to repair it, since
+                // `reconnect` re-attaches without rebuilding this state. An authenticated poll
+                // is as good a source for the new engine as it was for the first.
+                if v3.trap.engine_id() != engine_id.as_slice() {
                     match v3.trap.clone().with_engine_id(&engine_id) {
                         Ok(localized) => v3.trap = localized,
                         Err(e) => debug!(
