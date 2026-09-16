@@ -17,6 +17,9 @@
 //   when   without it, an event is raised every time the value changes. With it, an event is
 //          raised each time the condition starts to hold, not while it keeps holding. The keys
 //          are an alarm's (see ot-alarm): equals, not_equals, above, below, hysteresis.
+//   every  true: raise an event for EVERY good sample (for which `when` holds, when given), the
+//          first one included — for signals whose samples are occurrences rather than states,
+//          such as SNMP traps, where two identical linkDown notifications are two events.
 //
 // `event` may also be a list of such tables. An entry the flow cannot use — a type that is not a
 // topic level, a `when` with no condition it knows — is skipped. Only good samples are evaluated.
@@ -123,7 +126,7 @@ function eventsOf(sample, point) {
         : when
           ? "{point} is {value}"
           : "{point} changed to {value}";
-    out.push({ type, text, when });
+    out.push({ type, text, when, every: entry.every === true });
   }
   return out;
 }
@@ -141,11 +144,11 @@ function onSample(parts, sample, context) {
       const was = knownState(seen?.holds);
       const holds = evaluate(event.when, sample.value, was);
       if (holds === undefined) continue; // inside a hysteresis band with no baseline yet
-      raise = was === false && Boolean(holds);
+      raise = event.every ? Boolean(holds) : was === false && Boolean(holds);
       context.script.set(key, { holds });
     } else {
       const known = !!seen && typeof seen === "object" && Object.prototype.hasOwnProperty.call(seen, "value");
-      raise = known && JSON.stringify(seen.value) !== JSON.stringify(sample.value);
+      raise = event.every || (known && JSON.stringify(seen.value) !== JSON.stringify(sample.value));
       context.script.set(key, { value: sample.value });
     }
     if (!raise) continue;

@@ -25,7 +25,7 @@ MANIFEST := "--manifest-path impl/rust/Cargo.toml"
 # Every capability name a `requires:<capability>` tag may use. Declaring the vocabulary in one
 # place is what turns a mistyped tag into an error instead of a test that quietly runs against
 # a build that cannot pass it (see `just check-capability-tags`).
-KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial"
+KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial snmpv3-sha2"
 
 # This list is the single source of truth for what the C build still lacks. Keep it in sync
 # with the parity table in impl/c/README.md. Adding a capability here is a deliberate act:
@@ -33,7 +33,7 @@ KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial"
 #
 # NOTE: a capability listed here only becomes ENFORCED once a test is tagged with it;
 # `just check-capability-tags` reports the ones that are still inert.
-C_MISSING_CAPABILITIES := "opcua-security canbus-fd profibus-serial"
+C_MISSING_CAPABILITIES := "opcua-security canbus-fd profibus-serial snmpv3-sha2"
 
 # Create/refresh the single Python virtualenv used by every system test (and by the editor,
 # see .vscode/settings.json).
@@ -159,7 +159,9 @@ sim-down proto:
     #!/usr/bin/env bash
     set -euo pipefail
     export $(just _sim-port {{proto}})
-    docker compose -p tedge-dot-sim-{{proto}} -f connectors/{{proto}}/docker-compose.yaml rm -sf simulator
+    # `down`, not `rm simulator`: the project holds only the simulator and the services it
+    # depends on (snmp's `simulator` brings its polled `agent` up with it).
+    docker compose -p tedge-dot-sim-{{proto}} -f connectors/{{proto}}/docker-compose.yaml down -v
 
 # The fixed simulator host port a protocol's demo config expects (empty = protocol has none).
 _sim-port proto:
@@ -168,6 +170,7 @@ _sim-port proto:
         modbus)   echo "MODBUS_SIM_PORT=5020" ;;
         opcua)    echo "OPCUA_SIM_PORT=4840" ;;
         profibus) echo "PROFIBUS_SIM_PORT=9200" ;;
+        snmp)     echo "SNMP_SIM_PORT=1161" ;;
         *)        echo "UNUSED_SIM_PORT=" ;;
     esac
 

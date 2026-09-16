@@ -1,0 +1,6 @@
+# pysnmp (BSD-2-Clause), pinned exactly: the agent's seeds and USM behaviour are what the e2e
+# suite asserts on, so an upgrade is a deliberate change.
+pysnmp==7.1.29
+# pysnmp's SNMPv3 privacy (DES/AES) needs it; without it every authPriv request fails to decrypt.
+# Apache-2.0 OR BSD-3-Clause.
+cryptography==50.0.1

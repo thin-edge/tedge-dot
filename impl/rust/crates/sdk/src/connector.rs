@@ -196,6 +196,19 @@ pub trait Connector: Send {
         points: &[PointRef],
     ) -> Result<Vec<Sample>, ConnectorError>;
 
+    /// OPTIONAL: whether the module delivers `point` of `device` by push, for a module that
+    /// advertises `subscribe`. Asked before [`Connector::subscribe`]: only the points it answers
+    /// `true` for are passed to `subscribe` and taken off the polling schedule; the others stay
+    /// polled through [`Connector::read_points`]. A module whose devices mix pushed and polled
+    /// points (SNMP: notification points are pushed, object points polled) overrides this.
+    ///
+    /// Called after [`Connector::configure`]; must be cheap and pure. The default pushes every
+    /// point, which is what every subscribe-capable module did before this hook existed.
+    fn pushes_point(&self, device: &DeviceId, point: &PointRef) -> bool {
+        let _ = (device, point);
+        true
+    }
+
     /// OPTIONAL: for event-driven protocols. Default = polling only.
     async fn subscribe(
         &mut self,

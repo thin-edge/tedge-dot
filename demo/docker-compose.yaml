@@ -14,6 +14,8 @@
 #   │  │ canbus-sim   vcan0     │◄── socketcan│ tedge-dot (canbus)       ││
 #   │  │ canopen-sim  vcan0     │◄── socketcan│ tedge-dot (canopen)      ││
 #   │  │ profibus-sim :9200     │◄── tcp ─────│ tedge-dot (profibus)     ││
+#   │  │ snmp-agent-sim :1161   │◄── udp ─────│ tedge-dot (snmp)         ││
+#   │  │ snmp-sim     traps     │── udp :162 ►│                          ││
 #   │  └───────────────────────┘              │   └─ tedge-dot(profibus) ││
 #   │                                         └─────────┬────────────────┘│
 #   │                          mosquitto :1883 ◄────────┘ (thin-edge)     │
@@ -127,4 +129,39 @@ services:
       dockerfile: connectors/profibus/sim/Dockerfile
     ports:
       - "9200:9200"
+    restart: unless-stopped
+
+  # --- SNMP agent simulator (pysnmp) -----------------------------------------
+  # The agent demo/config/snmp.toml polls and writes to: host networking on the unprivileged
+  # udp/1161, so its responses come from 127.0.0.1 — the same address the device's traps come
+  # from. v1/v2c communities public (read) / private (write), and SNMPv3 users; see
+  # connectors/snmp/agent/agent.py.
+  snmp-agent-sim:
+    image: ${SIM_IMAGE_REPO:-ghcr.io/thin-edge/tedge-dot}/snmp-agent-sim:${SIM_IMAGE_TAG:-latest}
+    pull_policy: missing
+    build:
+      context: ..
+      dockerfile: connectors/snmp/agent/Dockerfile
+    network_mode: host
+    environment:
+      SNMP_AGENT_PORT: "1161"
+      # The e2e suite reads a per-request log; the demo does not need it.
+      SNMP_LOG_REQUESTS: "0"
+    restart: unless-stopped
+
+  # --- SNMP trap simulator (net-snmp) ----------------------------------------
+  # Host networking, so its traps reach the connector's udp/162 from 127.0.0.1 — the source
+  # address demo/config/snmp.toml routes to its device. Sends a round of notifications (pump
+  # temperature, linkDown/linkUp, now and then a coldStart) every TRAP_INTERVAL seconds; send
+  # one yourself with `docker compose -f demo/docker-compose.yaml exec snmp-sim send-trap linkdown 2`.
+  snmp-sim:
+    image: ${SIM_IMAGE_REPO:-ghcr.io/thin-edge/tedge-dot}/snmp-sim:${SIM_IMAGE_TAG:-latest}
+    pull_policy: missing
+    build:
+      context: ..
+      dockerfile: connectors/snmp/sim/Dockerfile
+    network_mode: host
+    environment:
+      TRAP_TARGET: "127.0.0.1:162"
+      TRAP_INTERVAL: "10"
     restart: unless-stopped

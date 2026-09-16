@@ -58,13 +58,25 @@ one protocol, selected by `connector.protocol` in its config file.
 | CAN bus | Linux SocketCAN + DBC | ✅ | ✅ |
 | CANopen | Linux SocketCAN (SDO) | ✅ | ✅ |
 | PROFIBUS-DP | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
+| SNMP (v1/v2c/v3: polling, writes, traps and informs) | UDP | ✅ | ✅ (no SHA-2 / AES-192/256) |
 
 Rust modules: [connector-modbus](impl/rust/crates/connector-modbus/),
 [connector-opcua](impl/rust/crates/connector-opcua/),
 [connector-canbus](impl/rust/crates/connector-canbus/),
 [connector-canopen](impl/rust/crates/connector-canopen/),
-[connector-profibus](impl/rust/crates/connector-profibus/). C modules:
+[connector-profibus](impl/rust/crates/connector-profibus/),
+[connector-snmp](impl/rust/crates/connector-snmp/). C modules:
 [impl/c/connectors/](impl/c/connectors/).
+
+The SNMP connector talks to equipment both ways. It **polls** objects (GET, GETBULK) and **writes**
+them (SET), and it **receives notifications** — v1/v2c/v3 traps and informs, which it acknowledges —
+on udp/162, matching each device by the address they come from (or, from a trusted forwarder such
+as a host `snmptrapd`, by the `snmpTrapAddress.0` they carry). A point is either an object OID
+(polled) or a notification and one of its varbinds. SNMPv3 (USM authentication and privacy) works
+for both directions. What a notification *means* — an event, an alarm — is declared on the point and
+raised by the flows. The Rust build uses [snmp2](https://github.com/roboplc/snmp2), the C build a
+minimal static [net-snmp](https://github.com/net-snmp/net-snmp); see the
+[SNMP connector spec](doc/connectors/snmp-connector-spec.md).
 
 ## Install
 

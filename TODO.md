@@ -18,9 +18,34 @@
       - `canbus-fd` — classic frames only today; the Rust build has a `canbus-fd` feature.
       - `profibus-serial` — the C module speaks `tcp://` only (no serial PHY, no FDL token
         timing), so it cannot yet drive a multi-master RS-485 bus.
+      - `snmpv3-sha2` — the C build links net-snmp's own crypto (`--with-openssl=internal`), which
+        covers MD5/SHA-1 authentication and DES/AES-128 privacy; SHA-224…512 and AES-192/256 need
+        a real OpenSSL, which would cost the small, dependency-free package. A device configured
+        with one of them loads but stays `disconnected`, naming the capability.
       Also: CAN bus push delivery (the C module renders the push-based bus as drain-into-cache
-      polling — same samples, worse latency, so it is not tagged), and the 64-byte cap on
-      string/raw values (`TDOT_RAW_MAX`).
+      polling — same samples, worse latency, so it is not tagged), and the 255/256-byte cap on
+      string/raw values (`tdot_value_t.str`, `TDOT_RAW_MAX`).
+
+* [ ] SNMP connector follow-ups (`doc/connectors/snmp-connector-spec.md`; polling, SET writes,
+      v1/v2c/v3 traps and informs shipped):
+      - **File the `snmp2` issues upstream** and drop the patches as they are released: six drafts
+        wait in `doc/upstream/snmp2-*.md` and the patched copy is `impl/rust/vendor/snmp2`
+        (with its `TEDGE-DOT-PATCH.md`), the same arrangement as `vendor/async-opcua-crypto`.
+      - **Table walks** (GETBULK over a column, one sample per row): deliberately deferred — rows
+        exist only at runtime while the contract's point list is static (link status `points`,
+        the capability descriptor, "one sample per point per read"), so it needs an additive RFC.
+        Sketch: one point per column (`address = { column = "…", label = "…" }`) publishing a
+        sample per row told apart by `addr.index`, with `ot-measurement`/`ot-alarm` naming the
+        series per row.
+      - MIB name resolution (`sysUpTime.0` instead of the numeric OID): `snmp2` has a `mibs`
+        feature needing `libnetsnmp`, the C build links net-snmp already — but the packages would
+        have to ship MIB files.
+      - A catch-all for notifications from unconfigured senders (today dropped at debug level),
+        which would let a discovery flow onboard equipment with `define-device`.
+      - Name resolution only at connect: a DHCP address change is picked up on the next
+        reconnect, not while the link is up.
+      - Track net-snmp releases: the C build compiles a pinned tarball (version and SHA-256 in
+        `impl/c/CMakeLists.txt`), so a security fix there means bumping the pin.
 
 * [ ] The `.apk` packages carry versions apk-tools rejects, for BOTH implementations and for
       real releases, not just snapshots: `apk version -c` reports `0.0.1-alpha.2` (this

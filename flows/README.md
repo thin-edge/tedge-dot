@@ -120,7 +120,9 @@ meta     = { measurement = false, alarm = { type = "pump_fault", severity = "cri
 `ot-alarm` publishes the alarm, retained, while `when` holds — `equals` / `not_equals` a value or
 a list of values, `above` / `below` a number with an optional `hysteresis`; without `when`, while
 the value is `true` — and clears it with an empty retained message. `ot-event` raises an event on
-every change of the value or, with `when`, each time the condition starts to hold. `alarm` and
+every change of the value or, with `when`, each time the condition starts to hold — or, with
+`every = true`, for every sample: what a signal whose samples are occurrences needs, such as an
+SNMP trap point, where two identical linkDown notifications are two events. `alarm` and
 `event` may each be a list; the header of each flow's `main.js` documents every key. The alarm
 is retained but the flows' memory is not. After a mapper restart `ot-alarm` learns from the
 retained alarms which ones are still standing (through its companion flow,

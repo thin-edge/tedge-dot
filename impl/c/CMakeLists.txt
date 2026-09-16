@@ -18,6 +18,7 @@ endif()
 option(TDOT_MODBUS "Build the Modbus connector (libmodbus, LGPL-2.1+)" ON)
 option(TDOT_OPCUA "Build the OPC UA connector (open62541, MPL-2.0)" ON)
 option(TDOT_PROFIBUS "Build the PROFIBUS-DP connector (built-in DP master)" ON)
+option(TDOT_SNMP "Build the SNMP trap receiver (POSIX sockets, built-in decoder)" ON)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   option(TDOT_CANBUS "Build the CAN bus connector (SocketCAN + DBC)" ON)
   option(TDOT_CANOPEN "Build the CANopen connector (SDO over SocketCAN)" ON)
@@ -125,6 +126,78 @@ if(TDOT_PROFIBUS)
   target_compile_definitions(tedge_dot_sdk PUBLIC TDOT_FEATURE_PROFIBUS)
 endif()
 
+if(TDOT_SNMP)
+  # net-snmp's libnetsnmp (BSD-style), built from the pinned release tarball as a minimal
+  # static library: no agent, applications, MIBs or system OpenSSL -- the `internal` crypto
+  # copy gives USM MD5/SHA-1 authentication and DES/AES-128 privacy, and the binary gains
+  # no runtime dependency beyond libc. Same recipe for native, zig cross (cross/build.sh
+  # sets TDOT_NETSNMP_HOST) and the e2e image (connectors/_shared/Dockerfile.connector-c).
+  #
+  # third_party/net-snmp/tedge-dot.patch makes the decoder as strict as the shared golden
+  # vectors require; the file lists each change and why.
+  include(ExternalProject)
+  include(ProcessorCount)
+  ProcessorCount(TDOT_NPROC)
+  if(TDOT_NPROC EQUAL 0)
+    set(TDOT_NPROC 2)
+  endif()
+  set(TDOT_NETSNMP_URL
+      "https://sourceforge.net/projects/net-snmp/files/net-snmp/5.9.4/net-snmp-5.9.4.tar.gz/download"
+      CACHE STRING "net-snmp 5.9.4 release tarball (a URL or a local path)")
+  set(TDOT_NETSNMP_SHA256 8b4de01391e74e3c7014beb43961a2d6d6fa03acc34280b9585f4930745b0544)
+  set(TDOT_NETSNMP_HOST "" CACHE STRING
+      "configure --host triplet for a cross build, e.g. aarch64-linux-gnu (empty: native)")
+
+  set(_tdot_ns_dir ${CMAKE_BINARY_DIR}/_deps/net-snmp)
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" _tdot_bt)
+  set(_tdot_ns_env CC=${CMAKE_C_COMPILER}
+                   "CFLAGS=${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${_tdot_bt}}")
+  set(_tdot_ns_args
+      --with-defaults --disable-agent --disable-applications --disable-manuals
+      --disable-scripts --disable-mibs --disable-mib-loading --with-mib-modules=
+      --without-perl-modules --disable-embedded-perl --with-openssl=internal
+      --without-pcre --without-rpm --disable-shared --enable-static
+      "--with-transports=UDP UDPIPv6" --with-security-modules=usm)
+  if(TDOT_NETSNMP_HOST)
+    # libtool insists on a real `ld`, so the target binutils come along with zig cc.
+    list(APPEND _tdot_ns_args --host=${TDOT_NETSNMP_HOST} --with-endianness=little)
+    list(APPEND _tdot_ns_env AR=${TDOT_NETSNMP_HOST}-ar RANLIB=${TDOT_NETSNMP_HOST}-ranlib
+                             LD=${TDOT_NETSNMP_HOST}-ld NM=${TDOT_NETSNMP_HOST}-nm)
+  endif()
+
+  ExternalProject_Add(netsnmp_build
+    URL ${TDOT_NETSNMP_URL}
+    URL_HASH SHA256=${TDOT_NETSNMP_SHA256}
+    DOWNLOAD_NAME net-snmp-5.9.4.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_DIR ${_tdot_ns_dir}
+    BUILD_IN_SOURCE TRUE
+    PATCH_COMMAND patch -p1 -i ${CMAKE_CURRENT_SOURCE_DIR}/third_party/net-snmp/tedge-dot.patch
+    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env ${_tdot_ns_env} ./configure ${_tdot_ns_args}
+    # Only the library: the rest of the tree (agent libraries included) is not needed.
+    BUILD_COMMAND make -C snmplib -j${TDOT_NPROC}
+    INSTALL_COMMAND ""
+    BUILD_BYPRODUCTS ${_tdot_ns_dir}/snmplib/.libs/libnetsnmp.a
+    LOG_CONFIGURE TRUE
+    LOG_BUILD TRUE
+    LOG_OUTPUT_ON_FAILURE TRUE)
+
+  # An imported target's include directory must exist when CMake generates.
+  file(MAKE_DIRECTORY ${_tdot_ns_dir}/include)
+  add_library(tdot_netsnmp STATIC IMPORTED GLOBAL)
+  set_target_properties(tdot_netsnmp PROPERTIES
+    IMPORTED_LOCATION ${_tdot_ns_dir}/snmplib/.libs/libnetsnmp.a
+    INTERFACE_INCLUDE_DIRECTORIES ${_tdot_ns_dir}/include)
+  add_dependencies(tdot_netsnmp netsnmp_build)
+
+  target_sources(tedge_dot_sdk PRIVATE connectors/snmp/connector_snmp.c
+                                       connectors/snmp/snmp_netsnmp.c
+                                       connectors/snmp/snmp_value.c)
+  target_link_libraries(tedge_dot_sdk PUBLIC tdot_netsnmp)
+  add_dependencies(tedge_dot_sdk netsnmp_build)
+  target_compile_definitions(tedge_dot_sdk PUBLIC TDOT_FEATURE_SNMP)
+endif()
+
 # --- binary ---------------------------------------------------------------------
 add_executable(tedge-dot src/main.c)
 target_link_libraries(tedge-dot PRIVATE tedge_dot_sdk)
@@ -148,6 +221,17 @@ add_test(NAME describe COMMAND tedge-dot-describe)
 add_executable(tedge-dot-config tests/config.c)
 target_link_libraries(tedge-dot-config PRIVATE tedge_dot_sdk)
 add_test(NAME config COMMAND tedge-dot-config)
+
+# SNMP: the decoder and conversions over the shared golden vectors (the Rust crate reads
+# the same file), the configuration rules of spec §3, and an in-process loopback receive.
+if(TDOT_SNMP)
+  add_executable(tedge-dot-snmp tests/snmp.c)
+  target_include_directories(tedge-dot-snmp PRIVATE connectors/snmp)
+  target_link_libraries(tedge-dot-snmp PRIVATE tedge_dot_sdk)
+  add_test(NAME snmp-vectors
+           COMMAND tedge-dot-snmp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../../connectors/snmp/conformance/trap-vectors.json)
+endif()
 
 # Strip in release-style builds for a honest size comparison
 if(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel" AND NOT APPLE)

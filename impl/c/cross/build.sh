@@ -48,6 +48,7 @@ cmake -B "$OUT" -S "$SRC/impl/c" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=/opt/tdot-cross/toolchain.cmake \
   -DCMAKE_BUILD_TYPE=MinSizeRel \
   -DTDOT_OPCUA_VENDORED=ON \
+  -DTDOT_NETSNMP_HOST="$DEB_MULTIARCH" \
   ${VERSION:+"-DTDOT_BUILD_VERSION=$VERSION"} \
   "$@"
 cmake --build "$OUT"

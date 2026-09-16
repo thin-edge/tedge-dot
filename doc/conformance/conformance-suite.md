@@ -144,6 +144,7 @@ applicable vectors and behavioural checks. Every connector in this repository ha
 | CAN bus | [connectors/canbus/conformance.toml](../../connectors/canbus/conformance.toml) | skipped (vcan is Linux-only; covered by the e2e suite) |
 | CANopen | [connectors/canopen/conformance.toml](../../connectors/canopen/conformance.toml) | skipped (vcan is Linux-only; covered by the e2e suite) |
 | PROFIBUS-DP | [connectors/profibus/conformance.toml](../../connectors/profibus/conformance.toml) | skipped (no built-in simulator yet) |
+| SNMP | [connectors/snmp/conformance.toml](../../connectors/snmp/conformance.toml) | skipped (no built-in `snmp-agent` simulator in the harness yet; the connector polls and writes, so B1–B10 would apply). Covered by the SNMP golden vectors both implementations read, and by the e2e suite against a pysnmp agent and net-snmp notifications |
 
 Connectors without a built-in simulator still run the static layers **plus a static capability
 agreement check**: the harness builds the protocol module in-process, applies the SDK's

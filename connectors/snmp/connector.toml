@@ -1,0 +1,386 @@
+# Connector configuration for the SNMP e2e harness (connectors/snmp/docker-compose.yaml).
+#
+# Polled devices read the pysnmp agents; every OID and seed value below is documented in ONE
+# place, the header of connectors/snmp/agent/agent.py (E = 1.3.6.1.4.1.99999.1).
+#
+# Notifications are sent by net-snmp in the `simulator` container (connectors/snmp/sim/send-trap),
+# on the suite's command:
+#   linkdown <i>     v2c linkDown  1.3.6.1.6.3.1.1.5.3, ifIndex.<i> = <i>
+#   linkup <i>       v2c linkUp    1.3.6.1.6.3.1.1.5.4, ifIndex.<i> = <i>
+#   coldstart        v1  coldStart (generic-trap 0), agent-addr 10.0.0.9
+#   overheat         v2c 1.3.6.1.4.1.99999.0.1: text "Pump overheated", temperature 853, status 0102ff
+#   inform <text>    v2c InformRequest 1.3.6.1.4.1.99999.0.2 with the text
+#   v3-linkdown <i>  v3 authPriv (SHA/AES) linkDown from engine 80001f8880e2e000000000a001
+#   v3-inform <text> v3 authPriv (SHA/AES) InformRequest
+#
+# Secrets: the SNMPv3 passwords here are test fixtures, documented in agent.py and send-trap. Two
+# are read from files (`*_password_file`, connectors/snmp/secrets/, installed by both connector
+# images at /etc/tedge-dot/secrets/). None of them may appear in anything the connector
+# publishes or logs; the suite checks.
+
+[connector]
+protocol      = "snmp"
+service_name  = "tedge-dot"
+log_level     = "info"
+poll_interval = "1s"
+
+[mqtt]
+host = "broker"
+port = 1883
+
+[connection]
+listen          = "0.0.0.0:162"
+community       = "public"
+# snmptrapd in the `forwarder` container: its notifications are routed by snmpTrapAddress.0.
+forwarders      = ["forwarder"]
+# Short, so a stopped agent is noticed within a couple of seconds.
+request_timeout = "1s"
+retries         = 1
+
+# ---------------------------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------------------------
+
+[[device]]
+name             = "switch"
+# The device type (§3.1): it names this device's parameter sets and its thin-edge entity type.
+type             = "snmp-sim"
+# A name, resolved when the device connects: the simulator's address is not known in advance.
+# No object points, so nothing is ever requested from it: `version` does not matter, and the
+# v3 table is there to accept v3 notifications (checked against these credentials).
+protocol_address = { host = "simulator", v3 = { user = "trap-user", auth_protocol = "SHA", auth_password = "trap-auth-pass-1", priv_protocol = "AES", priv_password = "trap-priv-pass-1", engine_id = "80001f8880e2e000000000a001" } }
+default_mode     = "typed"
+
+  # Every linkDown, as the notification OID. Each one is an event, identical or not.
+  [[device.point]]
+  id       = "link_down"
+  datatype = "string"
+  address  = { trap = "1.3.6.1.6.3.1.1.5.3" }
+  meta     = { measurement = false, event = { type = "link_down", text = "Link down on {device}", every = true } }
+
+  # linkDown and linkUp as one signal: an alarm raised by one and cleared by the other.
+  [[device.point]]
+  id       = "link_state"
+  datatype = "string"
+  address  = { trap = ["1.3.6.1.6.3.1.1.5.3", "1.3.6.1.6.3.1.1.5.4"] }
+  meta     = { measurement = false, alarm = { type = "link_down", severity = "major", text = "Link down", when = { equals = "1.3.6.1.6.3.1.1.5.3" } } }
+
+  # The interface a link trap is about (ifIndex.<i>).
+  [[device.point]]
+  id       = "if_index"
+  datatype = "int32"
+  address  = { trap = ["1.3.6.1.6.3.1.1.5.3", "1.3.6.1.6.3.1.1.5.4"], oid = "1.3.6.1.2.1.2.2.1.1" }
+  meta     = { measurement = false }
+
+  # Declared, but the simulator's linkDown does not carry ifDescr: a bad sample every time.
+  [[device.point]]
+  id       = "if_descr"
+  datatype = "string"
+  address  = { trap = "1.3.6.1.6.3.1.1.5.3", oid = "1.3.6.1.2.1.2.2.1.2" }
+
+  # A v1 generic trap, mapped to its v2 OID.
+  [[device.point]]
+  id       = "cold_start"
+  datatype = "bool"
+  address  = { trap = "1.3.6.1.6.3.1.1.5.1" }
+  meta     = { measurement = false }
+
+  # An enterprise-specific notification and its varbinds.
+  [[device.point]]
+  id       = "overheat_text"
+  datatype = "string"
+  address  = { trap = "1.3.6.1.4.1.99999.0.1", oid = "1.3.6.1.4.1.99999.2.1" }
+
+  [[device.point]]
+  id        = "overheat_temp"
+  datatype  = "float64"
+  unit      = "°C"
+  transform = { divisor = 10 }
+  address   = { trap = "1.3.6.1.4.1.99999.0.1", oid = "1.3.6.1.4.1.99999.2.2" }
+
+  [[device.point]]
+  id       = "overheat_status"
+  mode     = "raw"
+  address  = { trap = "1.3.6.1.4.1.99999.0.1", oid = "1.3.6.1.4.1.99999.2.3" }
+
+  # The text an inform carries (v2c and v3 both use 1.3.6.1.4.1.99999.0.2). A varbind point
+  # names its notification: `oid` alone would be an OBJECT point, polled from this device —
+  # which has no agent behind it (spec §3.3).
+  [[device.point]]
+  id       = "inform_text"
+  datatype = "string"
+  address  = { trap = "1.3.6.1.4.1.99999.0.2", oid = "1.3.6.1.4.1.99999.2.9" }
+  meta     = { measurement = false }
+
+# Sends to the `forwarder` (snmptrapd), never to the connector directly: its notifications arrive
+# from the forwarder's address and are routed here by the snmpTrapAddress.0 they carry
+# (`send-trap linkdown-addressed`; snmptrapd adds none itself).
+[[device]]
+name             = "branch-switch"
+type             = "snmp-sim"
+protocol_address = { host = "forwarded" }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "link_down"
+  datatype = "string"
+  address  = { trap = "1.3.6.1.6.3.1.1.5.3" }
+  meta     = { measurement = false }
+
+  [[device.point]]
+  id       = "if_index"
+  datatype = "int32"
+  address  = { trap = "1.3.6.1.6.3.1.1.5.3", oid = "1.3.6.1.2.1.2.2.1.1" }
+  meta     = { measurement = false }
+
+# ---------------------------------------------------------------------------------------------
+# Polling and writes
+# ---------------------------------------------------------------------------------------------
+
+# v2c, GETBULK (the default for v2c/v3). More points than max_varbinds (20), so it takes two
+# requests per cycle.
+[[device]]
+name             = "agent"
+type             = "snmp-agent-sim"
+protocol_address = { host = "agent", community = "public", write_community = "private" }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.2.1.1.1.0" }
+
+  [[device.point]]
+  id       = "sys_uptime"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.2.1.1.3.0" }
+
+  # INTEGER -42
+  [[device.point]]
+  id       = "int_negative"
+  datatype = "int32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.1.0" }
+
+  # INTEGER 1234
+  [[device.point]]
+  id       = "int_seed"
+  datatype = "int16"
+  address  = { oid = "1.3.6.1.4.1.99999.1.2.0" }
+
+  # OCTET STRING, UTF-8 "Pump station 7 – Zürich"
+  [[device.point]]
+  id       = "text_utf8"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.4.1.99999.1.3.0" }
+
+  # OCTET STRING de ad be ef 00 ff: not UTF-8, so `bad` as a string (raw kept) ...
+  [[device.point]]
+  id       = "binary_string"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.4.1.99999.1.4.0" }
+
+  # ... and its octets in raw mode.
+  [[device.point]]
+  id      = "binary_raw"
+  mode    = "raw"
+  address = { oid = "1.3.6.1.4.1.99999.1.4.0" }
+
+  # OBJECT IDENTIFIER 1.3.6.1.4.1.99999.42.7
+  [[device.point]]
+  id       = "oid_value"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.4.1.99999.1.5.0" }
+
+  # IpAddress 192.168.10.2
+  [[device.point]]
+  id       = "ip_value"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.4.1.99999.1.6.0" }
+
+  # Counter32 4000000000: fits uint32 ...
+  [[device.point]]
+  id       = "counter32"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.7.0" }
+
+  # ... but not int32: `bad`.
+  [[device.point]]
+  id       = "counter32_as_int32"
+  datatype = "int32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.7.0" }
+
+  # Gauge32 42, as a float and as a bool.
+  [[device.point]]
+  id       = "gauge_float"
+  datatype = "float64"
+  address  = { oid = "1.3.6.1.4.1.99999.1.8.0" }
+
+  [[device.point]]
+  id       = "gauge_bool"
+  datatype = "bool"
+  address  = { oid = "1.3.6.1.4.1.99999.1.8.0" }
+
+  # TimeTicks 123456
+  [[device.point]]
+  id       = "timeticks"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.9.0" }
+
+  # Counter64 9007199254740993 (2^53 + 1): published as a decimal string.
+  [[device.point]]
+  id       = "counter64"
+  datatype = "uint64"
+  address  = { oid = "1.3.6.1.4.1.99999.1.10.0" }
+
+  # Opaque 01 02 03 04: `bad` typed, its octets in raw mode.
+  [[device.point]]
+  id       = "opaque_typed"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.4.1.99999.1.11.0" }
+
+  [[device.point]]
+  id      = "opaque_raw"
+  mode    = "raw"
+  address = { oid = "1.3.6.1.4.1.99999.1.11.0" }
+
+  # Counter32, seconds since the agent started: changes every second.
+  [[device.point]]
+  id       = "ticks"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.12.0" }
+
+  # Not served: noSuchObject and noSuchInstance, each a `bad` sample.
+  [[device.point]]
+  id       = "missing_object"
+  datatype = "int32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.99.0" }
+
+  [[device.point]]
+  id       = "missing_instance"
+  datatype = "int32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.1.1" }
+
+  # Writable INTEGER (seed 10); `type` defaults to integer for int32.
+  [[device.point]]
+  id       = "setpoint"
+  datatype = "int32"
+  access   = "read_write"
+  address  = { oid = "1.3.6.1.4.1.99999.1.20.0" }
+
+  # Writable OCTET STRING (seed "initial"); `type` defaults to octet_string for string.
+  [[device.point]]
+  id       = "label"
+  datatype = "string"
+  access   = "read_write"
+  address  = { oid = "1.3.6.1.4.1.99999.1.21.0" }
+
+  # Writable Gauge32 (seed 100): uint32 would default to unsigned32, so `type` is explicit.
+  [[device.point]]
+  id       = "limit"
+  datatype = "uint32"
+  access   = "read_write"
+  address  = { oid = "1.3.6.1.4.1.99999.1.22.0", type = "gauge32" }
+
+  # Declared writable here, but read-only on the agent: a SET fails with notWritable.
+  [[device.point]]
+  id       = "locked"
+  datatype = "int32"
+  access   = "read_write"
+  address  = { oid = "1.3.6.1.4.1.99999.1.1.0" }
+
+# SNMPv1 (GET only): one request per cycle mixing served and unserved OIDs, so the noSuchName
+# error-index path has to re-request the rest. Also the agent the outage test stops.
+[[device]]
+name             = "agent-v1"
+type             = "snmp-agent-sim"
+protocol_address = { host = "agent-v1", version = "v1" }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.2.1.1.1.0" }
+
+  [[device.point]]
+  id       = "missing_object"
+  datatype = "int32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.99.0" }
+
+  [[device.point]]
+  id       = "int_seed"
+  datatype = "int16"
+  address  = { oid = "1.3.6.1.4.1.99999.1.2.0" }
+
+  [[device.point]]
+  id       = "ticks"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.12.0" }
+
+# v3 authNoPriv (SHA), the password read from a file, and GET instead of GETBULK.
+[[device]]
+name             = "agent-v3-auth"
+type             = "snmp-agent-sim"
+protocol_address = { host = "agent-v3-auth", version = "v3", bulk = false, v3 = { user = "ro-auth", level = "authNoPriv", auth_protocol = "SHA", auth_password_file = "/etc/tedge-dot/secrets/ro-auth.auth" } }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.2.1.1.1.0" }
+
+  [[device.point]]
+  id       = "ticks"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.12.0" }
+
+# v3 authPriv (SHA + AES-128), the privacy password read from a file; polled and written.
+[[device]]
+name             = "agent-v3-priv"
+type             = "snmp-agent-sim"
+protocol_address = { host = "agent-v3-priv", version = "v3", v3 = { user = "rw-priv", level = "authPriv", auth_protocol = "SHA", auth_password = "rw-auth-pass-1", priv_protocol = "AES", priv_password_file = "/etc/tedge-dot/secrets/rw-priv.priv" } }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.2.1.1.1.0" }
+
+  [[device.point]]
+  id       = "ticks"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.12.0" }
+
+  [[device.point]]
+  id       = "label"
+  datatype = "string"
+  access   = "read_write"
+  address  = { oid = "1.3.6.1.4.1.99999.1.21.0" }
+
+# v3 authPriv with SHA-256 + AES-256 (tests tagged requires:snmpv3-sha2).
+[[device]]
+name             = "agent-sha2"
+type             = "snmp-agent-sim"
+protocol_address = { host = "agent-sha2", version = "v3", v3 = { user = "sha2-priv", auth_protocol = "SHA256", auth_password = "sha2-auth-pass-1", priv_protocol = "AES256", priv_password = "sha2-priv-pass-1" } }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.2.1.1.1.0" }
+
+  [[device.point]]
+  id       = "ticks"
+  datatype = "uint32"
+  address  = { oid = "1.3.6.1.4.1.99999.1.12.0" }
+
+# v3 with the WRONG authentication password: every request fails authentication.
+[[device]]
+name             = "agent-badauth"
+type             = "snmp-agent-sim"
+protocol_address = { host = "agent-badauth", version = "v3", v3 = { user = "ro-auth", auth_protocol = "SHA", auth_password = "wrong-password-9" } }
+default_mode     = "typed"
+
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = { oid = "1.3.6.1.2.1.1.1.0" }

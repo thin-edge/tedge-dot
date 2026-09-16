@@ -99,6 +99,15 @@ pub trait Connector: Send + Sync {
         points: &[PointRef<'_>],
     ) -> Result<Vec<Sample>, ConnectorError>;
 
+    /// OPTIONAL: whether `point` of `device` is delivered by push. Only the points this
+    /// answers `true` for are passed to `subscribe` and taken off the polling schedule; the
+    /// rest stay polled. Default: every point (a module that pushes some points and polls
+    /// others on one device, like SNMP notifications vs. objects, overrides it).
+    fn pushes_point(&self, device: &DeviceId, point: &PointRef<'_>) -> bool {
+        let _ = (device, point);
+        true
+    }
+
     /// OPTIONAL: for event-driven protocols (CAN, OPC-UA subscriptions, BACnet COV).
     /// The implementation pushes Samples into `sink` as values arrive, until cancelled.
     /// The default implementation returns `Unsupported`, which the SDK treats as

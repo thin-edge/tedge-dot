@@ -1146,29 +1146,8 @@ async fn subscribe_device(
     limits: Limits,
     subscribed: &mut HashSet<(usize, String)>,
 ) {
-    let connector_default = parse_duration(&config.connector.poll_interval)
-        .unwrap_or_else(|| Duration::from_secs(2));
     {
-        let device_default = device
-            .poll_interval
-            .as_deref()
-            .and_then(parse_duration)
-            .unwrap_or(connector_default);
-        let points: Vec<PointRef> = device
-            .points
-            .iter()
-            .filter(|p| p.subscribe.unwrap_or(true))
-            .map(|p| {
-                let mut r = point_ref(p, device.default_mode);
-                r.interval = Some(
-                    p.poll_interval
-                        .as_deref()
-                        .and_then(parse_duration)
-                        .unwrap_or(device_default),
-                );
-                r
-            })
-            .collect();
+        let points = push_points(connector.as_ref(), config, device);
         if points.is_empty() {
             return;
         }
@@ -1199,6 +1178,39 @@ async fn subscribe_device(
             }
         }
     }
+}
+
+/// The points of `device` to ask `connector` to push: those not configured `subscribe = false`
+/// that the module delivers by push ([`Connector::pushes_point`]). Everything else stays on the
+/// polling schedule. Each carries its effective poll interval as the sampling hint.
+fn push_points(
+    connector: &dyn Connector,
+    config: &ConnectorConfig,
+    device: &crate::config::DeviceConfig,
+) -> Vec<PointRef> {
+    let connector_default = parse_duration(&config.connector.poll_interval)
+        .unwrap_or_else(|| Duration::from_secs(2));
+    let device_default = device
+        .poll_interval
+        .as_deref()
+        .and_then(parse_duration)
+        .unwrap_or(connector_default);
+    device
+        .points
+        .iter()
+        .filter(|p| p.subscribe.unwrap_or(true))
+        .map(|p| {
+            let mut r = point_ref(p, device.default_mode);
+            r.interval = Some(
+                p.poll_interval
+                    .as_deref()
+                    .and_then(parse_duration)
+                    .unwrap_or(device_default),
+            );
+            r
+        })
+        .filter(|r| connector.pushes_point(&device.name, r))
+        .collect()
 }
 
 /// Per-point `meta` lookup, keyed by `(device name, point id)`; injected into every published
@@ -2655,6 +2667,93 @@ default_mode = "typed"
         // The same device with a point still on the schedule.
         let polled = build_schedule(&config, &HashSet::new());
         assert_eq!(pushed_devices(&subscribed, &polled), vec![(0, true)]);
+    }
+
+    /// A module stand-in that pushes only the points whose id starts with `trap`, like SNMP
+    /// (notifications pushed, objects polled); `None` keeps the default (push everything).
+    struct PushPrefix(Option<&'static str>);
+    use crate::model::DeviceId;
+
+    #[async_trait::async_trait]
+    impl Connector for PushPrefix {
+        fn configure(&mut self, _: &ConnectorConfig) -> Result<(), crate::connector::ConfigError> {
+            Ok(())
+        }
+        fn capabilities(&self) -> crate::connector::Capabilities {
+            crate::connector::Capabilities {
+                protocol: "test",
+                version: "0",
+                modes: vec![Mode::Typed],
+                datatypes: vec![],
+                point_kinds: vec![],
+                command_verbs: vec![],
+                features: vec![],
+                subscribe: true,
+            }
+        }
+        fn pushes_point(&self, device: &DeviceId, point: &PointRef) -> bool {
+            match self.0 {
+                Some(prefix) => device == "plc-1" && point.id.starts_with(prefix),
+                None => true,
+            }
+        }
+        async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError> {
+            Ok(vec![])
+        }
+        async fn read_points(&mut self, _: &DeviceId, _: &[PointRef]) -> Result<Vec<Sample>, ConnectorError> {
+            Ok(vec![])
+        }
+        async fn disconnect(&mut self) -> Result<(), ConnectorError> {
+            Ok(())
+        }
+    }
+
+    const MIXED: &str = r#"
+[connector]
+protocol = "test"
+poll_interval = "3s"
+
+[[device]]
+name = "plc-1"
+protocol_address = { host = "127.0.0.1" }
+  [[device.point]]
+  id = "trap_link"
+  datatype = "string"
+  address = {}
+  [[device.point]]
+  id = "uptime"
+  datatype = "uint32"
+  address = {}
+  [[device.point]]
+  id = "trap_opted_out"
+  datatype = "string"
+  subscribe = false
+  address = {}
+"#;
+
+    /// Only the points the module pushes are subscribed; the rest of the same device stays on
+    /// the schedule, and the device is then one with both pushed and polled points. Without
+    /// the hook every point is pushed, as before it existed.
+    #[test]
+    fn only_points_the_module_pushes_leave_the_schedule() {
+        let config: ConnectorConfig = toml::from_str(MIXED).unwrap();
+        let device = &config.devices[0];
+
+        let pushed = push_points(&PushPrefix(Some("trap")), &config, device);
+        let ids: Vec<&str> = pushed.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["trap_link"], "objects and opted-out points are not pushed");
+        assert_eq!(pushed[0].interval, Some(Duration::from_secs(3)));
+
+        let subscribed: HashSet<(usize, String)> =
+            pushed.iter().map(|p| (0usize, p.id.clone())).collect();
+        let schedule = build_schedule(&config, &subscribed);
+        let polled: Vec<&str> = schedule.iter().map(|e| e.point.id.as_str()).collect();
+        assert_eq!(polled, ["uptime", "trap_opted_out"]);
+        assert_eq!(pushed_devices(&subscribed, &schedule), vec![(0, true)]);
+
+        let everything = push_points(&PushPrefix(None), &config, device);
+        let ids: Vec<&str> = everything.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["trap_link", "uptime"], "default: every point not opted out");
     }
 
     /// A dead subscription must always lead to recovery. Only on a push-only device does the

@@ -2,30 +2,36 @@
 name = "tedge-dot"
 version.workspace = true
 edition.workspace = true
-description = "thin-edge.io OT protocol connector binary (Modbus, OPC UA, CAN bus, CANopen and PROFIBUS modules behind feature flags)"
+description = "thin-edge.io OT protocol connector binary (Modbus, OPC UA, CAN bus, CANopen, PROFIBUS and SNMP trap modules behind feature flags)"
 license.workspace = true
 repository.workspace = true
 
 [workspace]
-members = ["crates/sdk", "crates/connector-modbus", "crates/connector-opcua", "crates/connector-canbus", "crates/connector-canopen", "crates/connector-profibus", "crates/ot-conformance"]
-# The fuzz crate builds with cargo-fuzz (nightly, libFuzzer) and stays out of normal builds;
+members = ["crates/sdk", "crates/connector-modbus", "crates/connector-opcua", "crates/connector-canbus", "crates/connector-canopen", "crates/connector-profibus", "crates/connector-snmp", "crates/ot-conformance"]
+# The fuzz crates build with cargo-fuzz (nightly, libFuzzer) and stay out of normal builds;
 # vendor/ holds patched copies of upstream crates (see the TEDGE-DOT-PATCH.md inside each).
-exclude = ["crates/sdk/fuzz", "vendor/async-opcua-crypto"]
+exclude = ["crates/sdk/fuzz", "crates/connector-snmp/fuzz", "vendor/async-opcua-crypto", "vendor/snmp2"]
 
 # async-opcua's server answers ActivateSession with an empty nonce on a None-policy channel,
 # which open62541 clients (1.4+) reject; the vendored copy sends 32 bytes like every other
 # server stack. See vendor/async-opcua-crypto/TEDGE-DOT-PATCH.md.
+#
+# snmp2 accepts truncated varbind lists and narrows 32-bit values, zeroes the received HMAC
+# through a shared slice (UB), keeps stale responses after a timeout, and has no receiver-side
+# SNMPv3 (informs, discovery Reports). See vendor/snmp2/TEDGE-DOT-PATCH.md.
 [patch.crates-io]
 async-opcua-crypto = { path = "vendor/async-opcua-crypto" }
+snmp2 = { path = "vendor/snmp2" }
 
 [features]
-default = ["modbus", "opcua", "canbus-fd"]
+default = ["modbus", "opcua", "canbus-fd", "snmp"]
 modbus = ["dep:connector-modbus"]
 opcua = ["dep:connector-opcua"]
 canbus = ["dep:connector-canbus"]
 canbus-fd = ["canbus", "dep:connector-canbus", "connector-canbus/canbus-fd"]
 canopen = ["dep:connector-canopen"]
 profibus = ["dep:connector-profibus"]
+snmp = ["dep:connector-snmp"]
 
 [dependencies]
 tedge-dot-sdk = { path = "crates/sdk" }
@@ -34,6 +40,7 @@ connector-opcua = { path = "crates/connector-opcua", optional = true }
 connector-canbus = { path = "crates/connector-canbus", optional = true }
 connector-canopen = { path = "crates/connector-canopen", optional = true }
 connector-profibus = { path = "crates/connector-profibus", optional = true }
+connector-snmp = { path = "crates/connector-snmp", optional = true }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 toml = "0.8"

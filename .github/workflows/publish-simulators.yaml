@@ -17,6 +17,7 @@ on:
   pull_request:
     paths:
       - "connectors/*/sim/**"
+      - "connectors/snmp/agent/**"
       - ".github/workflows/publish-simulators.yaml"
   workflow_dispatch:
 
@@ -30,7 +31,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sim: [modbus, opcua, canbus, canopen, profibus]
+        sim: [modbus, opcua, canbus, canopen, profibus, snmp]
+        # A simulator whose image is not connectors/<sim>/sim/Dockerfile names its own file:
+        # the SNMP agent the connector polls (the `snmp` image is the notification sender).
+        include:
+          - sim: snmp-agent
+            file: connectors/snmp/agent/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -59,7 +65,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: connectors/${{ matrix.sim }}/sim/Dockerfile
+          file: ${{ matrix.file || format('connectors/{0}/sim/Dockerfile', matrix.sim) }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

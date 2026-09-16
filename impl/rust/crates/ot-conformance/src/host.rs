@@ -123,6 +123,8 @@ pub fn build_connector(protocol: &str) -> Result<Box<dyn Connector>, String> {
         "canopen" => Ok(connector_canopen::factory()),
         #[cfg(feature = "profibus")]
         "profibus" => Ok(connector_profibus::factory()),
+        #[cfg(feature = "snmp")]
+        "snmp" => Ok(connector_snmp::factory()),
         other => Err(format!(
             "protocol '{other}' is not compiled into ot-conformance (enable its cargo \
              feature); for an external binary set `[harness] command` in the manifest"

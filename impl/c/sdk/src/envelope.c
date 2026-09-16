@@ -82,8 +82,10 @@ char *tdot_envelope_sample(const tdot_config_t *cfg, const tdot_device_t *dev,
                                 ? ((pt->access & TDOT_ACCESS_READ) ? "read_write"
                                                                    : "write")
                                 : "read");
-    if (pt->addr_json) {
-        cJSON *addr = cJSON_Parse(pt->addr_json);
+    /* A sample's own address echo wins over the point's static one. */
+    const char *addr_json = s->addr_json ? s->addr_json : pt->addr_json;
+    if (addr_json) {
+        cJSON *addr = cJSON_Parse(addr_json);
         if (addr)
             cJSON_AddItemToObject(obj, "addr", addr);
     }

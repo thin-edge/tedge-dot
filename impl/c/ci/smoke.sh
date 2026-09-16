@@ -2,7 +2,7 @@
 # End-to-end smoke test for the C connector against a protocol simulator
 # and a live MQTT broker.
 #
-#   impl/c/ci/smoke.sh <modbus|opcua|canbus|canopen|profibus>
+#   impl/c/ci/smoke.sh <modbus|opcua|canbus|canopen|profibus|snmp>
 #
 # Expects (CI provides all of these):
 #   * the protocol simulator running (docker compose -f
@@ -34,7 +34,7 @@ cp "$repo/demo/config/$proto.toml" "$config"
 export TEDGE_DOT_POINT_LIBRARY_PATH="$repo/demo/points.d"
 
 # Per-protocol: expected point + value, optional write point/value, config fixups.
-write_point="" write_value="" write_device=""
+write_point="" write_value="" write_device="" trap_point="" trap_expect=""
 case "$proto" in
 modbus)
     point=temp_u16 expect=17001 device=plc1
@@ -56,6 +56,22 @@ canopen)
 profibus)
     point=ai0_raw expect=4660 device=remote_io
     write_point=do_byte0 write_value=5 write_device=remote_io
+    ;;
+snmp)
+    # Polled from the pysnmp agent `just sim snmp` publishes on host port 1161 (INTEGER seed
+    # 1234, connectors/snmp/agent/agent.py), with a SET round-trip on its writable INTEGER.
+    point=pump_speed expect=1234 device=snmp-switch
+    write_point=setpoint write_value=55 write_device=snmp-switch
+    # And one notification: the traps come from this host's net-snmp (the simulator container
+    # is idle unless told to send), to an unprivileged port on loopback, repeatedly until the
+    # connector has had time to start.
+    trap_point=pump_temperature trap_expect=85.3
+    sed -i.bak 's|listen    = "0.0.0.0:162"|listen    = "127.0.0.1:1162"|' "$config"
+    (for _ in $(seq 30); do
+        snmptrap -m '' -v 2c -c public 127.0.0.1:1162 '' 1.3.6.1.4.1.99999.0.1 \
+            1.3.6.1.4.1.99999.2.1 s "smoke" 1.3.6.1.4.1.99999.2.2 i 853 >/dev/null 2>&1 || true
+        sleep 1
+    done) &
     ;;
 *)
     echo "unknown protocol: $proto" >&2
@@ -89,6 +105,21 @@ if [ "$access" != "read" ] && [ "$access" != "read_write" ] && [ "$access" != "w
     exit 1
 fi
 echo "OK: sample echoes access=$access"
+
+# A pushed point on the same device (SNMP: a notification next to the polled objects).
+if [ -n "$trap_point" ]; then
+    echo "== waiting for a good sample on te/device/$device/ot/$proto/sample/$trap_point"
+    sample=$(mosquitto_sub -h 127.0.0.1 -W 15 -C 1 \
+        -t "te/device/$device/ot/$proto/sample/$trap_point" || true)
+    echo "sample: $sample"
+    if [ "$(jq -r .quality <<<"$sample" 2>/dev/null)" != "good" ] || \
+       [ "$(jq -r .value <<<"$sample" 2>/dev/null)" != "$trap_expect" ]; then
+        echo "FAIL: expected $trap_point quality=good value=$trap_expect; connector log:" >&2
+        cat "$workdir/connector.log" >&2
+        exit 1
+    fi
+    echo "OK: $trap_point = $trap_expect (good)"
+fi
 
 if [ -n "$write_point" ]; then
     cmd_topic="te/device/$write_device/ot/$proto/cmd/write/smoke-1"

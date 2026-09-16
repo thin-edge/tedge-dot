@@ -1,0 +1,177 @@
+tedge-dot patch for net-snmp 5.9.4 (applied by impl/c/CMakeLists.txt with `patch -p1`)
+
+The SNMP connector decodes notifications and responses with libnetsnmp, and both
+implementations are held to connectors/snmp/conformance/trap-vectors.json
+(doc/connectors/snmp-connector-spec.md §4.2, §8). Stock 5.9.4 disagrees with those
+vectors where it is lenient in ways the connector cannot see after the fact, because
+the information is gone once the value is stored:
+
+1. asn_parse_int truncates an INTEGER wider than 32 bits (CHECK_OVERFLOW_S), so an
+   eight-octet INTEGER decodes as 0. The full value is kept (LP64; an ILP32 long
+   still rejects more than four octets).
+2. asn_parse_unsigned_int accepts up to sizeof(long)+1 octets and truncates a
+   Counter32/Gauge32/TimeTicks above 2^32-1. It now requires 1-5 octets and a
+   value of at most 2^32-1: an error, not a truncation (spec §4.2).
+3. asn_parse_objid decodes an empty OID (06 00) as 0.0. It is now an error.
+4. snmp_parse_var_op stops after a VarBind's value, so an element after the value
+   inside the VarBind is parsed as the next VarBind and the whole message fails.
+   It now skips to the end of the VarBind SEQUENCE (spec §4.1: ignored).
+5. snmp_pdu_parse accepts any string-typed agent-addr of up to four octets in a
+   v1 Trap-PDU. It now requires an IpAddress of exactly four octets.
+
+6. sc_encrypt/sc_decrypt implement AES only for a real OpenSSL
+   (#if defined(NETSNMP_USE_OPENSSL) && defined(HAVE_AES)), so with
+   --with-openssl=internal an AES-128 user matches no branch at all: the scoped
+   PDU is sent UNENCRYPTED with the privacy flag set, sc_encrypt reports
+   success, and no peer can parse the message. The bundled crypto already
+   carries AES CFB-128 (snmplib/openssl/openssl_aes_cfb.c), so the branch is
+   added for the internal build too. Without this, the C connector supports DES
+   privacy only -- which contradicts spec §10 and the packaged configuration.
+
+Everything else the vectors require of a notification (PDU kinds per version, the
+trap OID derivation, generic/specific-trap ranges, 128 arcs, 256 varbinds) is
+connector-owned (§4.3) and checked in impl/c/connectors/snmp/snmp_netsnmp.c.
+
+--- a/snmplib/asn1.c	2026-09-15 20:03:43
++++ b/snmplib/asn1.c	2026-09-15 20:03:43
+@@ -624,7 +624,8 @@
+             value.b[i] = *bufp++;
+     }
+ 
+-    CHECK_OVERFLOW_S(value.l, 1);
++    /* TEDGE-DOT: no silent truncation to 32 bits; a long holds what was
++     * received (1-8 octets on LP64, the length check above on ILP32). */
+ 
+     DEBUGMSG(("dumpv_recv", "  Integer:\t%ld (0x%.2lX)\n", value.l, value.l));
+ 
+@@ -696,8 +697,9 @@
+         return NULL;
+     }
+ 
+-    if ((asn_length > (intsize + 1)) || ((int) asn_length == 0) ||
+-        ((asn_length == intsize + 1) && *bufp != 0x00)) {
++    /* TEDGE-DOT: 1-5 octets and a value of at most 2^32-1 on every ABI */
++    if ((asn_length > 5) || ((int) asn_length == 0) ||
++        ((asn_length == 5) && *bufp != 0x00)) {
+         _asn_length_err(errpre, (size_t) asn_length, intsize);
+         return NULL;
+     }
+@@ -708,7 +710,7 @@
+     while (asn_length--)
+         value = (value << 8) | *bufp++;
+ 
+-    CHECK_OVERFLOW_U(value,2);
++    /* TEDGE-DOT: the length check above bounds value to 32 bits */
+ 
+     DEBUGMSG(("dumpv_recv", "  UInteger:\t%ld (0x%.2lX)\n", value, value));
+ 
+@@ -1496,8 +1498,11 @@
+     /*
+      * Handle invalid object identifier encodings of the form 06 00 robustly 
+      */
+-    if (asn_length == 0)
+-        objid[0] = objid[1] = 0;
++    if (asn_length == 0) {
++        /* TEDGE-DOT: an empty OID is an error, not 0.0 */
++        ERROR_MSG("empty OID");
++        return NULL;
++    }
+ 
+     length = asn_length;
+     (*objidlength)--;           /* account for expansion of first byte */
+--- a/snmplib/snmp.c	2026-09-15 20:03:43
++++ b/snmplib/snmp.c	2026-09-15 20:03:43
+@@ -154,6 +154,8 @@
+     size_t          var_op_len = *listlength;
+     u_char         *var_op_start = data;
+ 
++    u_char         *var_op_end;
++
+     data = asn_parse_sequence(data, &var_op_len, &var_op_type,
+                               (ASN_SEQUENCE | ASN_CONSTRUCTOR), "var_op");
+     if (data == NULL) {
+@@ -162,6 +164,7 @@
+          */
+         return NULL;
+     }
++    var_op_end = data + var_op_len;
+     DEBUGDUMPHEADER("recv", "Name");
+     data =
+         asn_parse_objid(data, &var_op_len, &var_op_type, var_name,
+@@ -188,6 +191,9 @@
+      */
+     *var_val_len = var_op_len;
+     data += var_op_len;
++    /* TEDGE-DOT: skip any element after the value, to the VarBind's end */
++    if (data < var_op_end)
++        data = var_op_end;
+     *listlength -= (int) (data - var_op_start);
+     return data;
+ }
+--- a/snmplib/snmp_api.c	2026-09-15 20:03:43
++++ b/snmplib/snmp_api.c	2026-09-15 20:03:43
+@@ -4641,6 +4641,9 @@
+                                 (u_char *) pdu->agent_addr, &four);
+         if (data == NULL)
+             return -1;
++        /* TEDGE-DOT: exactly an IpAddress of four octets */
++        if (type != ASN_IPADDRESS || four != 4)
++            return -1;
+ 
+         /*
+          * generic trap 
+--- a/snmplib/scapi.c	2026-09-16 07:36:31
++++ b/snmplib/scapi.c	2026-09-16 07:36:31
+@@ -1303,6 +1303,28 @@
+         }
+     }
+ #endif
++/* TEDGE-DOT: AES-128 with the bundled crypto. Upstream implements AES in
++ * sc_encrypt/sc_decrypt only for a real OpenSSL, so with --with-openssl=internal
++ * an AES user falls through every branch here: nothing encrypts, *ctlen keeps
++ * the plaintext length, and the peer cannot parse the scoped PDU -- while
++ * sc_encrypt still returns success. CFB-128 needs only AES_set_encrypt_key and
++ * AES_cfb128_encrypt, both of which the bundled copy provides (openssl_aes.h,
++ * included above for NETSNMP_USE_INTERNAL_CRYPTO). */
++#if defined(NETSNMP_USE_INTERNAL_CRYPTO) && defined(HAVE_AES)
++    if (USM_CREATE_USER_PRIV_AES == (pai->type & USM_PRIV_MASK_ALG)) {
++        AES_KEY         aes_key;
++        int             new_ivlen = 0;
++
++        if (AES_set_encrypt_key(key, pai->proper_length * 8, &aes_key) < 0) {
++            DEBUGMSGTL(("scapi:encrypt", "aes key schedule failed\n"));
++            QUITFUN(SNMPERR_GENERR, sc_encrypt_quit);
++        }
++        memcpy(my_iv, iv, ivlen);
++        AES_cfb128_encrypt(plaintext, ciphertext, ptlen, &aes_key, my_iv,
++                           &new_ivlen, AES_ENCRYPT);
++        *ctlen = ptlen;
++    }
++#endif
+ #if defined(NETSNMP_USE_OPENSSL) && defined(HAVE_AES)
+     if (USM_CREATE_USER_PRIV_AES == (pai->type & USM_PRIV_MASK_ALG)) {
+         EVP_CIPHER_CTX *ctx;
+@@ -1527,6 +1549,23 @@
+         *ptlen = ctlen;
+     }
+ #endif
++/* TEDGE-DOT: the decrypting half of the AES-128 branch above. CFB-128 uses the
++ * ENCRYPT key schedule in both directions. */
++#if defined(NETSNMP_USE_INTERNAL_CRYPTO) && defined(HAVE_AES)
++    if (USM_CREATE_USER_PRIV_AES == (pai->type & USM_PRIV_MASK_ALG)) {
++        AES_KEY         aes_key;
++        int             new_ivlen = 0;
++
++        if (AES_set_encrypt_key(key, pai->proper_length * 8, &aes_key) < 0) {
++            DEBUGMSGTL(("scapi:decrypt", "aes key schedule failed\n"));
++            QUITFUN(SNMPERR_GENERR, sc_decrypt_quit);
++        }
++        memcpy(my_iv, iv, ivlen);
++        AES_cfb128_encrypt(ciphertext, plaintext, ctlen, &aes_key, my_iv,
++                           &new_ivlen, AES_DECRYPT);
++        *ptlen = ctlen;
++    }
++#endif
+ #if defined(NETSNMP_USE_OPENSSL) && defined(HAVE_AES)
+     if (USM_CREATE_USER_PRIV_AES == (pai->type & USM_PRIV_MASK_ALG)) {
+         EVP_CIPHER_CTX *ctx;

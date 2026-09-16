@@ -62,7 +62,11 @@ typedef struct {
     tdot_value_kind_t kind;
     bool b;
     double num;
-    char str[64]; /* used for out-of-safe-range 64-bit ints and short strings */
+    /* Out-of-safe-range 64-bit ints and strings, NUL-terminated: a longer
+     * string is truncated to 255 bytes (the Rust model is unbounded; see the
+     * parity table in impl/c/README.md). 256 rather than 64 because SNMP alarm
+     * texts routinely run past 64 bytes. */
+    char str[256];
 } tdot_value_t;
 
 /* ---- per-point linear transform ------------------------------------------ */
@@ -89,7 +93,7 @@ typedef enum {
 
 const char *tdot_quality_str(tdot_quality_t q);
 
-#define TDOT_RAW_MAX 64
+#define TDOT_RAW_MAX 256
 #define TDOT_ERR_MAX 160
 
 /* One read result for one point, filled by the connector. The runtime turns
@@ -101,6 +105,12 @@ typedef struct {
     size_t raw_len;
     int raw_group;              /* hex grouping: 2 for modbus registers, 1 else */
     char error[TDOT_ERR_MAX];   /* required when quality == bad */
+    /* Optional per-sample address echo (a JSON object string) replacing the
+     * point's static pt->addr_json in the envelope, for modules whose `addr`
+     * depends on what was received (an SNMP notification's source and trap
+     * OID). NULL -- what tdot_sample_init sets -- uses the point's. Borrowed:
+     * it only has to outlive the sink/emit call the sample is handed to. */
+    const char *addr_json;
 } tdot_sample_t;
 
 void tdot_sample_init(tdot_sample_t *s);

@@ -23,5 +23,9 @@ tdot_connector_t *tdot_connector_factory(const char *protocol) {
     if (strcmp(protocol, "profibus") == 0)
         return tdot_connector_profibus_new();
 #endif
+#ifdef TDOT_FEATURE_SNMP
+    if (strcmp(protocol, "snmp") == 0)
+        return tdot_connector_snmp_new();
+#endif
     return NULL;
 }
