@@ -145,6 +145,12 @@ For each datagram on the listening socket:
    receiver is the authoritative engine (`[connection] engine_id`, boots and time kept by the
    connector): an inform from a sender that has not discovered it is answered with the USM
    Report the library produces (unknown engine ID / not in time window), exactly as `snmptrapd`.
+   `snmpEngineBoots` MUST be at least 1 (RFC 3414 §2.2 reserves 0 for an engine that has not
+   initialised its time): a receiver advertising 0 is refused by a sender that then sends boots
+   and time 0, is answered `usmStatsNotInTimeWindows`, re-synchronises and repeats, so the inform
+   never completes instead of failing. Without a file to count restarts in, both implementations
+   derive it from the wall clock — seconds since 2020-01-01, clamped to 1…2³¹−2 — which grows
+   across restarts, as a sender caching our boots requires.
 5. **Publish** one sample per subscribed trap/varbind point the notification matches, in
    configuration order.
 

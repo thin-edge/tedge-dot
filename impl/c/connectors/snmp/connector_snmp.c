@@ -30,6 +30,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "cjson/cJSON.h"
@@ -120,6 +121,9 @@ typedef struct {
     unsigned long dropped;
     double auth_warned_at;
     double batch_at;
+    /* Points of the last batch still holding a transport verdict to report;
+     * see read_point. */
+    size_t transport_pending;
     char data[]; /* accepted communities, NUL-separated */
 } snmpc_device_t;
 
@@ -919,6 +923,22 @@ static int configure_device(snmpc_state_t *st, tdot_config_t *cfg, size_t i,
     return 0;
 }
 
+/* snmpEngineBoots for this run (§4.1). Without a file to count restarts in the
+ * wall clock stands in: it grows with every restart, which is what a sender
+ * that cached our boots needs (RFC 3414 §2.2), and 0 -- "time not yet
+ * initialised" -- is excluded. Seconds since 2020-01-01, so it stays well
+ * inside 2^31 - 1; the Rust connector derives it the same way. */
+static uint32_t local_engine_boots(void) {
+    const time_t EPOCH_2020 = 1577836800;
+    time_t now = time(NULL);
+    if (now <= EPOCH_2020)
+        return 1;
+    long long boots = (long long)(now - EPOCH_2020);
+    if (boots > 2147483646LL)
+        boots = 2147483646LL;
+    return (uint32_t)boots;
+}
+
 static int configure(tdot_connector_t *self, tdot_config_t *cfg, char *err,
                      size_t errlen) {
     snmpc_state_t *st = self->state;
@@ -984,6 +1004,7 @@ static int configure(tdot_connector_t *self, tdot_config_t *cfg, char *err,
     /* The receiver's engine ID is process-wide in net-snmp. */
     tsnmp_lock();
     tsnmp_set_local_engine_id(st->engine, st->engine_len);
+    tsnmp_set_local_engine_boots(st->engine, st->engine_len, local_engine_boots());
     tsnmp_unlock();
     return 0;
 }
@@ -1245,8 +1266,23 @@ static void cache_bad(tdot_point_t *pt, int rc, const char *fmt, const char *why
     cache_point(pt, &s, rc);
 }
 
-/* One batch: a GETBULK (non-repeaters = N, max-repetitions 0) or a GET. */
-static void fetch_batch(tdot_device_t *dev, tdot_point_t **pts, size_t count) {
+/* A scalar instance OID ends in .0 ("1.3.6.1.2.1.1.1.0"); the object it
+ * instantiates is its parent. Only such a point can be fetched with GETBULK
+ * (see fetch_batch). */
+static bool scalar_instance(const tsnmp_oid_t *o) {
+    return o->n >= 3 && o->arcs[o->n - 1] == 0;
+}
+
+/* One batch: a GETBULK (non-repeaters = N, max-repetitions 0) or a GET.
+ *
+ * GETBULK's non-repeaters are answered with each requested OID's lexicographic
+ * SUCCESSOR (RFC 3416 §4.2.3) -- it is a GETNEXT with a count -- so a scalar is
+ * requested by its PARENT and the response names the instance itself. Asking
+ * for the instance would return the NEXT object instead, which the name check
+ * below then rejects. `bulk` is false for a batch that cannot be asked that
+ * way (v1, bulk = false, or a point that is not a scalar instance). */
+static void fetch_batch(tdot_device_t *dev, tdot_point_t **pts, size_t count,
+                        bool bulk) {
     snmpc_device_t *sd = dev->proto;
     tdot_point_t **todo = malloc(count * sizeof *todo);
     if (!todo) {
@@ -1256,7 +1292,6 @@ static void fetch_batch(tdot_device_t *dev, tdot_point_t **pts, size_t count) {
     }
     memcpy(todo, pts, count * sizeof *todo);
     size_t ntodo = count;
-    bool bulk = sd->bulk && sd->version != TSNMP_V1;
 
     while (ntodo > 0) {
         tsnmp_lock();
@@ -1269,7 +1304,10 @@ static void fetch_batch(tdot_device_t *dev, tdot_point_t **pts, size_t count) {
             for (size_t i = 0; i < ntodo; i++) {
                 const snmpc_point_t *sp = todo[i]->proto;
                 oid name[MAX_OID_LEN];
-                snmp_add_null_var(req, name, tsnmp_oid_to_net(&sp->oid, name));
+                size_t n = tsnmp_oid_to_net(&sp->oid, name);
+                if (bulk)
+                    n--; /* the scalar's parent: GETBULK answers with its successor */
+                snmp_add_null_var(req, name, n);
             }
         }
         tsnmp_unlock();
@@ -1284,9 +1322,24 @@ static void fetch_batch(tdot_device_t *dev, tdot_point_t **pts, size_t count) {
         tsnmp_req_status_t status = tsnmp_request(sd->sess, req, &resp, why,
                                                   sizeof why);
         if (status != TSNMP_REQ_OK) {
-            /* a timeout or a USM failure is a transport error (§5.1) */
+            /* A timeout or a send failure means the transport is down, so the
+             * runtime reconnects with its backoff (§5.1).
+             *
+             * A USM failure does not: the credentials are wrong, and a
+             * reconnect only re-runs engine discovery, which is unauthenticated
+             * and succeeds -- the device would announce `connected` again a
+             * second later, and flap for as long as the password stays wrong.
+             * Reported as bad samples on a link the runtime then marks
+             * degraded (every polled point bad), which is where it settles. */
+            char text[TDOT_ERR_MAX];
+            if (status == TSNMP_REQ_SECURITY)
+                snprintf(text, sizeof text, "SNMPv3 authentication failed: %s",
+                         why);
+            else
+                snprintf(text, sizeof text, "%s", why);
             for (size_t i = 0; i < ntodo; i++)
-                cache_bad(todo[i], -1, "%s", why);
+                cache_bad(todo[i], status == TSNMP_REQ_SECURITY ? 0 : -1, "%s",
+                          text);
             break;
         }
 
@@ -1322,6 +1375,14 @@ static void fetch_batch(tdot_device_t *dev, tdot_point_t **pts, size_t count) {
             if (!v) {
                 tdot_sample_bad(&s, "the response carried no value for %s",
                                 "this OID");
+            } else if (v->type == SNMP_NOSUCHOBJECT ||
+                       v->type == SNMP_NOSUCHINSTANCE ||
+                       v->type == SNMP_ENDOFMIBVIEW) {
+                /* An exception carries no value, and an agent answering a
+                 * GETBULK past the end of a subtree may echo the name that was
+                 * asked for (the scalar's parent), so it is reported as the
+                 * exception it is rather than as a name mismatch (§5.1). */
+                fill_value(todo[i], v, &s);
             } else if (!tsnmp_var_name(v, &name) ||
                        !tsnmp_oid_equal(&name, &sp->oid)) {
                 char text[TSNMP_OID_STR_MAX];
@@ -1376,10 +1437,36 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
                             q->next_due <= now))
                 due[n++] = q;
         }
+        /* Scalars first, so they keep their GETBULK; anything else (a point
+         * whose OID is not an instance) is fetched with GET. */
+        size_t nscalar = 0;
+        for (size_t i = 0; i < n; i++) {
+            const snmpc_point_t *qp = due[i]->proto;
+            if (scalar_instance(&qp->oid)) {
+                tdot_point_t *swap = due[nscalar];
+                due[nscalar++] = due[i];
+                due[i] = swap;
+            }
+        }
         size_t step = (size_t)sd->max_varbinds;
-        for (size_t i = 0; i < n; i += step)
-            fetch_batch(dev, due + i, n - i < step ? n - i : step);
+        bool bulk = sd->bulk && sd->version != TSNMP_V1;
+        for (size_t i = 0; i < nscalar; i += step)
+            fetch_batch(dev, due + i, nscalar - i < step ? nscalar - i : step,
+                        bulk);
+        for (size_t i = nscalar; i < n; i += step)
+            fetch_batch(dev, due + i, n - i < step ? n - i : step, false);
         free(due);
+        /* The runtime ends a device's cycle at the first read that reports the
+         * transport down, so every other point fetched with it would never
+         * publish the bad sample it already has. Hold that verdict back to the
+         * last of them: the whole batch is published, and the link still drops
+         * on the final read. */
+        sd->transport_pending = 0;
+        for (size_t j = 0; j < dev->npoints; j++) {
+            const snmpc_point_t *qp = dev->points[j].proto;
+            if (qp && qp->cached && qp->cached_rc != 0)
+                sd->transport_pending++;
+        }
         sd->batch_at = tdot_mono();
     }
     if (!sp->cached) {
@@ -1388,7 +1475,10 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
     }
     *out = sp->cached_sample;
     sp->cached = false;
-    return sp->cached_rc;
+    int rc = sp->cached_rc;
+    if (rc != 0 && sd->transport_pending > 0 && --sd->transport_pending > 0)
+        rc = 0; /* a later point of the same batch carries the verdict */
+    return rc;
 }
 
 /* ---- writes (§5.2) ------------------------------------------------------- */

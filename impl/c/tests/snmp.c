@@ -1083,6 +1083,18 @@ static void check_notifications(const char *vectors) {
               "inform: raw varbind point (%s %s)", cap.items[1].point,
               cap.items[1].raw);
     }
+    /* The authoritative engine's boots, which only an inform depends on: net-snmp
+     * refuses a v3 inform whose boots differ from snmpv3_local_snmpEngineBoots(),
+     * and 0 (RFC 3414 §2.2's "not initialised") makes a sender re-synchronise and
+     * re-send forever rather than fail -- the suite hangs instead of reporting.
+     * The Rust side asserts the same of config::engine_boots(). */
+    tsnmp_lock();
+    u_long local_boots = snmpv3_local_snmpEngineBoots();
+    tsnmp_unlock();
+    CHECK(local_boots > 0,
+          "the local engine must report snmpEngineBoots >= 1, got %lu",
+          local_boots);
+
     long n = recv_within(tx, reply, sizeof reply, 1000);
     CHECK(n > 0, "the inform was not acknowledged");
     if (n > 0) {
@@ -1270,14 +1282,22 @@ static object_t OBJECTS[] = {
     {"1.3.6.1.4.1.99999.1.21.0", ASN_OCTET_STR, 0, "initial", true},
 };
 
-static object_t *object_find(const netsnmp_variable_list *v) {
+static size_t object_oid(const object_t *o, oid *arcs) {
+    tsnmp_oid_t parsed;
+    char err[80];
+    tsnmp_oid_parse(o->oid, &parsed, err, sizeof err);
+    return tsnmp_oid_to_net(&parsed, arcs);
+}
+
+/* GET: the object at exactly this OID. GETBULK (non-repeaters): the object
+ * lexicographically AFTER it, as RFC 3416 §4.2.3 requires -- which is how a
+ * scalar is fetched by asking for its parent. OBJECTS is kept in OID order. */
+static object_t *object_find(const netsnmp_variable_list *v, bool successor) {
     for (size_t i = 0; i < sizeof OBJECTS / sizeof OBJECTS[0]; i++) {
-        tsnmp_oid_t o;
-        char err[80];
         oid arcs[MAX_OID_LEN];
-        tsnmp_oid_parse(OBJECTS[i].oid, &o, err, sizeof err);
-        size_t n = tsnmp_oid_to_net(&o, arcs);
-        if (netsnmp_oid_equals(v->name, v->name_length, arcs, n) == 0)
+        size_t n = object_oid(&OBJECTS[i], arcs);
+        int cmp = snmp_oid_compare(arcs, n, v->name, v->name_length);
+        if (successor ? cmp > 0 : cmp == 0)
             return &OBJECTS[i];
     }
     return NULL;
@@ -1349,9 +1369,16 @@ static void responder_main(int port, int stats_fd, int seconds) {
             resp->errindex = 0;
             resp->flags &= ~UCD_MSG_FLAG_EXPECT_RESPONSE;
             long index = 1;
+            bool successor = req->command == SNMP_MSG_GETBULK;
             for (netsnmp_variable_list *v = resp->variables; v;
                  v = v->next_variable, index++) {
-                object_t *o = object_find(v);
+                object_t *o = object_find(v, successor);
+                if (o && successor) {
+                    /* answer under the name of the object actually returned */
+                    oid arcs[MAX_OID_LEN];
+                    size_t n = object_oid(o, arcs);
+                    snmp_set_var_objid(v, arcs, n);
+                }
                 if (!o) {
                     if (req->version == SNMP_VERSION_1) {
                         resp->errstat = SNMP_ERR_NOSUCHNAME;
@@ -1636,9 +1663,9 @@ static void check_polling(void) {
         CHECK((v3rc == 0 && s3.quality == TDOT_Q_GOOD &&
                s3.value.kind == TDOT_VAL_STR &&
                strcmp(s3.value.str, "responder") == 0) ||
-                  (v3rc == -1 && s3.quality == TDOT_Q_BAD && s3.error[0]),
-              "a v3 authPriv read must deliver a value, or a bad sample with a "
-              "transport error (rc %d, quality %d, %s)",
+                  (v3rc == 0 && s3.quality == TDOT_Q_BAD && s3.error[0]),
+              "a v3 authPriv read must deliver a value, or a bad sample that "
+              "leaves the link up to be marked degraded (rc %d, quality %d, %s)",
               v3rc, (int)s3.quality, s3.error);
     } else {
         CHECK(0, "v3 device: %s", err);
@@ -1655,8 +1682,14 @@ static void check_polling(void) {
         tdot_sample_t s;
         tdot_sample_init(&s);
         rc = dut.conn->read_point(dut.conn, dut.dev, &dut.dev->points[0], &s);
-        CHECK(rc == -1 && s.quality == TDOT_Q_BAD,
-              "a wrong v3 password gives bad samples and drops the link (rc %d, %s)",
+        /* Not a transport error: reconnecting would re-run the unauthenticated
+         * engine discovery, succeed, and announce `connected` again every
+         * cycle. Bad samples on a live link let the runtime settle it as
+         * degraded (every polled point bad). */
+        CHECK(rc == 0 && s.quality == TDOT_Q_BAD &&
+                  strstr(s.error, "authentication failed"),
+              "a wrong v3 password gives bad samples and keeps the link for the "
+              "runtime to mark degraded (rc %d, %s)",
               rc, s.error);
     } /* the engine probe itself may already fail, which is a disconnect too */
     close_dut(&dut);
@@ -1667,12 +1700,26 @@ static void check_polling(void) {
              "retries = 0",
              free_udp_port());
     if (open_dut(address, two_points, &dut, err, sizeof err)) {
-        tdot_sample_t s;
-        tdot_sample_init(&s);
-        rc = dut.conn->read_point(dut.conn, dut.dev, &dut.dev->points[0], &s);
-        CHECK(rc == -1 && s.quality == TDOT_Q_BAD && strstr(s.error, "timed out"),
-              "a timeout is a bad sample and a transport error (rc %d, %s)", rc,
-              s.error);
+        /* Every point of the batch publishes its bad sample, and the last
+         * read reports the transport down so the runtime reconnects -- the
+         * runtime stops the cycle at that point, so it has to come last. */
+        int last_rc = 0;
+        size_t bad = 0, readable = 0;
+        for (size_t j = 0; j < dut.dev->npoints; j++) {
+            if (!(dut.dev->points[j].access & TDOT_ACCESS_READ))
+                continue;
+            readable++;
+            tdot_sample_t s;
+            tdot_sample_init(&s);
+            last_rc = dut.conn->read_point(dut.conn, dut.dev,
+                                           &dut.dev->points[j], &s);
+            if (s.quality == TDOT_Q_BAD && strstr(s.error, "timed out"))
+                bad++;
+        }
+        CHECK(readable > 1 && bad == readable && last_rc == -1,
+              "a timeout makes every point of the batch bad and the last read "
+              "reports the transport down (%zu/%zu bad, last rc %d)",
+              bad, readable, last_rc);
     } else {
         CHECK(0, "silent-agent device: %s", err);
     }

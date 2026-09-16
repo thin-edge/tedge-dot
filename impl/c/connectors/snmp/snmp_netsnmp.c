@@ -532,6 +532,29 @@ int tsnmp_set_local_engine_id(const uint8_t *id, size_t len) {
     return set_exact_engineID(id, len) == SNMPERR_SUCCESS ? 0 : -1;
 }
 
+void tsnmp_set_local_engine_boots(const uint8_t *id, size_t len,
+                                  uint32_t boots) {
+    /* snmpEngineBoots for the authoritative role. It has to be set explicitly:
+     * usm_check_and_update_timeliness compares an inform's boots against
+     * snmpv3_local_snmpEngineBoots() and refuses any mismatch with
+     * usmStatsNotInTimeWindows, and set_exact_engineID -- unlike the engine ID
+     * change inside snmpv3_store -- sets neither the counter nor the LCD entry.
+     * Left alone it stays 0, which RFC 3414 §2.2 reserves for an uninitialised
+     * engine: a sender then refuses to adopt the boots/time our discovery
+     * Report offers, sends 0/0, is refused, re-synchronises and repeats -- an
+     * inform that never completes rather than one that fails.
+     *
+     * engineBoots_conf is the only exported way in (the setter beside it is
+     * behind NETSNMP_ENABLE_TESTING_CODE and is not built), and it stores
+     * `atoi(cptr) + 1`, hence the -1 here. The LCD entry is then stamped for
+     * our own engine exactly as snmpv3_store does. */
+    char text[16];
+    snprintf(text, sizeof text, "%u", boots > 0 ? boots - 1 : 0);
+    engineBoots_conf("engineBoots", text);
+    set_enginetime(id, (u_int)len, snmpv3_local_snmpEngineBoots(),
+                   snmpv3_local_snmpEngineTime(), TRUE);
+}
+
 /* ---- SHA-256 (FIPS 180-4), only for the default engine ID ---------------- */
 
 typedef struct {
@@ -761,12 +784,17 @@ static int request_callback(int op, netsnmp_session *session, int reqid,
         snprintf(st->why, sizeof st->why, "request timed out");
         st->done = true;
         break;
-    case NETSNMP_CALLBACK_OP_SEC_ERROR:
+    case NETSNMP_CALLBACK_OP_SEC_ERROR: {
+        /* the library leaves s_snmp_errno unset on some of these */
+        const char *text = session ? snmp_api_errstring(session->s_snmp_errno)
+                                   : NULL;
+        if (!text || !*text)
+            text = "wrong user, password or engine";
         st->status = TSNMP_REQ_SECURITY;
-        snprintf(st->why, sizeof st->why, "security error: %s",
-                 snmp_api_errstring(session ? session->s_snmp_errno : 0));
+        snprintf(st->why, sizeof st->why, "%s", text);
         st->done = true;
         break;
+    }
     case NETSNMP_CALLBACK_OP_SEND_FAILED:
         st->status = TSNMP_REQ_SEND;
         snprintf(st->why, sizeof st->why, "send failed");

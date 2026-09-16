@@ -61,6 +61,17 @@
       - The receiver's `LocalEngine` state is not rolled back when a forwarded v3 notification
         is tried against a device it turns out not to belong to (`listener.rs`), unlike the
         per-device security state beside it.
+      - **A transport error ends the whole device cycle in the C runtime**, for every connector:
+        the poll loop in `impl/c/sdk/src/runtime.c` stops at the first read returning non-zero,
+        so the remaining due points never publish the bad samples they already hold — and a
+        consumer that simply stops hearing about a point cannot tell a stalled device from a
+        value that has not changed. The SNMP module works around it for itself by holding the
+        verdict back to the last point of a failed batch (`transport_pending` in
+        `connector_snmp.c`); modbus, opcua and canbus still lose the rest of the tick. The Rust
+        runtime publishes every sample of a failed batch before it judges the link, so fixing
+        this in the C SDK would restore parity and let the SNMP workaround go. Only the SNMP
+        e2e suite covers the path at all (`A Stopped Agent Gives Bad Samples And The Link
+        Recovers`), which is why it went unnoticed.
 
 * [ ] The `.apk` packages carry versions apk-tools rejects, for BOTH implementations and for
       real releases, not just snapshots: `apk version -c` reports `0.0.1-alpha.2` (this

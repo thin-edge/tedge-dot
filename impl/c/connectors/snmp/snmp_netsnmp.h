@@ -131,6 +131,11 @@ int tsnmp_usm_install(const tsnmp_v3_creds_t *c, const uint8_t *engine,
 /* This process's engine ID, the authoritative one for received informs. */
 size_t tsnmp_local_engine_id(uint8_t *buf, size_t cap); /* lock held */
 int tsnmp_set_local_engine_id(const uint8_t *id, size_t len); /* lock held */
+/* This engine's snmpEngineBoots, for the same authoritative role: it must be
+ * at least 1 (RFC 3414 §2.2) or a sender can never satisfy the time window.
+ * Call it after tsnmp_set_local_engine_id. */
+void tsnmp_set_local_engine_boots(const uint8_t *id, size_t len,
+                                  uint32_t boots); /* lock held */
 /* The §3.1 default: 80000000 05 + the first 8 octets of SHA-256 of
  * /etc/machine-id (the hostname when absent). Writes 13 octets. */
 size_t tsnmp_default_engine_id(uint8_t *buf);
