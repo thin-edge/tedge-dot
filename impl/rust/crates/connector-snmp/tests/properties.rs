@@ -4,7 +4,7 @@
 
 use connector_snmp::notification::{self, PduKind, Version};
 use connector_snmp::snmp2::{pdu, MessageType, Oid as LibOid, Value as SnmpValue, Version as LibVersion};
-use connector_snmp::value::{Oid, VarValue};
+use connector_snmp::value::{Decoded, Oid, ValueType, VarValue};
 use proptest::prelude::*;
 
 fn oid() -> impl Strategy<Value = Oid> {
@@ -122,8 +122,48 @@ proptest! {
         prop_assert_eq!(n.request_id, Some(i64::from(request_id)));
         prop_assert_eq!(&n.trap, &trap);
         prop_assert_eq!(n.varbinds.len(), varbinds.len());
-        for (got, (name, _)) in n.varbinds.iter().zip(&varbinds) {
+        for (got, (name, expected)) in n.varbinds.iter().zip(&varbinds) {
             prop_assert_eq!(&got.name, name);
+            // ...and the VALUE's type, which this property used to discard: it destructured the
+            // generated value into `_`, so `VarValue::from_library` could hand back Gauge32 for
+            // a Counter32 and all thirteen variants still passed.
+            //
+            // The expectation is built HERE, by matching on the generated variant, and not by
+            // calling `from_library` on it -- routing both sides through the function under test
+            // compares it with itself and any lie cancels out. (Gauge32 rides on the library's
+            // Unsigned32, which is why it is the one variant whose names differ.)
+            let want = match expected {
+                Owned::Integer(_) => ValueType::Integer,
+                Owned::OctetString(_) => ValueType::OctetString,
+                Owned::Null => ValueType::Null,
+                Owned::Oid(_) => ValueType::Oid,
+                Owned::Ip(_) => ValueType::IpAddress,
+                Owned::Counter32(_) => ValueType::Counter32,
+                Owned::Gauge32(_) => ValueType::Gauge32,
+                Owned::Timeticks(_) => ValueType::TimeTicks,
+                Owned::Opaque(_) => ValueType::Opaque,
+                Owned::Counter64(_) => ValueType::Counter64,
+                Owned::NoSuchObject => ValueType::NoSuchObject,
+                Owned::NoSuchInstance => ValueType::NoSuchInstance,
+                Owned::EndOfMibView => ValueType::EndOfMibView,
+            };
+            prop_assert_eq!(got.value.kind, want);
+            // ...and what the octets decode to, for the variants that carry a number.
+            match expected {
+                Owned::Integer(v) => prop_assert_eq!(&got.value.decoded, &Decoded::Signed(*v)),
+                Owned::Counter32(v) | Owned::Gauge32(v) | Owned::Timeticks(v) => {
+                    prop_assert_eq!(&got.value.decoded, &Decoded::Unsigned(u64::from(*v)));
+                }
+                Owned::Counter64(v) => {
+                    prop_assert_eq!(&got.value.decoded, &Decoded::Unsigned(*v));
+                }
+                Owned::Ip(ip) => prop_assert_eq!(&got.value.decoded, &Decoded::IpAddress(*ip)),
+                Owned::Oid(oid) => prop_assert_eq!(&got.value.decoded, &Decoded::Oid(oid.clone())),
+                Owned::OctetString(b) => prop_assert_eq!(&got.value.raw, b),
+                Owned::Opaque(b) => prop_assert_eq!(&got.value.raw, b),
+                Owned::Null | Owned::NoSuchObject | Owned::NoSuchInstance
+                | Owned::EndOfMibView => prop_assert_eq!(&got.value.decoded, &Decoded::Octets),
+            }
         }
         prop_assert_eq!(n.version, Version::V2c);
     }

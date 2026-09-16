@@ -398,6 +398,22 @@ static void check_v3_vector(const cJSON *v, const cJSON *users, bool must_reject
     const char *engine_hex = jstr(expect, "engine_id");
     uint8_t *engine = NULL;
     long engine_len = engine_hex ? unhex(engine_hex, &engine) : 0;
+    /* A `rejected` entry has no `expect`, so without this its credentials were never installed
+     * and the USM table still held whatever the LAST accepted vector left for the same user and
+     * engine -- the `none` set, noAuthNoPriv. An authPriv message against a noAuth user is then
+     * refused by the security-level check BEFORE its digest is ever computed, so the vector
+     * passed for the wrong reason and would have passed with SHA verification removed. The
+     * engine the message claims is in its own header, which peeking reads without
+     * authenticating anything. */
+    tsnmp_v3_header_t peeked;
+    if (engine_len <= 0 && tsnmp_v3_peek(bytes, (size_t)len, &peeked) == 0 &&
+        peeked.engine_len > 0) {
+        engine = malloc(peeked.engine_len);
+        if (engine) {
+            memcpy(engine, peeked.engine, peeked.engine_len);
+            engine_len = (long)peeked.engine_len;
+        }
+    }
     char err[200];
     tsnmp_lock();
     if (creds.auth &&
@@ -510,7 +526,12 @@ static void check_vectors(const char *path) {
     const cJSON *v3s = cJSON_GetObjectItem(doc, "v3");
     const cJSON *v3_messages = cJSON_GetObjectItem(v3s, "messages");
     const cJSON *v3_users = cJSON_GetObjectItem(v3s, "users");
-    CHECK(cJSON_IsArray(v3_messages) && cJSON_IsObject(v3_users),
+    /* Non-emptiness matters as much as the type: an EMPTY array satisfies cJSON_IsArray, the
+     * loop runs zero times, and the "every acceptable vector decoded" count below compares
+     * 0 == 0 and passes -- the very failure this section was rewritten to end. Every other
+     * section here asserts a count for the same reason. */
+    CHECK(cJSON_IsArray(v3_messages) && cJSON_GetArraySize(v3_messages) > 0 &&
+              cJSON_IsObject(v3_users),
           "the vector file lost its v3 messages or users");
     int v3_decoded = 0, v3_accepted = 0;
     cJSON_ArrayForEach(v, v3_messages) {
@@ -531,10 +552,11 @@ static void check_vectors(const char *path) {
     CHECK(cJSON_IsArray(v3_rejected) && cJSON_GetArraySize(v3_rejected) > 0,
           "the v3 section lost its rejections");
     cJSON_ArrayForEach(v, v3_rejected) {
-        int ignored = 0;
-        check_v3_vector(v, v3_users, true, &ignored);
-        CHECK(ignored == 0, "[%s] a rejected vector must not count as decoded",
-              jstr(v, "name") ? jstr(v, "name") : "?");
+        /* `check_v3_vector` only counts a decode when `expect_ok`, which `must_reject` forces
+         * false -- so asserting the counter stayed 0 here would be a tautology. The refusal
+         * itself is asserted inside the function. */
+        int unused = 0;
+        check_v3_vector(v, v3_users, true, &unused);
         v3++;
     }
 
@@ -559,7 +581,10 @@ static void check_vectors(const char *path) {
             const char *pname = jstr(v, "name") ? jstr(v, "name") : "?";
             const cJSON *pexpect = cJSON_GetObjectItem(v, "expect");
             uint8_t *pbytes = NULL;
-            long plen = unhex(jstr(v, "hex"), &pbytes);
+            /* `unhex` calls strlen, so a probe without a `hex` key would crash here rather than
+             * reach the check below that exists to report it. */
+            const char *phex = jstr(v, "hex");
+            long plen = phex ? unhex(phex, &pbytes) : -1;
             if (plen < 0 || rid_len <= 0) {
                 CHECK(0, "[%s] bad probe hex or receiver engine id", pname);
                 free(pbytes);
@@ -570,6 +595,11 @@ static void check_vectors(const char *path) {
              * follow (check_configuration onwards) must not inherit it. */
             uint8_t saved[32];
             size_t saved_len = tsnmp_local_engine_id(saved, sizeof saved);
+            /* Boots has to be saved too: restoring the FIXTURE's value would leave the process
+             * at 7 instead of the 1 it started with, so the phases that follow would inherit
+             * fixture state -- exactly what the save/restore is here to prevent. */
+            u_long saved_boots = snmpv3_local_snmpEngineBoots();
+            CHECK(saved_len > 0, "[%s] this engine has no id to restore afterwards", pname);
             tsnmp_set_local_engine_id(rid, (size_t)rid_len);
             tsnmp_set_local_engine_boots(rid, (size_t)rid_len, boots);
 
@@ -623,7 +653,7 @@ static void check_vectors(const char *path) {
                 snmp_free_pdu(probe);
             if (saved_len > 0) {
                 tsnmp_set_local_engine_id(saved, saved_len);
-                tsnmp_set_local_engine_boots(saved, saved_len, boots);
+                tsnmp_set_local_engine_boots(saved, saved_len, (uint32_t)saved_boots);
             }
             tsnmp_unlock();
             free(pbytes);
@@ -1927,7 +1957,21 @@ int main(int argc, char **argv) {
         fputs("usage: tedge-dot-snmp <trap-vectors.json>\n", stderr);
         return 2;
     }
+    /* The vectors set this engine's identity to answer a discovery probe, and restore it after.
+     * Checking the round trip here makes that an assertion rather than a comment: every phase
+     * below depends on the process NOT having inherited fixture state (engineBoots reaching a
+     * later phase as the fixture's 7 rather than the 1 it started at would put every v3 request
+     * outside its agent's time window). */
+    tsnmp_lock();
+    u_long boots_before = snmpv3_local_snmpEngineBoots();
+    tsnmp_unlock();
     check_vectors(argv[1]);
+    tsnmp_lock();
+    u_long boots_after = snmpv3_local_snmpEngineBoots();
+    tsnmp_unlock();
+    CHECK(boots_before == boots_after,
+          "the vectors left this engine's boots at %lu, not the %lu they found",
+          boots_after, boots_before);
     check_oid_syntax();
     check_configuration();
     check_notifications(argv[1]);

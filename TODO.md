@@ -91,6 +91,20 @@
         - **Numeric bounds differ**: C enforces `retries` 0–100, `max_varbinds` 1–256, `port`
           1–65535; Rust enforces only `max_varbinds ≠ 0`. A file one build runs, the other
           refuses to start on.
+      - **`malformed[7]` does not test what it says.** It is named "SNMPv3 message" with the
+        reason "SNMPv3 needs credentials", but its bytes are a v2c-shaped datagram whose version
+        field is simply set to 3: `020103` is followed by `0406 7075626c6963` (an OCTET STRING
+        community) where RFC 3412 requires msgGlobalData, a `0x30` SEQUENCE — every genuine v3
+        vector in the file has `0x30` there. It is still correctly rejected, so no valid input is
+        refused, but it pins "a datagram claiming version 3 is refused" rather than "a well-formed
+        v3 message with no credentials is refused". Replacing its hex with a properly structured
+        v3 message carrying an unknown user would make it test its own premise.
+      - **`a_values_canonical_octets_decode_back_to_it`** (`connector-snmp/tests/properties.rs`)
+        builds both sides of its comparison with `VarValue::from_library`, so a wrong mapping in
+        that function cancels out — the same defect that was just fixed in
+        `encode_then_decode_round_trips`. It is partly saved by constructing the BER element from
+        an independent tag table, which would catch a type whose tag changed, but not a value that
+        decodes to the wrong number.
       - **The C conformance harness does not assert the usmStats counter's VALUE on a discovery
         probe.** The probe itself is now checked (Report produced, msgID, request-id, one
         varbind, counter OID, counter32 type), but net-snmp keeps usmStats process-wide and the

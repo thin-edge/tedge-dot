@@ -2551,13 +2551,26 @@ default_mode = "typed"
     /// change does not compare equal.
     #[test]
     fn a_reload_sees_through_edits_that_change_nothing() {
+        // `reload_from_file` asks two questions in order: `needs_restart`, then whether the new
+        // configuration compares equal to the running one (`Reloaded::Unchanged`). Both are
+        // asserted here -- comparing two `toml::from_str` results alone would only exercise the
+        // toml crate and the derived `PartialEq`, not anything this module decides.
         let running: ConnectorConfig = toml::from_str(BASE).unwrap();
         let commented: ConnectorConfig =
             toml::from_str(&format!("# edited by the operator\n{BASE}")).unwrap();
-        assert_eq!(running, commented);
+        assert_eq!(running, commented, "a comment does not change the resolved configuration");
+        assert!(!needs_restart(&running, &commented), "and it certainly does not restart it");
+
         let moved: ConnectorConfig =
             toml::from_str(&BASE.replace("address = 7", "address = 8")).unwrap();
-        assert_ne!(running, moved);
+        assert_ne!(running, moved, "a moved register is a real change");
+        // ...but one applied in place: a changed point is not a reason to restart the connector.
+        assert!(!needs_restart(&running, &moved));
+
+        let renamed: ConnectorConfig =
+            toml::from_str(&BASE.replace("protocol = \"modbus\"", "protocol = \"opcua\"")).unwrap();
+        assert_ne!(running, renamed);
+        assert!(needs_restart(&running, &renamed), "a different protocol does restart it");
     }
 
     #[test]

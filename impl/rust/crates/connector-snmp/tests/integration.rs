@@ -166,7 +166,7 @@ impl Agent {
             ("1.3.6.1.4.1.99999.2.1.1", Owned::Int(7)),
             ("1.3.6.1.4.1.99999.1.20.0", Owned::Int(10)),
             ("1.3.6.1.4.1.99999.1.21.0", Owned::Str(b"initial".to_vec())),
-            ("1.3.6.1.4.1.99999.1.22.0", Owned::Gauge(100)),
+            ("1.3.6.1.4.1.99999.1.22.0", Owned::Counter32(100)),
         ]
         .into_iter()
         .map(|(oid, value)| (Oid::parse(oid).unwrap(), value))
@@ -496,7 +496,12 @@ async fn a_silent_agent_makes_the_batch_bad_and_skips_the_rest() {
     let mut agent = Agent::seeded();
     agent.silent = true;
     let agent = spawn_agent(agent).await;
-    let text = agent_config(agent.address.port(), AGENT_POINTS).replace("max_varbinds", "unused");
+    // Two batches arise from the point kinds, not from a varbind cap: `cell` is a non-scalar, so
+    // it goes in its own GET beside the scalars' GETBULK (see
+    // `polled_objects_use_getbulk_for_scalars_and_get_for_the_rest`). An earlier
+    // `.replace("max_varbinds", "unused")` here edited nothing -- the string does not occur in
+    // this config -- so it only made the split look configured.
+    let text = agent_config(agent.address.port(), AGENT_POINTS);
     let mut conn = factory();
     conn.configure(&config(&text)).unwrap();
     conn.connect().await.unwrap();
@@ -537,7 +542,7 @@ async fn writes_go_through_with_the_configured_type_and_errors_carry_their_name(
   id       = "limit"
   datatype = "uint32"
   access   = "read_write"
-  address  = {{ oid = "1.3.6.1.4.1.99999.1.22.0", type = "gauge32" }}
+  address  = {{ oid = "1.3.6.1.4.1.99999.1.22.0", type = "counter32" }}
 
   [[device.point]]
   id       = "locked"
@@ -563,9 +568,11 @@ async fn writes_go_through_with_the_configured_type_and_errors_carry_their_name(
     conn.execute(&device, "write", &write("label", serde_json::json!("written"))).await.unwrap();
     assert_eq!(agent.value("1.3.6.1.4.1.99999.1.21.0"), Some(Owned::Str(b"written".to_vec())));
 
-    // `type = "gauge32"` decides what goes on the wire, not the point's datatype.
+    // `type` decides what goes on the wire, not the point's datatype. `counter32` (tag 0x41) is
+    // the discriminating choice: `gauge32` would prove nothing here, since a `uint32` point
+    // already defaults to `unsigned32`, which shares tag 0x42 and the same encoder arm.
     conn.execute(&device, "write", &write("limit", serde_json::json!(250))).await.unwrap();
-    assert_eq!(agent.value("1.3.6.1.4.1.99999.1.22.0"), Some(Owned::Gauge(250)));
+    assert_eq!(agent.value("1.3.6.1.4.1.99999.1.22.0"), Some(Owned::Counter32(250)));
 
     let refused = conn.execute(&device, "write", &write("locked", serde_json::json!(1))).await.unwrap_err();
     assert!(refused.to_string().contains("notWritable"), "{refused}");
@@ -574,7 +581,7 @@ async fn writes_go_through_with_the_configured_type_and_errors_carry_their_name(
     // A value the SNMP type cannot carry never leaves the connector.
     let refused = conn.execute(&device, "write", &write("limit", serde_json::json!(-1))).await.unwrap_err();
     assert!(refused.to_string().contains("out of range"), "{refused}");
-    assert_eq!(agent.value("1.3.6.1.4.1.99999.1.22.0"), Some(Owned::Gauge(250)));
+    assert_eq!(agent.value("1.3.6.1.4.1.99999.1.22.0"), Some(Owned::Counter32(250)));
 
     // A raw write carries the type's content octets.
     let raw = tedge_dot_sdk::CommandRequest {
