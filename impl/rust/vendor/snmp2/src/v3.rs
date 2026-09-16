@@ -83,7 +83,11 @@ impl fmt::Display for AuthErrorKind {
     }
 }
 
-#[derive(Debug, Clone)]
+// TEDGE-DOT-PATCH(7): the derived `Debug` printed the localized keys, so anything formatting a
+// value that carries this state — a `Security`, a `Pdu` parsed with one, an error message, a
+// test's `println!` — wrote key material in the clear. Only the engine's public identity and
+// clock are printed now.
+#[derive(Clone)]
 pub(crate) struct AuthoritativeState {
     auth_key: Vec<u8>,
     priv_key: Vec<u8>,
@@ -92,6 +96,28 @@ pub(crate) struct AuthoritativeState {
     engine_time: i64,
     engine_time_current: i64,
     pub(crate) start_time: Instant,
+}
+
+impl fmt::Debug for AuthoritativeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthoritativeState")
+            .field("auth_key", &Redacted(self.auth_key.len()))
+            .field("priv_key", &Redacted(self.priv_key.len()))
+            .field("engine_id", &self.engine_id)
+            .field("engine_boots", &self.engine_boots)
+            .field("engine_time", &self.engine_time)
+            .field("engine_time_current", &self.engine_time_current)
+            .finish()
+    }
+}
+
+/// Stands in for secret octets in a `Debug`: their length, never their value.
+pub(crate) struct Redacted(pub(crate) usize);
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<redacted {} bytes>", self.0)
+    }
 }
 
 impl Default for AuthoritativeState {
@@ -265,7 +291,9 @@ impl KeyExtension {
     }
 }
 
-#[derive(Debug, Clone)]
+// TEDGE-DOT-PATCH(7): see `AuthoritativeState` — the derived `Debug` printed the USM password
+// and the decrypted scoped PDU held in `plain_buf`.
+#[derive(Clone)]
 pub struct Security {
     pub(crate) username: Vec<u8>,
     pub(crate) authentication_password: Vec<u8>,
@@ -275,6 +303,24 @@ pub struct Security {
     pub(crate) authoritative_state: AuthoritativeState,
     pub(crate) plain_buf: Vec<u8>,
     pub(crate) context_name: Vec<u8>,
+}
+
+impl fmt::Debug for Security {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Security")
+            .field("username", &String::from_utf8_lossy(&self.username))
+            .field(
+                "authentication_password",
+                &Redacted(self.authentication_password.len()),
+            )
+            .field("auth", &self.auth)
+            .field("auth_protocol", &self.auth_protocol)
+            .field("key_extension_method", &self.key_extension_method)
+            .field("authoritative_state", &self.authoritative_state)
+            .field("plain_buf", &Redacted(self.plain_buf.len()))
+            .field("context_name", &String::from_utf8_lossy(&self.context_name))
+            .finish()
+    }
 }
 
 impl Security {

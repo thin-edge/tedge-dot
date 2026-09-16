@@ -515,11 +515,7 @@ LinkDown Raises An Alarm That LinkUp Clears
 *** Keywords ***
 Setup SNMP Stack
     Setup OT Stack    snmp
-    # Topic builders usable inline as te/device/agent/ot/${PROTOCOL}/sample/ticks.
-    ${sample_topic}=    Evaluate    lambda device, point: f"te/device/{device}/ot/snmp/sample/{point}"
-    ${link_topic}=    Evaluate    lambda device: f"te/device/{device}/ot/snmp/status/link"
-    Set Suite Variable    $sample_topic    ${sample_topic}
-    Set Suite Variable    $link_topic    ${link_topic}
+    # Topics are plain strings: te/device/<device>/ot/${PROTOCOL}/sample/<point>.
     Wait For Fresh Message With Field    ${LINK_TOPIC}    status    connected
     ...    timeout=${READY_TIMEOUT}    since=0
     Wait For Fresh Message With Field    te/device/agent/ot/${PROTOCOL}/status/link    status    connected

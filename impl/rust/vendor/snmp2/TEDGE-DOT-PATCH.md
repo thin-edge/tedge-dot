@@ -110,4 +110,16 @@ time plus the local time elapsed since.
 
 Upstream draft: `doc/upstream/snmp2-v3-stale-engine-time.md`.
 
+## 7. `Debug` never prints a password or a localized key
+
+`Security` and `AuthoritativeState` derived `Debug`, so `{:?}` of anything carrying security
+state — a session, a parsed `Pdu`, an error, a test's `println!` — wrote the USM password, both
+localized keys and the decrypted scoped PDU (`plain_buf`) in the clear. CodeQL flagged three such
+sinks on this branch (two in the crate's own `src/tests.rs`, one in a tedge-dot test's panic
+message). Both types now implement `Debug` by hand: secrets print as `<redacted N bytes>`, while
+the engine ID, boots and time — public protocol state, and the useful part when debugging a time
+window — stay visible.
+
+Upstream draft: `doc/upstream/snmp2-debug-prints-usm-keys.md`.
+
 Drop this directory and the `[patch.crates-io]` entry once a release carries equivalent fixes.

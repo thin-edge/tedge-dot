@@ -120,8 +120,13 @@ fn every_malformed_datagram_is_rejected() {
     assert!(malformed.len() >= 40, "the vector file lost its malformed datagrams");
     for m in malformed {
         let name = m["name"].as_str().unwrap();
+        // The trap OID alone: a decoded notification carries the v3 security state, and
+        // printing it would put key material in the test log.
         if let Ok(n) = notification::decode(&unhex(m["hex"].as_str().unwrap())) {
-            panic!("{name}: decoded, but must be rejected ({}): {n:?}", m["why"]);
+            panic!(
+                "{name}: decoded as {}, but must be rejected ({})",
+                n.trap, m["why"]
+            );
         }
     }
 }
