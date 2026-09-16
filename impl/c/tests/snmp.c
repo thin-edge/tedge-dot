@@ -343,19 +343,32 @@ static void check_conversion(const cJSON *c, int index) {
 
 /* A v3 vector: a datagram, the USM user it was built with, and whether it must
  * authenticate. The section is optional while the Rust side generates it. */
-static void check_v3_vector(const cJSON *v) {
+/* `users` is the vector file's `v3.users` table. A message's `user` field is a KEY into it
+ * ("sha-aes", "none", ...), not an inline object, and the credential set names the USM user in
+ * its `user` field -- the same two indirections the Rust harness resolves in its `user()`
+ * helper. Reading either one wrong leaves `creds.user` empty, and net-snmp then refuses every
+ * vector with "unknown security name". */
+/* `must_reject` is the caller's, not the vector's: an entry in `v3.rejected` carries only
+ * name/hex/user/why -- its rejection is implied by which array it lives in, and it has no
+ * `expect` object to compare against. Inferring it from an absent `accepted` field would make
+ * every rejection assert that it MUST decode. */
+static void check_v3_vector(const cJSON *v, const cJSON *users, bool must_reject,
+                            int *decoded) {
     const char *name = jstr(v, "name");
     const char *hex = jstr(v, "hex");
-    const cJSON *user = cJSON_GetObjectItem(v, "user");
-    bool expect_ok = !cJSON_IsFalse(cJSON_GetObjectItem(v, "accepted"));
+    const char *user_key = jstr(v, "user");
+    const cJSON *user = user_key ? cJSON_GetObjectItem(users, user_key) : NULL;
+    bool expect_ok = !must_reject && !cJSON_IsFalse(cJSON_GetObjectItem(v, "accepted"));
     if (!hex || !cJSON_IsObject(user)) {
-        printf("skip  [%s]: no hex/user in the vector\n", name ? name : "?");
+        CHECK(0, "[%s] names user '%s', which v3.users does not define",
+              name ? name : "?", user_key ? user_key : "(none)");
         return;
     }
     tsnmp_v3_creds_t creds;
     memset(&creds, 0, sizeof creds);
     snprintf(creds.user, sizeof creds.user, "%s",
-             jstr(user, "name") ? jstr(user, "name") : "");
+             jstr(user, "user") ? jstr(user, "user") : "");
+    CHECK(creds.user[0] != '\0', "[%s] credential set '%s' names no user", name, user_key);
     const char *auth = jstr(user, "auth_protocol");
     const char *priv = jstr(user, "priv_protocol");
     if (auth && strcmp(auth, "MD5") == 0)
@@ -379,9 +392,12 @@ static void check_v3_vector(const cJSON *v) {
                                : SNMP_SEC_LEVEL_NOAUTH;
     uint8_t *bytes;
     long len = unhex(hex, &bytes);
+    /* The engine the message claims is under `expect`, not at the top level. The keys must be
+     * localized to it for the library to authenticate the datagram at all. */
+    const cJSON *expect = cJSON_GetObjectItem(v, "expect");
+    const char *engine_hex = jstr(expect, "engine_id");
     uint8_t *engine = NULL;
-    long engine_len = jstr(v, "engine_id") ? unhex(jstr(v, "engine_id"), &engine)
-                                           : 0;
+    long engine_len = engine_hex ? unhex(engine_hex, &engine) : 0;
     char err[200];
     tsnmp_lock();
     if (creds.auth &&
@@ -405,7 +421,39 @@ static void check_v3_vector(const cJSON *v) {
         CHECK(rc == 0, "[%s] should decode: %s", name,
               rc ? snmp_api_errstring(lib_errno) : "");
     else
-        CHECK(rc != 0, "[%s] must be rejected", name);
+        CHECK(rc != 0, "[%s] must be rejected (%s)", name,
+              jstr(v, "why") ? jstr(v, "why") : "no reason given");
+
+    /* The v3 header and context, as the Rust harness asserts them. Decoding alone says only
+     * that the digest matched; these say the message was understood. `engine_boots`/
+     * `engine_time` are deliberately NOT asserted: net-snmp keeps them on the session, not on
+     * the parsed PDU, so there is no per-message value to compare -- better an absent check
+     * than one that looks present and proves nothing. */
+    if (rc == 0 && expect_ok) {
+        (*decoded)++;
+        tsnmp_v3_header_t h;
+        char got[TSNMP_CANON_MAX * 2 + 1];
+        if (tsnmp_v3_peek(bytes, (size_t)len, &h) == 0) {
+            tohex_cap(h.engine, h.engine_len, got, sizeof got);
+            CHECK(field_is(expect, "engine_id", got), "[%s] engine id %s", name, got);
+            const char *level = (h.flags & 0x02)   ? "authPriv"
+                                : (h.flags & 0x01) ? "authNoPriv"
+                                                   : "noAuthNoPriv";
+            CHECK(field_is(expect, "level", level), "[%s] level %s", name, level);
+        } else {
+            CHECK(0, "[%s] the v3 header does not peek", name);
+        }
+        tohex_cap(pdu->contextEngineID, pdu->contextEngineIDLen, got, sizeof got);
+        CHECK(field_is(expect, "context_engine_id", got),
+              "[%s] context engine id %s", name, got);
+        char ctx[65];
+        snprintf(ctx, sizeof ctx, "%.*s", (int)pdu->contextNameLen,
+                 pdu->contextName ? pdu->contextName : "");
+        CHECK(field_is(expect, "context_name", ctx), "[%s] context name '%s'", name, ctx);
+        char msgid[32];
+        snprintf(msgid, sizeof msgid, "%ld", pdu->msgid);
+        CHECK(field_is(expect, "msg_id", msgid), "[%s] msg id %s", name, msgid);
+    }
     if (pdu)
         snmp_free_pdu(pdu);
     tsnmp_unlock();
@@ -456,18 +504,43 @@ static void check_vectors(const char *path) {
         check_conversion(v, conversions++);
     CHECK(conversions > 0, "no conversions in the vectors");
 
+    /* `v3` is an OBJECT ({ about, users, receiver, messages, rejected, probes }), not an array.
+     * Gating on cJSON_IsArray meant this loop never ran: the shared v3 vectors constrained the
+     * Rust build alone while this test printed "(no v3 section yet)" and passed. */
     const cJSON *v3s = cJSON_GetObjectItem(doc, "v3");
-    if (cJSON_IsArray(v3s)) {
-        cJSON_ArrayForEach(v, v3s) {
-            check_v3_vector(v);
-            v3++;
-        }
+    const cJSON *v3_messages = cJSON_GetObjectItem(v3s, "messages");
+    const cJSON *v3_users = cJSON_GetObjectItem(v3s, "users");
+    CHECK(cJSON_IsArray(v3_messages) && cJSON_IsObject(v3_users),
+          "the vector file lost its v3 messages or users");
+    int v3_decoded = 0, v3_accepted = 0;
+    cJSON_ArrayForEach(v, v3_messages) {
+        if (!cJSON_IsFalse(cJSON_GetObjectItem(v, "accepted")))
+            v3_accepted++;
+        check_v3_vector(v, v3_users, false, &v3_decoded);
+        v3++;
+    }
+    /* The assertion whose absence let this whole section pass while doing nothing: every vector
+     * the file says is acceptable must actually have decoded. A skip -- for a capability this
+     * build lacks, or a fixture this harness misreads -- now fails instead of passing silently. */
+    CHECK(v3_decoded == v3_accepted,
+          "%d of %d acceptable v3 vectors decoded (the rest were skipped, not checked)",
+          v3_decoded, v3_accepted);
+
+    /* The negative control: without it, four accepted vectors only prove the path accepts. */
+    const cJSON *v3_rejected = cJSON_GetObjectItem(v3s, "rejected");
+    CHECK(cJSON_IsArray(v3_rejected) && cJSON_GetArraySize(v3_rejected) > 0,
+          "the v3 section lost its rejections");
+    cJSON_ArrayForEach(v, v3_rejected) {
+        int ignored = 0;
+        check_v3_vector(v, v3_users, true, &ignored);
+        CHECK(ignored == 0, "[%s] a rejected vector must not count as decoded",
+              jstr(v, "name") ? jstr(v, "name") : "?");
+        v3++;
     }
 
     printf("snmp vectors: %d messages, %d malformed, %d conversions, %d v3%s "
            "(%d raw octets canonical rather than as received)\n",
-           messages, malformed, conversions, v3,
-           cJSON_IsArray(v3s) ? "" : " (no v3 section yet)", tolerated_raw);
+           messages, malformed, conversions, v3, "", tolerated_raw);
     cJSON_Delete(doc);
     free(text);
 }

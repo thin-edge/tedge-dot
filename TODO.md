@@ -91,14 +91,18 @@
         - **Numeric bounds differ**: C enforces `retries` 0–100, `max_varbinds` 1–256, `port`
           1–65535; Rust enforces only `max_varbinds ≠ 0`. A file one build runs, the other
           refuses to start on.
-      - **The C conformance harness silently skips every v3 golden vector.**
-        `impl/c/tests/snmp.c` gates the loop on `cJSON_IsArray(doc["v3"])`, but `v3` is a JSON
-        object, so `check_v3_vector` has never run: the shared v3 vectors constrain the Rust
-        build alone, while the C test prints `(no v3 section yet)` inside a passing run. Fixing
-        the gate is one line, but `check_v3_vector` has never executed against real data and any
-        genuine C divergence surfaces the moment it does, so it needs its own change with room
-        to chase what it finds. Until then, treat every "both implementations agree on v3"
-        claim as unverified.
+      - **The C conformance harness does not yet check the v3 discovery `probes`.** The
+        `messages` and `rejected` vectors now run against the C build (they did not before: the
+        loop was gated on `cJSON_IsArray(doc["v3"])` while `v3` is an object, so it never
+        executed and the test printed `(no v3 section yet)` inside a passing run), but
+        `v3.probes` is still ignored. Wiring it up means building this engine's identity from
+        `v3.receiver` (`engine_id`, `engine_boots` 7, `engine_time` 99) with
+        `tsnmp_set_local_engine_id` + `tsnmp_set_local_engine_boots`, answering the probe with
+        `tsnmp_report_for`, and asserting the Report's `msg_id` (1879657138), `request_id`
+        (1189266754) and counter OID (`1.3.6.1.6.3.15.1.1.4.0`) — the same assertions
+        `a_discovery_probe_is_answered_with_this_engines_identity` makes on the Rust side.
+        Until then the discovery path is the one part of v3 the shared vectors constrain in
+        Rust alone.
       - **The C build's USM tables grow with every engine ID a spoofed source claims.**
         Authenticating a v3 notification needs keys localized to the engine the message *claims*,
         so `v3_prepare` (`impl/c/connectors/snmp/connector_snmp.c`) installs them before the
