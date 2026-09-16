@@ -46,6 +46,21 @@
         reconnect, not while the link is up.
       - Track net-snmp releases: the C build compiles a pinned tarball (version and SHA-256 in
         `impl/c/CMakeLists.txt`), so a security fix there means bumping the pin.
+      - **Two devices on one host, different ports** are refused: `check_unique_hosts` compares
+        the host literal alone, though an SNMP agent is addressed by host *and* port. The
+        restriction exists because notifications are routed by source address, so it should
+        apply to devices that have notification points, not to polled-only ones. Changing it
+        means the spec (§3.2) and both implementations together, which is why it is not in the
+        connector's first PR.
+      - **v3 notifications through a forwarder** work in Rust but are refused by the C module
+        ("v3 through a forwarder is not supported"), and no test covers it — the e2e forwarder
+        relays v2c only. Either implement it in C or record it as a tagged capability gap.
+      - **GETBULK for scalars** buys no round trip over a multi-varbind GET, and its
+        GETNEXT semantics turn a missing instance into "the agent answered X instead of Y"
+        rather than a plain noSuchObject. Reconsider `bulk = true` as the v2c/v3 default.
+      - The receiver's `LocalEngine` state is not rolled back when a forwarded v3 notification
+        is tried against a device it turns out not to belong to (`listener.rs`), unlike the
+        per-device security state beside it.
 
 * [ ] The `.apk` packages carry versions apk-tools rejects, for BOTH implementations and for
       real releases, not just snapshots: `apk version -c` reports `0.0.1-alpha.2` (this
