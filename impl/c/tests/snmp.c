@@ -538,6 +538,100 @@ static void check_vectors(const char *path) {
         v3++;
     }
 
+    /* The discovery probes (§4.1 step 4). A sender that has not discovered this receiver sends a
+     * v3 message with an EMPTY engine ID and the reportable bit set; an authoritative engine
+     * answers with a Report naming the usmStats counter, which is how the sender learns our
+     * engine before it can send an inform. This mirrors what handle_datagram does in
+     * connector_snmp.c, against the same fixture the Rust harness uses. */
+    const cJSON *v3_probes = cJSON_GetObjectItem(v3s, "probes");
+    const cJSON *receiver = cJSON_GetObjectItem(v3s, "receiver");
+    CHECK(cJSON_IsArray(v3_probes) && cJSON_GetArraySize(v3_probes) > 0 &&
+              cJSON_IsObject(receiver),
+          "the v3 section lost its probes or its receiver identity");
+    if (cJSON_IsArray(v3_probes) && cJSON_IsObject(receiver)) {
+        uint8_t *rid = NULL;
+        long rid_len = jstr(receiver, "engine_id")
+                           ? unhex(jstr(receiver, "engine_id"), &rid)
+                           : 0;
+        const cJSON *jboots = cJSON_GetObjectItem(receiver, "engine_boots");
+        uint32_t boots = cJSON_IsNumber(jboots) ? (uint32_t)jboots->valuedouble : 1;
+        cJSON_ArrayForEach(v, v3_probes) {
+            const char *pname = jstr(v, "name") ? jstr(v, "name") : "?";
+            const cJSON *pexpect = cJSON_GetObjectItem(v, "expect");
+            uint8_t *pbytes = NULL;
+            long plen = unhex(jstr(v, "hex"), &pbytes);
+            if (plen < 0 || rid_len <= 0) {
+                CHECK(0, "[%s] bad probe hex or receiver engine id", pname);
+                free(pbytes);
+                continue;
+            }
+            tsnmp_lock();
+            /* This engine's identity is process-wide, so it is restored below: the phases that
+             * follow (check_configuration onwards) must not inherit it. */
+            uint8_t saved[32];
+            size_t saved_len = tsnmp_local_engine_id(saved, sizeof saved);
+            tsnmp_set_local_engine_id(rid, (size_t)rid_len);
+            tsnmp_set_local_engine_boots(rid, (size_t)rid_len, boots);
+
+            netsnmp_pdu *probe = NULL;
+            int lib_errno = 0;
+            tsnmp_parse_datagram(pbytes, (size_t)plen, &probe, &lib_errno);
+            netsnmp_pdu *report =
+                probe ? tsnmp_report_for(probe, SNMPERR_USM_UNKNOWNENGINEID) : NULL;
+            /* Without this the rest would be skipped and the probe would "pass" by silence. */
+            CHECK(report != NULL, "[%s] a reportable probe must be answered with a Report",
+                  pname);
+            if (report) {
+                char num[32];
+                snprintf(num, sizeof num, "%ld", report->msgid);
+                CHECK(field_is(pexpect, "msg_id", num), "[%s] report msgID %s", pname, num);
+                snprintf(num, sizeof num, "%ld", report->reqid);
+                CHECK(field_is(pexpect, "request_id", num), "[%s] report request-id %s",
+                      pname, num);
+                size_t nvb = 0;
+                for (const netsnmp_variable_list *vb = report->variables; vb;
+                     vb = vb->next_variable)
+                    nvb++;
+                CHECK(nvb == 1, "[%s] a Report carries one usmStats counter, got %zu", pname,
+                      nvb);
+                if (report->variables) {
+                    tsnmp_oid_t oid;
+                    char text[TSNMP_OID_STR_MAX];
+                    if (tsnmp_var_name(report->variables, &oid)) {
+                        tsnmp_oid_format(&oid, text, sizeof text);
+                        CHECK(field_is(pexpect, "counter", text), "[%s] counter OID %s", pname,
+                              text);
+                    } else {
+                        CHECK(0, "[%s] the counter's OID does not fit", pname);
+                    }
+                    uint8_t canon[TSNMP_CANON_MAX];
+                    const uint8_t *content = NULL;
+                    size_t clen = 0;
+                    tsnmp_type_t t =
+                        tsnmp_var_content(report->variables, canon, &content, &clen);
+                    CHECK(t == TSNMP_TYPE_COUNTER32, "[%s] the counter is %s, not counter32",
+                          pname, tsnmp_type_name(t));
+                    /* The counter's VALUE is deliberately not asserted. net-snmp keeps
+                     * usmStats process-wide, and the message vectors above run first, so the
+                     * number here depends on what the harness did earlier -- unlike the Rust
+                     * side, which drives its own LocalEngine and can pin it at 1. Asserting a
+                     * fixed number would break the moment a vector is added above. */
+                }
+                snmp_free_pdu(report);
+            }
+            if (probe)
+                snmp_free_pdu(probe);
+            if (saved_len > 0) {
+                tsnmp_set_local_engine_id(saved, saved_len);
+                tsnmp_set_local_engine_boots(saved, saved_len, boots);
+            }
+            tsnmp_unlock();
+            free(pbytes);
+            v3++;
+        }
+        free(rid);
+    }
+
     printf("snmp vectors: %d messages, %d malformed, %d conversions, %d v3%s "
            "(%d raw octets canonical rather than as received)\n",
            messages, malformed, conversions, v3, "", tolerated_raw);
