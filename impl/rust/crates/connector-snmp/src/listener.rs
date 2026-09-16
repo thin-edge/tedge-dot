@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tedge_dot_sdk::{DataType, Sample, SampleSink, Value};
+use tedge_dot_sdk::{DataType, Mode, Sample, SampleSink, Value};
 use time::OffsetDateTime;
 use tokio::net::UdpSocket;
 use tracing::{debug, warn};
@@ -189,7 +189,18 @@ fn handle(
         let outcome = receive(&mut routes.devices[index], engine, datagram);
         let Outcome::Deliver(received) = outcome else {
             routes.devices[index].v3 = saved;
-            if refusal.is_none() {
+            // A Report outranks a Drop whichever device produced it. From a forwarder every
+            // device is a candidate, so an earlier one refusing the datagram (no v3 table, a
+            // different user) used to bury the USM discovery Report the intended device just
+            // produced: the sender never learned this engine's ID, boots and time, so its
+            // inform was never acknowledged and it re-sent forever (spec §4.1 step 4).
+            let outranks = match (&refusal, &outcome) {
+                (None, _) => true,
+                (Some((_, Outcome::Reply(..))), _) => false,
+                (Some(_), Outcome::Reply(..)) => true,
+                _ => false,
+            };
+            if outranks {
                 refusal = Some((index, outcome));
             }
             continue;
@@ -393,6 +404,10 @@ pub fn samples_for(
             PointKind::Varbind { oid, .. } => match n.varbinds.iter().find(|v| v.name.starts_with(oid)) {
                 Some(vb) => {
                     let value = match p.datatype {
+                        // As in the polled path: raw mode never runs the typed conversion, so a
+                        // point that has both `mode = "raw"` and a `datatype` is not reported
+                        // bad for a value it was never going to decode.
+                        Some(_) if p.mode == Mode::Raw => Ok(Value::Bool(false)),
                         Some(datatype) => vb.value.convert(datatype).map(|v| p.transform.apply(v)),
                         // raw mode: the value is never looked at.
                         None => Ok(Value::Bool(false)),
@@ -452,11 +467,23 @@ pub struct LogLimiter {
     last: HashMap<String, Instant>,
 }
 
+/// The most keys held at once. A key is one source address or device, so a real deployment
+/// stays far below it; the cap exists for a flood of forged sources, where dropping the whole
+/// table costs at most one extra log line per key afterwards.
+const MAX_KEYS: usize = 4096;
+
 impl LogLimiter {
     pub fn allow(&mut self, key: String) -> bool {
         let now = Instant::now();
-        if self.last.len() > 4096 {
+        if self.last.len() >= MAX_KEYS {
+            // Expiring by age alone bounds nothing: under a sustained flood of distinct
+            // sources nothing is old enough to drop, so the table kept growing AND every
+            // datagram paid a full scan of it -- the limiter became the amplifier it exists
+            // to prevent. Clearing is O(n) once per MAX_KEYS keys rather than per datagram.
             self.last.retain(|_, at| now.duration_since(*at) < LOG_INTERVAL);
+            if self.last.len() >= MAX_KEYS {
+                self.last.clear();
+            }
         }
         match self.last.get(&key) {
             Some(at) if now.duration_since(*at) < LOG_INTERVAL => false,

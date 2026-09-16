@@ -231,6 +231,47 @@ fn every_v3_message_decodes_as_expected() {
     }
 }
 
+/// An UNAUTHENTICATED notification must teach a device configured with authentication nothing.
+///
+/// The engine ID has to be adopted before the HMAC can be checked -- the keys are localized to
+/// the engine the message claims -- and the check itself runs only from authNoPriv up. So a
+/// noAuthNoPriv datagram used to reach the learning branch, replace the device's trap engine ID,
+/// re-derive its keys and return `Ok`, escaping the rollback; the caller dropped the message a
+/// line later, but the damage was done and every genuine authenticated trap from that device
+/// failed `EngineIdMismatch` until a restart. The user name is in the clear in every v3 message,
+/// so sending one takes no secret.
+///
+/// An authenticated message one level BELOW the configured one stays acceptable: RFC 3414 §4's
+/// time-window Report is authNoPriv and an authPriv sender has to read it.
+#[test]
+fn an_unauthenticated_notification_teaches_an_authenticated_device_nothing() {
+    let doc = vectors();
+    let v3_doc = &doc["v3"];
+    let messages = v3_doc["messages"].as_array().expect("the vector file has a v3 section");
+    let m = messages
+        .iter()
+        .find(|m| m["expect"]["level"].as_str() == Some("noAuthNoPriv"))
+        .expect("the vectors carry a noAuthNoPriv notification");
+    let bytes = unhex(m["hex"].as_str().unwrap());
+    let name = m["name"].as_str().unwrap();
+
+    // The same user name, but configured WITH authentication: `sha` and `none` are both
+    // "trapuser", so the datagram gets past the username check and reaches the level gate.
+    let mut security = user(&v3_doc["users"], "sha");
+    assert!(
+        security.engine_id().is_empty(),
+        "{name}: the fixture must start with no engine ID for this to prove anything"
+    );
+
+    let err = v3::receive_non_authoritative(&bytes, &mut security)
+        .expect_err("an unauthenticated notification must be refused");
+    assert!(
+        security.engine_id().is_empty(),
+        "{name}: a refused message must not teach the engine ID ({}, refused with {err})",
+        value::hex(security.engine_id())
+    );
+}
+
 #[test]
 fn every_rejected_v3_message_is_rejected() {
     let doc = vectors();

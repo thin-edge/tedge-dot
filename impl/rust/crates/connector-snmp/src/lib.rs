@@ -39,7 +39,7 @@ use tedge_dot_sdk::{
 };
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const PROTOCOL: &str = "snmp";
 
@@ -212,6 +212,35 @@ impl Connector for SnmpConnector {
         let ts = OffsetDateTime::now_utc();
         let session = self.session(index).await?;
         let samples = read_objects(session, &model, &wanted, ts).await;
+        // §3.2: a v3 trap is only accepted from the device's engine once that engine is known --
+        // configured, learned from a successful request, or from the first authenticated trap.
+        // The request case was discovered but never used, so a device with no `engine_id` in its
+        // config accepted whatever engine a trap claimed even after a poll had established the
+        // real one.
+        //
+        // Only pin it once a request has actually AUTHENTICATED with it. `Session::discover`
+        // learns the engine ID from the RFC 3414 §4 probe, which carries no HMAC -- anything
+        // answering at the device's address can choose it. Pinning that would hand an attacker
+        // the same permanent trap rejection through the poll path that TEDGE-DOT-PATCH(8)
+        // closes on the listener path: every genuine trap would then fail `EngineIdMismatch`
+        // until the connector restarts. A good sample is proof: under v3 its response passed
+        // USM verification with keys localized to this engine.
+        let verified = samples.iter().any(|s| s.quality != Quality::Bad);
+        let discovered = verified.then(|| session.engine_id().map(<[u8]>::to_vec)).flatten();
+        if let Some(engine_id) = discovered {
+            let mut routes = listener::lock(&self.routes);
+            if let Some(v3) = routes.devices.get_mut(index).and_then(|r| r.v3.as_mut()) {
+                if v3.trap.engine_id().is_empty() {
+                    match v3.trap.clone().with_engine_id(&engine_id) {
+                        Ok(localized) => v3.trap = localized,
+                        Err(e) => debug!(
+                            device = %model.name,
+                            "cannot localize the trap keys to the discovered engine: {e}"
+                        ),
+                    }
+                }
+            }
+        }
         let mut by_id: HashMap<String, Sample> =
             samples.into_iter().map(|s| (s.point.clone(), s)).collect();
         Ok(points.iter().filter_map(|r| by_id.remove(&r.id)).collect())
@@ -682,9 +711,16 @@ fn map_reply(model: &Device, batch: &[&Point], reply: poll::Reply, ts: OffsetDat
                     bad(&model.name, point, ts, reason)
                 }
                 Some((_, value)) => {
-                    let converted = match point.datatype {
-                        Some(datatype) => value.convert(datatype).map(|v| point.transform.apply(v)),
-                        None => Ok(Value::Bool(false)), // raw mode: the value is never looked at
+                    // Raw mode publishes the octets and nothing else, so it must not run the
+                    // typed conversion: a point carrying BOTH `mode = "raw"` and a `datatype`
+                    // (which the config permits, and which the contract says makes the
+                    // decoding fields inert) otherwise failed to convert and reported a read
+                    // that had succeeded as a bad sample.
+                    let converted = match (point.mode, point.datatype) {
+                        (Mode::Raw, _) | (_, None) => Ok(Value::Bool(false)),
+                        (_, Some(datatype)) => {
+                            value.convert(datatype).map(|v| point.transform.apply(v))
+                        }
                     };
                     sample(
                         &model.name,
