@@ -403,6 +403,61 @@ fn a_discovery_probe_is_answered_with_the_engine_id() {
     assert_eq!(refusal.report, None);
 }
 
+/// TEDGE-DOT-PATCH(8): an unauthenticated notification against a user configured with
+/// authentication is refused BEFORE it can teach anything.
+///
+/// The security state has to be adopted before the HMAC can be checked (the keys are localized
+/// to the engine ID the message claims), and `verify()` runs only from AuthNoPriv up. So a
+/// noAuthNoPriv datagram used to reach the learning branch, replace the engine ID, re-derive
+/// the keys and return `Ok` — past the rollback — leaving every genuine authenticated trap from
+/// that device failing `EngineIdMismatch` until a restart. The user name it needs is in the
+/// clear in every v3 message, so nothing secret is required to send one.
+#[test]
+fn an_unauthenticated_notification_teaches_an_authenticated_user_nothing() {
+    let configured = trap_user(Cipher::Aes128, AuthProtocol::Sha1);
+    let engine_id = unhex("8000000005746465646f74");
+
+    // A noAuthNoPriv message: no auth, no priv, carrying an engine ID of the sender's choosing.
+    let mut unauthenticated_keys = Security::new(configured.username(), b"")
+        .with_auth(Auth::NoAuthNoPriv)
+        .with_engine_id(&engine_id)
+        .unwrap();
+    let name = oid(&[1, 3, 6, 1, 6, 3, 1, 1, 4, 1, 0]);
+    let trap = oid(&[1, 3, 6, 1, 6, 3, 1, 1, 5, 3]);
+    let datagram = v3::encode(
+        &unauthenticated_keys,
+        &Outgoing {
+            msg_id: 7,
+            level: SecurityLevel::NoAuthNoPriv,
+            reportable: false,
+            engine_id: &engine_id,
+            engine_boots: 1,
+            engine_time: 1,
+            context_engine_id: &engine_id,
+            context_name: b"",
+        },
+        MessageType::Trap,
+        99,
+        0,
+        0,
+        &[(&name, Value::ObjectIdentifier(trap))],
+    )
+    .unwrap();
+    let _ = &mut unauthenticated_keys;
+
+    // The receiver: the same user name, configured authPriv, with no engine ID pinned yet.
+    let mut receiver = configured.clone();
+    assert!(receiver.engine_id().is_empty(), "the fixture must start unpinned");
+
+    let err = v3::receive_non_authoritative(&datagram, &mut receiver)
+        .expect_err("an unauthenticated notification must be refused");
+    assert_eq!(err, Error::AuthFailure(AuthErrorKind::UnsupportedSecLevel));
+    assert!(
+        receiver.engine_id().is_empty(),
+        "a refused message must not teach the engine ID"
+    );
+}
+
 /// The inform exchange of RFC 3414 §4 end to end: discovery, time synchronisation, the inform
 /// and its Response — with the sender played by `encode` and `receive_non_authoritative`.
 #[test]

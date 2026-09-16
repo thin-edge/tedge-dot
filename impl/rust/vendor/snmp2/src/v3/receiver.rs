@@ -515,7 +515,32 @@ pub fn receive_non_authoritative<'a>(
     if !ENGINE_ID_LEN.contains(&header.engine_id.len()) {
         return Err(Error::AuthFailure(AuthErrorKind::EngineIdMismatch));
     }
+    // TEDGE-DOT-PATCH(8): an UNAUTHENTICATED message may not reach the state below.
+    //
+    // A level above the user's has always been refused. A lower one used to be let through
+    // here and dropped by the caller afterwards -- but `authenticate_non_authoritative` has
+    // already run by then, and for a sender this engine has not been pinned to it adopts the
+    // engine ID the message claims and re-derives the localized keys from it. `verify()` is
+    // reached only at AuthNoPriv and above, so an unauthenticated datagram took that branch,
+    // returned `Ok`, and escaped the rollback below: one spoofed message permanently replaced
+    // a device's trap engine ID, and every genuine trap afterwards failed `EngineIdMismatch`
+    // until a restart.
+    //
+    // The keys are localized TO the engine ID, so the HMAC cannot be checked before the ID is
+    // adopted -- which is why this is refused here, before any state is touched, rather than
+    // undone afterwards.
+    //
+    // Only the unauthenticated case is refused, not every lower level: RFC 3414 §4 has the
+    // authoritative engine answer an out-of-window inform with an authNoPriv Report (see
+    // `report`), which an authPriv sender must be able to read to learn boots and time. That
+    // message is authenticated, so it proves its origin and may be trusted with the state; a
+    // NoAuthNoPriv user has no keys to protect and is unaffected.
     if header.security_level() > security.security_level() {
+        return Err(Error::AuthFailure(AuthErrorKind::UnsupportedSecLevel));
+    }
+    if header.security_level() < SecurityLevel::AuthNoPriv
+        && security.security_level() >= SecurityLevel::AuthNoPriv
+    {
         return Err(Error::AuthFailure(AuthErrorKind::UnsupportedSecLevel));
     }
     let saved = security.authoritative_state.clone();

@@ -353,6 +353,16 @@ pub(crate) fn build(
     Ok(())
 }
 
+/// TEDGE-DOT-PATCH(1): re-encode a varbind value that carries a PDU tag, which `read_value`
+/// decodes into the `Value::GetRequest`-and-friends variants. The reader holds the content
+/// octets, so the element is rebuilt exactly as it arrived: content, then length, then tag
+/// (the buffer is written back to front).
+fn push_pdu_value(buf: &mut Buf, tag: u8, rdr: &AsnReader) {
+    buf.push_chunk(rdr.remaining());
+    buf.push_length(rdr.remaining().len());
+    buf.push_byte(tag);
+}
+
 pub(crate) fn push_varbinds(buf: &mut Buf, values: &[(&Oid, Value)]) {
     buf.push_sequence(|buf| {
         for &(oid, ref val) in values.iter().rev() {
@@ -395,7 +405,21 @@ pub(crate) fn push_varbinds(buf: &mut Buf, values: &[(&Oid, Value)]) {
                         buf.push_length(rdr.remaining().len());
                         buf.push_byte(tag);
                     }
-                    _ => return,
+                    // TEDGE-DOT-PATCH(1): a value carrying a PDU tag, which `read_value` decodes
+                    // into these variants (0xA0-0xA3 and 0xA5-0xA8; 0xA4, the v1 Trap-PDU tag,
+                    // has no variant and arrives as `Constructed`). See `push_pdu_value` above
+                    // for the encoding.
+                    // They used to fall to the catch-all below, which left the SEQUENCE without
+                    // even its OID: an inform echoing such a varbind was answered with `30 00`,
+                    // the Response was rejected, and the sender re-sent until it gave up.
+                    Value::GetRequest(ref rdr) => push_pdu_value(buf, snmp::MSG_GET, rdr),
+                    Value::GetNextRequest(ref rdr) => push_pdu_value(buf, snmp::MSG_GET_NEXT, rdr),
+                    Value::GetBulkRequest(ref rdr) => push_pdu_value(buf, snmp::MSG_GET_BULK, rdr),
+                    Value::Response(ref rdr) => push_pdu_value(buf, snmp::MSG_RESPONSE, rdr),
+                    Value::SetRequest(ref rdr) => push_pdu_value(buf, snmp::MSG_SET, rdr),
+                    Value::InformRequest(ref rdr) => push_pdu_value(buf, snmp::MSG_INFORM, rdr),
+                    Value::Trap(ref rdr) => push_pdu_value(buf, snmp::MSG_TRAP, rdr),
+                    Value::Report(ref rdr) => push_pdu_value(buf, snmp::MSG_REPORT, rdr),
                 }
                 buf.push_object_identifier_raw(oid.as_bytes());
             });

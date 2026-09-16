@@ -26,7 +26,13 @@ compared the tag against NULL) had the same effect.
 - `read_asn_boolean` checks for the BOOLEAN tag.
 - `AsnReader::remaining()` / `Varbinds::as_bytes()`, and `push_varbinds` encodes `Unknown`,
   `Sequence`, `Set` and `Constructed` values (it silently emitted an empty varbind), so a
-  received list can be echoed (an inform's Response).
+  received list can be echoed (an inform's Response). The same applies to a value carrying a
+  PDU tag (0xA0–0xA3 and 0xA5–0xA8; 0xA4, the v1 Trap-PDU tag, has no variant and arrives as
+  `Constructed`), which `read_value` decodes into `Value::GetRequest` and its siblings:
+  those fell through to the same catch-all, so an inform echoing one was answered with a `30 00`
+  varbind naming no object, the Response was rejected, and the sender re-sent until it gave up.
+  Every variant is now encoded (`push_pdu_value`) and the catch-all is gone, so a new variant is
+  a compile error rather than a silently malformed message.
 
 Upstream draft: `doc/upstream/snmp2-varbind-truncation.md`.
 
@@ -121,5 +127,34 @@ the engine ID, boots and time — public protocol state, and the useful part whe
 window — stay visible.
 
 Upstream draft: `doc/upstream/snmp2-debug-prints-usm-keys.md`.
+
+## 8. An unauthenticated notification may not teach the receiver anything
+
+`receive_non_authoritative` refused a level *above* the configured one and let anything below
+through, leaving the caller to drop it. But by then `authenticate_non_authoritative` has run, and
+for a sender whose engine this `Security` has not been pinned to it adopts the engine ID the
+message claims and re-derives the localized keys from it. `verify()` is reached only at
+AuthNoPriv and above, so an **unauthenticated** datagram took that branch and returned `Ok` —
+escaping the rollback that exists for exactly this. One spoofed message (the user name travels
+in cleartext in every v3 message) permanently replaced the engine ID of a device configured
+`authPriv` with no pinned `engine_id`, and every genuine trap from it afterwards failed
+`EngineIdMismatch` until the process restarted.
+
+The keys are localized *to* the engine ID, so the HMAC cannot be checked before the ID is
+adopted — the refusal has to happen before any state is touched rather than be undone after.
+An **unauthenticated** message against a user configured with authentication is now refused
+there.
+
+Only that case, not every lower level: RFC 3414 §4 has the authoritative engine answer an
+out-of-window inform with an **authNoPriv** Report (see `report`), which an authPriv sender must
+read to learn boots and time — requiring an exact match breaks inform discovery, as
+`an_inform_is_discovered_synchronised_and_acknowledged` shows. An authenticated message proves
+its origin whatever its level, so it may be trusted with the state; a NoAuthNoPriv user has no
+keys to protect. `LocalEngine::receive` (the authoritative role) needs no such change: it
+compares the message's engine ID against its own and never learns one.
+
+`an_unauthenticated_notification_teaches_an_authenticated_user_nothing` covers the refusal.
+
+Upstream draft: `doc/upstream/snmp2-receiver-side-usm.md` (same file as patch 5).
 
 Drop this directory and the `[patch.crates-io]` entry once a release carries equivalent fixes.
