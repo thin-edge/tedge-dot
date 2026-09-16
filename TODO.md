@@ -61,6 +61,44 @@
       - The receiver's `LocalEngine` state is not rolled back when a forwarded v3 notification
         is tried against a device it turns out not to belong to (`listener.rs`), unlike the
         per-device security state beside it.
+      - **Rust/C parity gaps found by a review of both implementations, none covered by a test.**
+        Each needs its own change and its own test; they are behaviour changes, not slips:
+        - **Inform vs trap dispatch disagrees.** Rust decides from the msgFlags *reportable* bit
+          (`listener.rs`), C from whether the message's engine ID is ours (`connector_snmp.c`).
+          A v3 Trap that wrongly sets the bit is published by C but answered by Rust with a
+          `usmStatsUnknownEngineIDs` Report; an inform with the bit clear is acknowledged by C
+          and dropped unacknowledged by Rust.
+        - **A poll timeout ends the C device's link, not just its samples.** C returns a
+          transport verdict, so its runtime publishes `disconnected` and calls
+          `disconnect_device` — which releases the listener, so a device with both object and
+          trap points stops receiving notifications during a polling outage. Rust reports
+          `degraded` and keeps the listener. The outage test accepts either status and stops a
+          device that has no trap points, so it cannot see this.
+        - **C pays a timeout per batch.** Rust marks the cycle's remaining batches bad once one
+          fails (spec §5.1 requires this); C issues every batch, costing
+          `request_timeout × (1 + retries)` each, stalling the whole tick. The outage test stops
+          a 4-point device, which is a single batch.
+        - **v1 error-status retry scope.** Rust drops the point named by `error-index` and
+          retries the rest for any non-zero status; C only for `noSuchName`, so a `genErr`
+          marks the whole batch bad and degrades the link.
+        - **Raw-mode exception varbinds.** A notification varbind carrying
+          `noSuchObject`/`noSuchInstance`/`endOfMibView` for a `mode = "raw"` point is a good
+          sample with empty raw on Rust and a bad sample on C. Rust's own polled path reports
+          it bad, so Rust also disagrees with itself.
+        - **A `level` below what the passwords imply** is rejected by Rust (the whole config
+          fails) and accepted by C, which then runs that device at the lower level — a shared
+          config file is not portable, in the direction that lowers security.
+        - **Numeric bounds differ**: C enforces `retries` 0–100, `max_varbinds` 1–256, `port`
+          1–65535; Rust enforces only `max_varbinds ≠ 0`. A file one build runs, the other
+          refuses to start on.
+      - **The C conformance harness silently skips every v3 golden vector.**
+        `impl/c/tests/snmp.c` gates the loop on `cJSON_IsArray(doc["v3"])`, but `v3` is a JSON
+        object, so `check_v3_vector` has never run: the shared v3 vectors constrain the Rust
+        build alone, while the C test prints `(no v3 section yet)` inside a passing run. Fixing
+        the gate is one line, but `check_v3_vector` has never executed against real data and any
+        genuine C divergence surfaces the moment it does, so it needs its own change with room
+        to chase what it finds. Until then, treat every "both implementations agree on v3"
+        claim as unverified.
       - **The C build's USM tables grow with every engine ID a spoofed source claims.**
         Authenticating a v3 notification needs keys localized to the engine the message *claims*,
         so `v3_prepare` (`impl/c/connectors/snmp/connector_snmp.c`) installs them before the
@@ -76,7 +114,7 @@
         a per-engine removal primitive upstream, or a design that does not install until the
         level check has passed. The Rust build is unaffected: it localizes keys itself and rolls
         the state back on any failure.
-      - **The e2e case `An Unauthenticated v3 Trap Is Dropped And Teaches The Device Nothing`
+      - **The e2e case `An Unauthenticated v3 Trap Is Dropped And The Device Keeps Working`
         does not discriminate the fix it was written for.** Every v3 trap device in
         `connectors/snmp/connector.toml` pins `engine_id`, and the simulator sends the
         unauthenticated trap from that same engine, so the engine-learning branch is never

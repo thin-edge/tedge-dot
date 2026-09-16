@@ -247,7 +247,16 @@ impl Connector for SnmpConnector {
                 // is as good a source for the new engine as it was for the first.
                 if v3.trap.engine_id() != engine_id.as_slice() {
                     match v3.trap.clone().with_engine_id(&engine_id) {
-                        Ok(localized) => v3.trap = localized,
+                        Ok(mut localized) => {
+                            // The boots and time belong to the OLD engine. A rebooted agent
+                            // starts again from boots 1, which is BELOW what we learned from
+                            // its predecessor, so the replay check would refuse every trap it
+                            // sends -- swapping one permanent rejection for another. The
+                            // learning branch in `authenticate_non_authoritative` zeroes them
+                            // for exactly this reason; a re-pin is the same event.
+                            localized.reset_engine_counters();
+                            v3.trap = localized;
+                        }
                         Err(e) => debug!(
                             device = %model.name,
                             "cannot localize the trap keys to the discovered engine: {e}"

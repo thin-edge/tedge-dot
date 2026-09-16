@@ -92,7 +92,7 @@ upstream — the async-opcua precedent) rather than worked around with a second 
 | `priv_protocol` | with priv | `"DES"`, `"AES"` (AES-128). `"AES192"`, `"AES256"` (Blumenthal key extension): Rust only (capability `snmpv3-sha2`, §10). |
 | `priv_password` / `priv_password_file` | with priv | Exactly one. |
 | `context` | no | Context name for requests. |
-| `engine_id` | no | Hex: the device's engine ID. Requests discover it when absent; a v3 **trap** is only accepted from that engine once known (configured, or learned from a successful request or the first authenticated trap). |
+| `engine_id` | no | Hex: the device's engine ID. Requests discover it when absent; a v3 **trap** is only accepted from that engine once known. Known means: configured here; or learned from the first authenticated trap; or, when a poll has *authenticated* with it, from that exchange — the Rust build adopts a discovered engine only at `level` authNoPriv or above, because discovery itself (RFC 3414 §4) carries no HMAC and anything answering at the device's address could otherwise choose it. The C build adopts the engine its session discovered, unauthenticated, and does not revise it afterwards (see `TODO.md`). |
 
 Secrets are never echoed: not in link-status `info` (which is `{ "host", "port", "version" }`), the
 capability descriptor, `describe` output, or log lines. The packaged config file is installed
