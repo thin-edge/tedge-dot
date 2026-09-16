@@ -421,6 +421,24 @@ A v3 Trap With A Wrong Key Is Dropped
     Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/if_index    value    ${24}    ${24.0}
     ...    timeout=${SAMPLE_TIMEOUT}    since=${mark}
 
+An Unauthenticated v3 Trap Is Dropped And Teaches The Device Nothing
+    [Documentation]    The device is configured authPriv. A noAuthNoPriv trap carrying its user
+    ...    name (which travels in the clear in every v3 message) must be dropped -- and must not
+    ...    disturb the device's trap security state: authenticating a v3 message needs keys
+    ...    localized to the engine ID the message CLAIMS, so a receiver that adopts that engine
+    ...    before checking the level can be made to forget the real one by a single spoofed
+    ...    datagram, silencing the device's traps until a restart.
+    ${mark}=    Get Message Mark
+    Send Trap    simulator    v3-linkdown-noauth    31
+    Run Keyword And Expect Error    *timed out*
+    ...    Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/if_index    value    ${31}    ${31.0}
+    ...    timeout=3    since=${mark}
+    # ...and the device still accepts a properly authenticated trap afterwards, which it cannot
+    # do if the unauthenticated one replaced its engine ID or re-derived its keys.
+    Send Trap    simulator    v3-linkdown    32
+    Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/if_index    value    ${32}    ${32.0}
+    ...    timeout=${SAMPLE_TIMEOUT}    since=${mark}
+
 A v3 Inform Is Acknowledged And Delivered
     [Documentation]    snmpinform first discovers the receiver's engine ID, then sends the inform
     ...    authPriv; it exits non-zero unless the Response arrives.
@@ -532,8 +550,12 @@ Send Trap
     # receiver that keeps answering a confirmed message with a Report leaves net-snmp
     # re-synchronising and re-sending forever. Without this the whole suite wedges on one
     # notification instead of failing the test that sent it; 124 is timeout's own exit code.
+    #
+    # -k matters: plain `timeout` sends only SIGTERM, and `docker compose exec` ignores it
+    # while attached -- an orphaned exec here survived its SIGTERM by 17 minutes. Without the
+    # escalation to SIGKILL the bound would fire and change nothing.
     ${rc}    ${output}=    Run And Return Rc And Output
-    ...    timeout 30 docker compose -p ${project} exec -T -e COMMUNITY=${community} ${env} ${service} send-trap ${argline}
+    ...    timeout -k 5 30 docker compose -p ${project} exec -T -e COMMUNITY=${community} ${env} ${service} send-trap ${argline}
     IF    ${rc} == 124
         Fail    send-trap ${argline} from ${service} did not return within 30s: ${output}
     END

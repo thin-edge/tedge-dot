@@ -139,7 +139,13 @@ For each datagram on the listening socket:
 2. **Decode** with the library, with the device's v3 credentials for a v3 message. Failure: drop,
    warning (once a minute per source).
 3. **Authenticate**: v1/v2c community in the accepted list; v3 user/engine/keys per §3.2 (the
-   library's USM checks). Failure: drop, warning (once a minute per device).
+   library's USM checks). Failure: drop, warning (once a minute per device). A v3 notification
+   below the device's configured `level` is refused, and refused **without learning anything
+   from it** — neither the sender's engine ID nor any state derived from it. Authenticating a v3
+   message requires keys localized to the engine ID the message *claims*, so a receiver that
+   adopts that engine before judging the level can be made to discard the real one by a single
+   unauthenticated datagram carrying the user name, which every v3 message sends in the clear;
+   the device's notifications then fail the engine check until the connector restarts.
 4. **Acknowledge** an InformRequest: a Response with the same request-id and varbinds, error-status
    and error-index 0, sent from the listening socket to the datagram's source. For v3 the
    receiver is the authoritative engine (`[connection] engine_id`, boots and time kept by the

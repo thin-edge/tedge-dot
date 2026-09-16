@@ -61,6 +61,22 @@
       - The receiver's `LocalEngine` state is not rolled back when a forwarded v3 notification
         is tried against a device it turns out not to belong to (`listener.rs`), unlike the
         per-device security state beside it.
+      - **Push recovery ends when a re-subscribe fails** (`retain_pushed`, `impl/rust/crates/sdk/src/runtime.rs`):
+        a device drops out of `pushed_devices` the moment it has no subscribed points, which is
+        exactly when a failed re-subscribe means recovery should keep trying — so a mixed device
+        whose subscription dies and fails to come back loses both retry paths at once (its polls
+        keep succeeding, so `reconnects` stays clear too) and its push-only points go quiet until
+        a restart. Not fixed here: keeping every configured device instead reconnects a healthy
+        polled-only device once a minute forever, which the existing test
+        `push_recovery_ends_when_a_device_falls_back_to_polling` pins deliberately. Telling the
+        two apart needs `Connector::pushes_point` threaded into `retain_pushed` (both call sites),
+        a change to shared runtime behaviour that wants its own PR.
+      - **`subscribe = false` on a point a module can only push** is scheduled for polling, where
+        `read_points` silently drops it: no sample, no bad sample, no warning. Not fixed in the
+        runtime: having `push_points` override an explicit `subscribe = false` is worse than the
+        drop, since it silently contradicts the operator. Both SNMP implementations already
+        reject the combination in their own validation (`config.rs`, `connector_snmp.c`), which is
+        where it belongs; the gap is only that the SDK does not *require* a module to do so.
       - **A transport error ends the whole device cycle in the C runtime**, for every connector:
         the poll loop in `impl/c/sdk/src/runtime.c` stops at the first read returning non-zero,
         so the remaining due points never publish the bad samples they already hold — and a
