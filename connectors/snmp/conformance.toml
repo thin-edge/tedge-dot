@@ -1,0 +1,28 @@
+# Conformance manifest for the SNMP trap receiver.
+#
+#   cargo run --manifest-path impl/rust/Cargo.toml -p ot-conformance -- check --spec connectors/snmp/conformance.toml
+#
+# Runs the static layers (schema examples, golden decode vectors, manifest ↔ compiled
+# capability agreement). The behavioural layer (B1-B10) needs a built-in simulator the harness
+# can start, and SNMP's lives in Docker (pysnmp agents and net-snmp senders), so that layer is
+# skipped here. Behaviour is covered instead by the SNMP golden vectors
+# (conformance/trap-vectors.json, read by the unit tests of both implementations) and the e2e
+# suite in connectors/snmp/tests, which runs both implementations against those containers.
+
+[connector]
+protocol    = "snmp"
+modes       = ["raw", "typed"]
+datatypes   = ["bool", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float32", "float64", "string"]
+point_kinds = ["object", "trap", "varbind"]
+# Object points are writable with SET; the runtime adds write-batch and the management verbs.
+verbs       = ["write"]
+# Objects are polled (in GETBULK batches where the agent speaks v2c/v3); notifications are pushed.
+features    = ["polling", "subscribe", "bulk_read", "snmpv3"]
+subscribe   = true
+
+[simulator]
+# pysnmp agents and net-snmp snmptrap/snmpinform in containers — served by the Dockerised e2e
+# stack (connectors/snmp/docker-compose.yaml), not built into the harness.
+kind  = "snmp"
+image = "connectors/snmp/agent"
+seed  = "conformance/trap-vectors.json"

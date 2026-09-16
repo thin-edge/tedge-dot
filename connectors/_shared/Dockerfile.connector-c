@@ -11,7 +11,7 @@ FROM ${BASE_REGISTRY}/debian:bookworm AS build
 ARG PROTOCOL=modbus
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build pkg-config git ca-certificates python3 \
+        build-essential cmake ninja-build pkg-config git ca-certificates python3 perl file \
         libmodbus-dev libmosquitto-dev libcjson-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
@@ -23,7 +23,7 @@ RUN --mount=type=cache,id=tedge-dot-c-build-${PROTOCOL},target=/src/build \
     on() { [ "$1" = "${PROTOCOL}" ] && echo ON || echo OFF; } \
     && cmake -S impl/c -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DTDOT_MODBUS=$(on modbus) -DTDOT_OPCUA=$(on opcua) -DTDOT_PROFIBUS=$(on profibus) \
-        -DTDOT_CANBUS=$(on canbus) -DTDOT_CANOPEN=$(on canopen) \
+        -DTDOT_CANBUS=$(on canbus) -DTDOT_CANOPEN=$(on canopen) -DTDOT_SNMP=$(on snmp) \
     && cmake --build build --target tedge-dot \
     && cp build/tedge-dot /usr/local/bin/tedge-dot
 
@@ -50,5 +50,8 @@ RUN cp /opt/connector/connector.toml /etc/connector.toml \
     && if [ -d /opt/connector/multi-device ]; then mkdir -p /usr/share/tedge-dot \
         && cp -r /opt/connector/multi-device /usr/share/tedge-dot/multi-device; fi \
     && if [ -f /opt/connector/sim/test.dbc ]; then cp /opt/connector/sim/test.dbc /test.dbc; fi \
+    # Secrets the stack's config reads with *_password_file (SNMPv3), installed the same way
+    # as in the Rust image and kept unreadable to anyone but the connector.
+    && if [ -d /opt/connector/secrets ]; then mkdir -p /etc/tedge-dot && cp -r /opt/connector/secrets /etc/tedge-dot/secrets && chmod 0700 /etc/tedge-dot/secrets && chmod 0600 /etc/tedge-dot/secrets/*; fi \
     && rm -rf /opt/connector
 ENTRYPOINT ["/entrypoint.sh"]

@@ -298,9 +298,13 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
             out->raw_group = 1;
         }
     } else {
+        /* Capped by the sample's raw buffer, and by what one Modbus request
+         * may carry: past 125 registers libmodbus fails the read instead. */
         uint16_t regs[TDOT_RAW_MAX / 2];
-        uint16_t n = mp->count > TDOT_RAW_MAX / 2 ? TDOT_RAW_MAX / 2
-                                                  : mp->count;
+        uint16_t cap = TDOT_RAW_MAX / 2 < MODBUS_MAX_READ_REGISTERS
+                           ? TDOT_RAW_MAX / 2
+                           : MODBUS_MAX_READ_REGISTERS;
+        uint16_t n = mp->count > cap ? cap : mp->count;
         rc = (mp->table == TABLE_HOLDING)
                  ? modbus_read_registers(mb->ctx, mp->address, n, regs)
                  : modbus_read_input_registers(mb->ctx, mp->address, n, regs);

@@ -212,7 +212,7 @@ static void print_sample(const args_t *a, tdot_config_t *cfg,
                s->error);
         return;
     }
-    char val[80] = "-";
+    char val[sizeof s->value.str + 2] = "-"; /* a string value, quoted */
     switch (s->value.kind) {
     case TDOT_VAL_BOOL:
         snprintf(val, sizeof val, "%s", s->value.b ? "true" : "false");

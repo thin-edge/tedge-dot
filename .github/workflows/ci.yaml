@@ -85,6 +85,9 @@ jobs:
           for t in decode_primitive config_toml transform sample_envelope; do
             cargo +nightly fuzz run "$t" -- -max_total_time=30
           done
+      - name: Fuzz the SNMP notification decoder briefly
+        working-directory: impl/rust/crates/connector-snmp
+        run: cargo +nightly fuzz run trap_message -- -max_total_time=30
 
   c:
     name: C build & conformance (${{ matrix.protocol }})
@@ -92,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        protocol: [modbus, opcua, canbus, canopen, profibus]
+        protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v2
@@ -102,6 +105,8 @@ jobs:
           sudo apt-get install -y cmake ninja-build pkg-config \
             libmodbus-dev libmosquitto-dev libcjson-dev \
             mosquitto mosquitto-clients jq
+          # The SNMP smoke test sends its traps with net-snmp from the runner itself.
+          if [ "${{ matrix.protocol }}" = snmp ]; then sudo apt-get install -y snmp; fi
           # open62541 is built from source by CMake (FetchContent) when no
           # distro package is found, so it is deliberately not installed here.
       - name: Load vcan kernel module (SocketCAN suites)
@@ -151,7 +156,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        protocol: [modbus, opcua, canbus, canopen, profibus]
+        protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
       - name: Install system deps (libudev for the profibus serial transport)
@@ -176,7 +181,7 @@ jobs:
       # matrix runs in two waves of jobs that take 1-3 minutes, so the cost is small.
       max-parallel: 3
       matrix:
-        protocol: [modbus, opcua, canbus, canopen, profibus]
+        protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
       - name: Load vcan kernel module (SocketCAN suites)
@@ -208,7 +213,7 @@ jobs:
       # matrix runs in two waves of jobs that take 1-3 minutes, so the cost is small.
       max-parallel: 3
       matrix:
-        protocol: [modbus, opcua, canbus, canopen, profibus]
+        protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
       - name: Load vcan kernel module (SocketCAN suites)

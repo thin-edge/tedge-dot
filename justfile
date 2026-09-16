@@ -25,7 +25,7 @@ MANIFEST := "--manifest-path impl/rust/Cargo.toml"
 # Every capability name a `requires:<capability>` tag may use. Declaring the vocabulary in one
 # place is what turns a mistyped tag into an error instead of a test that quietly runs against
 # a build that cannot pass it (see `just check-capability-tags`).
-KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial"
+KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial snmpv3-sha2"
 
 # This list is the single source of truth for what the C build still lacks. Keep it in sync
 # with the parity table in impl/c/README.md. Adding a capability here is a deliberate act:
@@ -33,7 +33,7 @@ KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial"
 #
 # NOTE: a capability listed here only becomes ENFORCED once a test is tagged with it;
 # `just check-capability-tags` reports the ones that are still inert.
-C_MISSING_CAPABILITIES := "opcua-security canbus-fd profibus-serial"
+C_MISSING_CAPABILITIES := "opcua-security canbus-fd profibus-serial snmpv3-sha2"
 
 # Create/refresh the single Python virtualenv used by every system test (and by the editor,
 # see .vscode/settings.json).
@@ -159,7 +159,9 @@ sim-down proto:
     #!/usr/bin/env bash
     set -euo pipefail
     export $(just _sim-port {{proto}})
-    docker compose -p tedge-dot-sim-{{proto}} -f connectors/{{proto}}/docker-compose.yaml rm -sf simulator
+    # `down`, not `rm simulator`: the project holds only the simulator and the services it
+    # depends on (snmp's `simulator` brings its polled `agent` up with it).
+    docker compose -p tedge-dot-sim-{{proto}} -f connectors/{{proto}}/docker-compose.yaml down -v
 
 # The fixed simulator host port a protocol's demo config expects (empty = protocol has none).
 _sim-port proto:
@@ -168,6 +170,7 @@ _sim-port proto:
         modbus)   echo "MODBUS_SIM_PORT=5020" ;;
         opcua)    echo "OPCUA_SIM_PORT=4840" ;;
         profibus) echo "PROFIBUS_SIM_PORT=9200" ;;
+        snmp)     echo "SNMP_SIM_PORT=1161" ;;
         *)        echo "UNUSED_SIM_PORT=" ;;
     esac
 
@@ -223,6 +226,7 @@ _e2e proto impl args:
     done <<< "$caps"
     just venv
     just _pull-stack-images connectors/{{proto}}/docker-compose.yaml
+    just _prebuild-stack-images connectors/{{proto}}/docker-compose.yaml
     ./.venv/bin/python -m robot \
         --outputdir "$outdir" --variable IMPL:{{impl}} "${skips[@]+"${skips[@]}"}" {{args}} \
         connectors/{{proto}}/tests/
@@ -259,6 +263,24 @@ _pull-stack-images compose_file:
             echo "warning: could not pull $image; letting compose try" >&2
         fi
     done
+
+# Build the stack's own images once, under a fixed project, before any suite starts.
+#
+# A stack where several services share one image (the SNMP one runs ten services on two
+# simulator images) must not let the per-suite project build them: compose builds services in
+# parallel, so two builds writing one tag fail with `image ... already exists`, while giving
+# each service its own tag instead makes BuildKit dedupe the identical builds and leave some
+# per-project tags untagged, so creation fails with `No such image`. Building here — once,
+# outside the randomly named project — means every referenced tag exists before a container is
+# created. Best effort: a failure is left to compose to report in context.
+_prebuild-stack-images compose_file:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if docker compose -p tedge-dot-prebuild -f {{compose_file}} build >/dev/null 2>&1; then
+        echo "pre-built the stack's images"
+    else
+        echo "warning: could not pre-build the stack's images; letting compose try" >&2
+    fi
 
 # Bring a stack up manually for inspection, with the host ports pinned (the test stacks use
 # ephemeral ones). Tear it down with `just e2e-down <proto> [impl]`.

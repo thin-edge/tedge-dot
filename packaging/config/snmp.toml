@@ -1,0 +1,114 @@
+# Default SNMP connector configuration installed by the tedge-dot package.
+#
+# No devices are configured out of the box, so the service starts, stays active, polls nothing and
+# does NOT listen on udp/162 on a fresh install (a host's own trap receiver keeps the port). Add
+# `[[device]]` sections (see /usr/share/tedge-dot/demo/snmp.toml or
+# doc/connectors/snmp-connector-spec.md) and reload the service:
+#
+#   sudo systemctl reload tedge-dot
+#
+# The connector talks to SNMP equipment both ways:
+#   * polling — object points are read with GET (v1) or GETBULK (v2c/v3), and written with SET;
+#   * notifications — SNMPv1/v2c/v3 traps and v2c/v3 informs (acknowledged), received on `listen`
+#     and routed to the device whose `host` they come from.
+#
+# This file is installed 0640 tedge:tedge because it holds communities and SNMPv3 passwords. Better
+# still, keep v3 secrets out of it with `auth_password_file` / `priv_password_file` (read when the
+# connector configures: first line, trailing newline stripped) — management commands may rewrite
+# this file, and the secret files stay untouched. Secrets are never published or logged.
+#
+# Port 162 is privileged: the packaged service is granted CAP_NET_BIND_SERVICE for it, or choose a
+# port above 1023.
+
+[connector]
+protocol      = "snmp"
+service_name  = "tedge-dot-snmp"
+poll_interval = "10s"
+log_level     = "info"
+
+# Liveness (optional, shown with their defaults).
+# operation_timeout = "30s"   # bound on one protocol call; a breach is reported as a transport error
+# stall_timeout     = "120s"  # restart the connector if its loop stops moving ("0" disables)
+
+[mqtt]
+host = "127.0.0.1"
+port = 1883
+
+[connection]
+# UDP address notifications are received on ("[::]:162" for IPv6 and IPv4). Bound only while a
+# device has a trap/varbind point.
+listen = "0.0.0.0:162"
+# Community string(s) a v1/v2c notification must carry; remove the key to accept any.
+community = "public"
+# Trusted trap forwarders (IP addresses or DNS names). A notification from one of them is routed by
+# the snmpTrapAddress.0 varbind the forwarder adds, not by its UDP source. Use this when a host
+# snmptrapd keeps udp/162 and forwards to the connector on another port, e.g. in
+# /etc/snmp/snmptrapd.conf:
+#     forward default udp:127.0.0.1:1162
+# with `listen = "127.0.0.1:1162"` above.
+# forwarders = ["127.0.0.1"]
+# Request defaults for polling and SET (per-device overrides in protocol_address).
+# request_timeout = "2s"
+# retries         = 1
+# max_varbinds    = 20
+
+# Add devices below, one per piece of equipment. Examples:
+#
+# --- an SNMPv2c switch: polled, written, and sending traps -----------------------------------
+#
+# [[device]]
+# name             = "core-switch"
+# type             = "acme-switch"                     # the device TYPE (§3.1)
+# protocol_address = { host = "192.168.10.2", version = "v2c", community = "public", write_community = "private" }
+#
+#   # a polled scalar (the full instance OID)
+#   [[device.point]]
+#   id       = "uptime"
+#   datatype = "float64"
+#   unit     = "s"
+#   transform = { divisor = 100 }                     # sysUpTime is in hundredths of a second
+#   address  = { oid = "1.3.6.1.2.1.1.3.0" }
+#
+#   # a writable object: `type` is the SNMP type the SET carries (default from the datatype)
+#   [[device.point]]
+#   id       = "contact"
+#   datatype = "string"
+#   access   = "read_write"
+#   address  = { oid = "1.3.6.1.2.1.1.4.0", type = "octet_string" }
+#
+#   # every linkDown/linkUp, as the notification OID: an alarm raised by one, cleared by the other
+#   [[device.point]]
+#   id       = "link_state"
+#   datatype = "string"
+#   address  = { trap = ["1.3.6.1.6.3.1.1.5.3", "1.3.6.1.6.3.1.1.5.4"] }
+#   meta     = { measurement = false, alarm = { type = "link_down", text = "Link down", when = { equals = "1.3.6.1.6.3.1.1.5.3" } } }
+#
+#   # a varbind of a notification: which interface
+#   [[device.point]]
+#   id       = "link_if"
+#   datatype = "int32"
+#   address  = { trap = ["1.3.6.1.6.3.1.1.5.3", "1.3.6.1.6.3.1.1.5.4"], oid = "1.3.6.1.2.1.2.2.1.1" }
+#   meta     = { measurement = false }
+#
+#   # every coldStart is an event (`every`: identical notifications are separate events)
+#   [[device.point]]
+#   id       = "cold_start"
+#   datatype = "bool"
+#   address  = { trap = "1.3.6.1.6.3.1.1.5.1" }
+#   meta     = { measurement = false, event = { type = "cold_start", text = "Restarted", every = true } }
+#
+# --- an SNMPv3 UPS: authPriv, secrets in files -----------------------------------------------
+#
+# The same credentials authenticate the device's v3 traps; `engine_id` pins the engine its traps
+# must come from (otherwise learned from the first successful request).
+#
+# [[device]]
+# name             = "ups-1"
+# type             = "acme-ups"
+# protocol_address = { host = "ups-1.plant.local", version = "v3", v3 = { user = "tedge", level = "authPriv", auth_protocol = "SHA256", auth_password_file = "/etc/tedge/plugins/ot/secrets/ups-1.auth", priv_protocol = "AES", priv_password_file = "/etc/tedge/plugins/ot/secrets/ups-1.priv" } }
+#
+#   [[device.point]]
+#   id       = "battery_capacity"
+#   datatype = "uint8"
+#   unit     = "%"
+#   address  = { oid = "1.3.6.1.2.1.33.1.2.4.0" }

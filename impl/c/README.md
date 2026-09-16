@@ -1,9 +1,11 @@
 # tedge-dot — C implementation
 
-A C11 implementation of the tedge-dot SDK framework plus all five connectors —
+A C11 implementation of the tedge-dot SDK framework plus all six connectors —
 **Modbus** (libmodbus), **OPC UA** (open62541), **CAN bus** (SocketCAN + a
 minimal DBC parser), **CANopen** (expedited SDO client directly over SocketCAN),
-and **PROFIBUS-DP** (a minimal built-in DP-V0 class-1 master, TCP transport).
+**PROFIBUS-DP** (a minimal built-in DP-V0 class-1 master, TCP transport), and
+**SNMP** (net-snmp, built from source as a minimal static library: polling, writes
+and v1/v2c/v3 traps and informs).
 
 It is a **maintained peer of the [Rust implementation](../rust/)**, not a
 prototype: it ships as its own package (`tedge-dot-c`) from the same release,
@@ -54,19 +56,20 @@ are still inert. CI runs it.
 
 | Capability | Rust | C | Notes |
 |---|---|---|---|
-| Modbus, OPC UA, CAN bus, CANopen | ✅ | ✅ | |
+| Modbus, OPC UA, CAN bus, CANopen, SNMP | ✅ | ✅ | |
 | PROFIBUS-DP | ⚠️ source only | ✅ | The Rust package omits it: its serial dependency has a native libudev build script that does not cross-compile. The C package ships it. |
-| Push delivery (`subscribe`) | ✅ | ✅ | OPC UA monitored items. See "Push delivery" below for the CAN bus difference. |
+| Push delivery (`subscribe`) | ✅ | ✅ | OPC UA monitored items; SNMP notifications. See "Push delivery" below for the CAN bus and SNMP differences. |
 | Point libraries (`points_from`) | ✅ | ✅ | Same search path, protocol scoping and merge rules (contract §3.4). The mirrored loader tests are [`library.rs`](../rust/crates/sdk/src/library.rs) and [`tests/config.c`](tests/config.c); the Modbus e2e suite resolves half its points through a library in both builds. |
 | `operation_timeout` | ✅ cancels the call | ✅ bounds the library | See "Liveness" below. |
 | `stall_timeout` | ✅ restarts the connector | ⚠️ restarts the process | See "Liveness" below. |
 | Reload on `SIGHUP` | ✅ | ✅ | Same rules: a new file starts a connector, a removed one stops it, a change is applied in place and an unusable file leaves the running configuration alone. A connector that cannot start or restart is tried again after `TEDGE_DOT_RESTART_DELAY` and on every reload, while the process keeps running. Two differences:<br>• Unchanged files: Rust compares the resolved configuration, C the documents. A file reordered or respelt to mean the same thing is left alone by Rust but reconnects its devices in C.<br>• With `--output stdout` (no MQTT session): Rust restarts a connector whose file changed, C applies the change in place.<br>[`reload_e2e.robot`](../../connectors/modbus/tests/reload_e2e.robot) runs against both. |
 | `opcua-security` | ✅ `Basic256Sha256`, … | ❌ `None` only | open62541 supports the policies; wiring them up is config + certificate plumbing that has not been done. **No test yet** (needs a secured endpoint in the e2e stack). |
+| `snmpv3-sha2` | ✅ `SHA224`–`SHA512`, `AES192`/`AES256` | ❌ `MD5`/`SHA` + `DES`/`AES` | SHA-2 authentication and the Blumenthal AES key extension need a real OpenSSL; this build links net-snmp's bundled crypto and has no system OpenSSL dependency. A configuration naming one of them **loads** — one such device must not take a gateway's whole config down — and that device stays `disconnected` with a reason naming this capability, while every other device works. Tests needing it are tagged `requires:snmpv3-sha2`. |
 | `canbus-fd` | ✅ | ❌ | Classic CAN frames only. **No test yet.** |
 | `profibus-serial` | ✅ serial + `tcp://` | ❌ `tcp://` only | No serial PHY and no FDL token timing — fine against a device server or the simulator, not yet for a multi-master RS-485 bus. **No test yet.** |
 | CANopen segmented SDO | ❌ | ❌ | Neither implements it; expedited transfers (≤ 4 bytes) only. Not a parity gap. |
 | `stale` quality | ❌ | ❌ | Neither emits it; the contract allows it, no last-good cache exists. Not a parity gap. |
-| String / raw value length | unbounded | 64 bytes | Fixed buffers (`TDOT_RAW_MAX`). |
+| String / raw value length | unbounded | 255 / 256 bytes | Fixed buffers (`tdot_value_t.str`, `TDOT_RAW_MAX`): a longer string value is truncated to 255 bytes — an SNMP OCTET STRING at a UTF-8 character boundary — and `raw` to 256 bytes. |
 
 ### Push delivery
 
@@ -109,6 +112,15 @@ broadcast of a frame). The observable samples are the same, which is why the
 shared e2e suite passes for both and no capability tag is needed; the difference
 is latency under a slow poll interval.
 
+The **SNMP** notification listener has no transport of its own to wait on, so it
+receives on the runtime thread (the device's object points are polled as usual): each `drain_subscriptions()` reads every pending
+datagram from the connector's one UDP socket, routes it by source address to its
+device's queue (at most 256 notifications, oldest dropped) and hands the drained
+device its queue. A sample can therefore be up to one tick (200 ms) later than in
+Rust, and its `ts` is when it was handed over rather than when the datagram
+arrived. An inform is acknowledged as its datagram is read, so the
+acknowledgement shares that delay.
+
 ### Liveness
 
 `operation_timeout` is the contract's bound on one protocol-module call
@@ -139,7 +151,8 @@ The C build is held to the same coverage as the Rust one:
   shared with the Rust SDK; the device-parameter/`describe` checks, which assert the same facts
   over the same fixture config as `impl/rust/crates/sdk/src/descriptor.rs`; and the
   config-loader rules the runtime depends on (the liveness bounds and the per-point sampling
-  hint, `tests/config.c`);
+  hint, `tests/config.c`); and the SNMP decoder and conversions over the trap vectors shared with
+  the Rust crate, its configuration rules and an in-process loopback receive (`tests/snmp.c`);
 - **describe parity** — [`ci/describe-parity.sh`](ci/describe-parity.sh) (`just
   c-describe-parity`) renders the Cumulocity DTM definitions of every connector config in the
   repo with both binaries and compares them parsed, so the tenant-side declaration cannot drift
@@ -231,12 +244,15 @@ worker thread per file), matching the Rust single-service model.
 | `connectors/canbus/` | SocketCAN connector + minimal DBC parser (BO_/SG_, Intel & Motorola layouts) | `impl/rust/crates/connector-canbus` |
 | `connectors/canopen/` | expedited SDO client over raw SocketCAN (no CANopen library) | `impl/rust/crates/connector-canopen` |
 | `connectors/profibus/` | minimal DP-V0 master (Diag→Prm→Cfg→Data_Exchange, bus thread, tcp:// transport) | `impl/rust/crates/connector-profibus` |
+| `connectors/snmp/` | SNMP over net-snmp (`third_party/net-snmp/`, static, patched): batched GET/GETBULK and SET, one UDP listener for v1/v2c/v3 traps and informs, routing by source or `snmpTrapAddress.0`, community/USM checks, inform Response and v3 Report | `impl/rust/crates/connector-snmp` |
 | `src/main.c` | `read` / `write` / `run` / `describe` CLI | `src/main.rs` |
 | `tests/golden.c` | conformance runner for `impl/rust/crates/sdk/conformance/vectors.json` | `tests/golden_vectors.rs` |
 | `tests/describe.c` | device-parameter derivation + DTM rendering checks | `impl/rust/crates/sdk/src/descriptor.rs` tests |
+| `tests/snmp.c` | SNMP golden vectors (`connectors/snmp/conformance/trap-vectors.json`), config rules, loopback receive | `connector-snmp` unit tests |
 | `ci/describe-parity.sh` | `tedge-dot describe` output compared between the Rust and C binaries | — |
 | `ci/smoke.sh` | e2e smoke: connector ⇄ simulator ⇄ broker, per protocol (used by the `c` CI job) | conformance/e2e suites |
 | `cross/` | zig + Debian-multiarch cross-compilation image, build and verify scripts | goreleaser/zig |
+| `third_party/net-snmp/` | the patch CMake applies to net-snmp 5.9.4 before building it: the decode strictness the shared vectors require, and AES-128 privacy for the bundled crypto (upstream wires AES into `sc_encrypt`/`sc_decrypt` for a real OpenSSL only, so an AES user would otherwise send its scoped PDU unencrypted) | `impl/rust/vendor/snmp2` |
 | `third_party/tomlc99/` | vendored TOML parser (MIT) | serde/toml |
 
 The Rust `Connector` trait maps to a C vtable (`tdot_connector_t` in
@@ -245,7 +261,7 @@ The Rust `Connector` trait maps to a C vtable (`tdot_connector_t` in
 optional `device_info` (the link status `info` descriptor, which the c8y
 registration flow turns into the `c8y_ModbusDevice` twin fragment). Protocol
 modules are selected by `tdot_connector_factory(protocol)` and compiled in
-behind CMake options (`-DTDOT_MODBUS=ON/OFF`, `-DTDOT_OPCUA=ON/OFF`) —
+behind CMake options (`-DTDOT_MODBUS=ON/OFF`, `-DTDOT_OPCUA=ON/OFF`, `-DTDOT_SNMP=ON/OFF`, …) —
 the C analogue of the cargo feature flags.
 
 ## Build & run
@@ -363,8 +379,9 @@ of truth. Limitations of this build that are NOT parity gaps:
 - **CANopen is expedited-SDO only** (values ≤ 4 bytes; segmented transfers
   report a bad sample). The Rust module does not implement segmented transfers
   either.
-- **Fixed-size buffers** cap strings and raw values at 64 bytes
-  (`TDOT_RAW_MAX`), where the Rust model is unbounded.
+- **Fixed-size buffers** cap string values at 255 bytes and raw values at
+  256 bytes (`tdot_value_t.str`, `TDOT_RAW_MAX`), where the Rust model is
+  unbounded.
 - **`stale` quality** (last-good cache) is not implemented — nor is it in the
   Rust build; the contract allows it, neither emits it.
 

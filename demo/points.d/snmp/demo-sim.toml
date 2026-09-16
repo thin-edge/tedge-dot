@@ -1,0 +1,107 @@
+# Point library for the SNMP demo simulators: what the pysnmp agent (connectors/snmp/agent, polled
+# and written) serves and what the net-snmp notification simulator (connectors/snmp/sim) sends.
+# Referenced by demo/config/snmp.toml with `points_from = ["demo-sim"]` (contract §3.4). The
+# agent's seeds are documented in connectors/snmp/agent/agent.py (E = 1.3.6.1.4.1.99999.1).
+#
+# Each point declares what it means next to its address — measurements, events and alarms for the
+# flows, a parameter for a writable object — so the demo shows up in Cumulocity with no flow params.
+
+[library]
+protocol    = "snmp"
+type        = "snmp-demo-sim"
+description = "tedge-dot SNMP demo simulators (pysnmp agent, net-snmp notifications)"
+
+# --- polled from the agent ------------------------------------------------------------------
+
+[[point]]
+id          = "sys_descr"
+name        = "System description"
+datatype    = "string"
+address     = { oid = "1.3.6.1.2.1.1.1.0" }
+meta        = { measurement = false }
+
+# sysUpTime.0 is TimeTicks (hundredths of a second).
+[[point]]
+id        = "uptime"
+name      = "Agent uptime"
+datatype  = "float64"
+unit      = "s"
+transform = { divisor = 100 }
+address   = { oid = "1.3.6.1.2.1.1.3.0" }
+
+# INTEGER E.2.0 -> 1234 (impl/c/ci/smoke.sh expects this value).
+[[point]]
+id       = "pump_speed"
+name     = "Pump speed"
+datatype = "int32"
+unit     = "rpm"
+address  = { oid = "1.3.6.1.4.1.99999.1.2.0" }
+
+# Counter32 E.12.0: seconds since the agent started, so the chart moves.
+[[point]]
+id       = "run_seconds"
+name     = "Run time"
+datatype = "uint32"
+unit     = "s"
+address  = { oid = "1.3.6.1.4.1.99999.1.12.0" }
+
+# Writable INTEGER E.20.0 (seed 10): a device parameter. The SET uses the device's
+# write_community (or its v3 user).
+[[point]]
+id       = "setpoint"
+name     = "Pump setpoint"
+datatype = "int32"
+access   = "read_write"
+address  = { oid = "1.3.6.1.4.1.99999.1.20.0" }
+meta     = { parameter = { min = 0, max = 5000 } }
+
+# Writable OCTET STRING E.21.0 (seed "initial").
+[[point]]
+id       = "station_label"
+name     = "Station label"
+datatype = "string"
+access   = "read_write"
+address  = { oid = "1.3.6.1.4.1.99999.1.21.0" }
+
+# --- notifications ----------------------------------------------------------------------------
+
+# linkDown / linkUp as one signal, typed as the notification OID: an alarm while the link is down.
+[[point]]
+id          = "link_state"
+name        = "Link state"
+description = "The last link notification: linkDown (…5.3) or linkUp (…5.4)"
+datatype    = "string"
+address     = { trap = ["1.3.6.1.6.3.1.1.5.3", "1.3.6.1.6.3.1.1.5.4"] }
+meta        = { measurement = false, alarm = { type = "link_down", severity = "major", text = "Link down on {device}", when = { equals = "1.3.6.1.6.3.1.1.5.3" } } }
+
+# The interface a link notification is about.
+[[point]]
+id       = "link_if"
+name     = "Link interface"
+datatype = "int32"
+address  = { trap = ["1.3.6.1.6.3.1.1.5.3", "1.3.6.1.6.3.1.1.5.4"], oid = "1.3.6.1.2.1.2.2.1.1" }
+meta     = { measurement = false }
+
+# A v1 coldStart: every one is an event, even when nothing else changed.
+[[point]]
+id       = "cold_start"
+name     = "Cold start"
+datatype = "bool"
+address  = { trap = "1.3.6.1.6.3.1.1.5.1" }
+meta     = { measurement = false, event = { type = "cold_start", text = "{device} restarted", every = true } }
+
+# The enterprise-specific pump notification: its text as an event, its temperature as a measurement.
+[[point]]
+id       = "pump_alarm_text"
+name     = "Pump notification"
+datatype = "string"
+address  = { trap = "1.3.6.1.4.1.99999.0.1", oid = "1.3.6.1.4.1.99999.2.1" }
+meta     = { measurement = false, event = { type = "pump_notification", text = "{value}", every = true } }
+
+[[point]]
+id        = "pump_temperature"
+name      = "Pump temperature"
+datatype  = "float64"
+unit      = "°C"
+transform = { divisor = 10 }
+address   = { trap = "1.3.6.1.4.1.99999.0.1", oid = "1.3.6.1.4.1.99999.2.2" }

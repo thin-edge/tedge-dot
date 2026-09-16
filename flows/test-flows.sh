@@ -344,6 +344,25 @@ check_output "event: several events on one point; unusable entries are skipped" 
   "$(lines "$(ot_sample t1 version '"1.2.0"' "$FWS")" "$(ot_sample t2 version '"2.0.0-beta"' "$FWS")")" \
   "$(lines '[te/device/opc1///e/firmware_changed] {"text":"version changed to 2.0.0-beta","time":"t2"}' \
            '[te/device/opc1///e/beta_firmware] {"text":"version is 2.0.0-beta","time":"t2"}')"
+# every = true: samples that are occurrences (SNMP traps), not states -- each one is an event.
+TRAP='{"measurement":false,"event":{"type":"link_down","text":"Link down","every":true}}'
+check_output "event: every raises for each sample, the first and identical repeats included" ot-event "" \
+  "$(lines "$(ot_sample t1 link_down '"1.3.6.1.6.3.1.1.5.3"' "$TRAP")" \
+           "$(ot_sample t2 link_down '"1.3.6.1.6.3.1.1.5.3"' "$TRAP")")" \
+  "$(lines '[te/device/opc1///e/link_down] {"text":"Link down","time":"t1"}' \
+           '[te/device/opc1///e/link_down] {"text":"Link down","time":"t2"}')"
+EVERY_HOT='{"event":{"type":"hot","every":true,"when":{"above":70}}}'
+check_output "event: every with when raises for each sample the condition holds for" ot-event "" \
+  "$(lines "$(ot_sample t1 temp 80 "$EVERY_HOT")" \
+           "$(ot_sample t2 temp 60 "$EVERY_HOT")" \
+           "$(ot_sample t3 temp 81 "$EVERY_HOT")" \
+           "$(ot_sample t4 temp 82 "$EVERY_HOT")")" \
+  "$(lines '[te/device/opc1///e/hot] {"text":"temp is 80","time":"t1"}' \
+           '[te/device/opc1///e/hot] {"text":"temp is 81","time":"t3"}' \
+           '[te/device/opc1///e/hot] {"text":"temp is 82","time":"t4"}')"
+check_output "event: every still ignores a failed read" ot-event "" \
+  "$(ot_bad t1 link_down "$TRAP")" \
+  ''
 
 # --- ot-alarm: measurement mode (one series from the params, hysteresis; off without one) ---
 check_empty "alarm: measurement mode is off without a series" ot-alarm \

@@ -606,13 +606,18 @@ pub async fn run_until_reloadable(
     // schedule for everything that is not pushed. The runtime keeps `sample_tx` alive for
     // the whole run so re-subscribing after a config reload reuses the same channel.
     let (sample_tx, mut sample_rx) = tokio::sync::mpsc::channel::<Sample>(256);
-    let mut subscribed =
+    let (mut subscribed, subscribe_failed) =
         setup_subscriptions(&mut connector, &config, caps.subscribe, &sample_tx, limits).await;
     let mut schedule = build_schedule(&config, &subscribed);
     let mut meta_index = build_meta_index(&config);
     let mut seq_counters: HashMap<(String, String), u64> = HashMap::new();
     // Devices whose transport needs re-establishing, keyed by device name.
     let mut reconnects: HashMap<String, ReconnectEntry> = HashMap::new();
+    // A device whose subscribe failed may have points it cannot poll, so it needs
+    // re-establishing even though its polls (if any) are succeeding.
+    for device in subscribe_failed {
+        reconnects.entry(device).or_insert_with(ReconnectEntry::new);
+    }
     // Devices with polled points whose push delivery died (see `PushAction::Recover`).
     let mut push_recovery: HashMap<String, ReconnectEntry> = HashMap::new();
 
@@ -746,7 +751,10 @@ pub async fn run_until_reloadable(
                             .enumerate()
                             .find(|(_, d)| d.name == device)
                         {
-                            subscribe_device(
+                            // A re-subscribe that fails leaves points the module may deliver by
+                            // push alone with nothing behind them, so the device stays on the
+                            // reconnect schedule instead of being treated as recovered.
+                            if subscribe_device(
                                 &mut connector,
                                 &config,
                                 device_index,
@@ -755,7 +763,13 @@ pub async fn run_until_reloadable(
                                 limits,
                                 &mut subscribed,
                             )
-                            .await;
+                            .await
+                            .is_err()
+                            {
+                                reconnects
+                                    .entry(device.clone())
+                                    .or_insert_with(ReconnectEntry::new);
+                            }
                             schedule = build_schedule(&config, &subscribed);
                         }
                     }
@@ -808,7 +822,8 @@ pub async fn run_until_reloadable(
         // schedule and everything else derived from the configuration.
         if std::mem::take(&mut rearm) {
             limits = Limits::from_config(&config);
-            subscribed = setup_subscriptions(
+            let failed;
+            (subscribed, failed) = setup_subscriptions(
                 &mut connector, &config, caps.subscribe, &sample_tx, limits,
             ).await;
             schedule = build_schedule(&config, &subscribed);
@@ -817,6 +832,11 @@ pub async fn run_until_reloadable(
             // applying the configuration already reconnected every device
             reconnects.clear();
             push_recovery.clear();
+            // ...except one whose subscribe just failed: its pushed points have nothing
+            // delivering them, and polling may not be able to cover them.
+            for device in failed {
+                reconnects.entry(device).or_insert_with(ReconnectEntry::new);
+            }
         }
     }
 
@@ -866,12 +886,17 @@ pub async fn run_stdout_until(
     }
 
     let (sample_tx, mut sample_rx) = tokio::sync::mpsc::channel::<Sample>(256);
-    let mut subscribed =
+    let (mut subscribed, subscribe_failed) =
         setup_subscriptions(&mut connector, &config, caps.subscribe, &sample_tx, limits).await;
     let mut schedule = build_schedule(&config, &subscribed);
     let meta_index = build_meta_index(&config);
     let mut seq_counters: HashMap<(String, String), u64> = HashMap::new();
     let mut reconnects: HashMap<String, ReconnectEntry> = HashMap::new();
+    // As in the MQTT runtime: a device whose subscribe failed may have points it cannot poll,
+    // so it needs re-establishing even while its polls (if any) succeed.
+    for device in subscribe_failed {
+        reconnects.entry(device).or_insert_with(ReconnectEntry::new);
+    }
     let mut push_recovery: HashMap<String, ReconnectEntry> = HashMap::new();
 
     let mut tick = tokio::time::interval(Duration::from_millis(200));
@@ -898,12 +923,21 @@ pub async fn run_stdout_until(
                                 s.device = device.clone();
                                 print_sample(s, &mut seq_counters, &meta_index);
                             }
-                            let healthy = samples.is_empty()
-                                || samples.iter().any(|s| s.quality != crate::model::Quality::Bad);
-                            if healthy {
-                                reconnects.remove(&device);
-                            } else {
-                                reconnects.entry(device.clone()).or_insert_with(ReconnectEntry::new);
+                            // An empty batch says nothing about the device: every due point may
+                            // simply be delivered by push. Treating it as healthy cleared the
+                            // reconnect entry and stranded a device whose subscription had
+                            // failed, with nothing left to retry it -- the MQTT runtime guards
+                            // the same way, and the two must not disagree on the same config.
+                            if !samples.is_empty() {
+                                let healthy =
+                                    samples.iter().any(|s| s.quality != crate::model::Quality::Bad);
+                                if healthy {
+                                    reconnects.remove(&device);
+                                } else {
+                                    reconnects
+                                        .entry(device.clone())
+                                        .or_insert_with(ReconnectEntry::new);
+                                }
                             }
                         }
                         Err(e) => {
@@ -974,7 +1008,7 @@ pub async fn run_stdout_until(
                             .enumerate()
                             .find(|(_, d)| d.name == device)
                         {
-                            subscribe_device(
+                            if subscribe_device(
                                 &mut connector,
                                 &config,
                                 device_index,
@@ -983,7 +1017,13 @@ pub async fn run_stdout_until(
                                 limits,
                                 &mut subscribed,
                             )
-                            .await;
+                            .await
+                            .is_err()
+                            {
+                                reconnects
+                                    .entry(device.clone())
+                                    .or_insert_with(ReconnectEntry::new);
+                            }
                             schedule = build_schedule(&config, &subscribed);
                         }
                     }
@@ -1105,19 +1145,23 @@ fn push_action(result: &Result<(), ConnectorError>, polled: bool) -> PushAction 
 /// with `subscribe = false` are excluded and stay on the polling schedule, as does every point
 /// of a device whose `subscribe()` call does not succeed. Returns the set of
 /// `(device_index, point_id)` now delivered via push.
+/// Returns the points now delivered by push, and the devices whose `subscribe` FAILED: those
+/// have points the module may not be able to poll, so the caller puts them on the reconnect
+/// schedule rather than leaving them with no delivery path at all.
 async fn setup_subscriptions(
     connector: &mut Box<dyn Connector>,
     config: &ConnectorConfig,
     subscribe_capable: bool,
     sink: &SampleSink,
     limits: Limits,
-) -> HashSet<(usize, String)> {
+) -> (HashSet<(usize, String)>, Vec<String>) {
     let mut subscribed = HashSet::new();
+    let mut failed = Vec::new();
     if !subscribe_capable {
-        return subscribed;
+        return (subscribed, failed);
     }
     for (device_index, device) in config.devices.iter().enumerate() {
-        subscribe_device(
+        if subscribe_device(
             connector,
             config,
             device_index,
@@ -1126,9 +1170,13 @@ async fn setup_subscriptions(
             limits,
             &mut subscribed,
         )
-        .await;
+        .await
+        .is_err()
+        {
+            failed.push(device.name.clone());
+        }
     }
-    subscribed
+    (subscribed, failed)
 }
 
 /// Arm push delivery for ONE device, recording its points in `subscribed` on success and
@@ -1145,32 +1193,11 @@ async fn subscribe_device(
     sink: &SampleSink,
     limits: Limits,
     subscribed: &mut HashSet<(usize, String)>,
-) {
-    let connector_default = parse_duration(&config.connector.poll_interval)
-        .unwrap_or_else(|| Duration::from_secs(2));
+) -> Result<(), ConnectorError> {
     {
-        let device_default = device
-            .poll_interval
-            .as_deref()
-            .and_then(parse_duration)
-            .unwrap_or(connector_default);
-        let points: Vec<PointRef> = device
-            .points
-            .iter()
-            .filter(|p| p.subscribe.unwrap_or(true))
-            .map(|p| {
-                let mut r = point_ref(p, device.default_mode);
-                r.interval = Some(
-                    p.poll_interval
-                        .as_deref()
-                        .and_then(parse_duration)
-                        .unwrap_or(device_default),
-                );
-                r
-            })
-            .collect();
+        let points = push_points(connector.as_ref(), config, device);
         if points.is_empty() {
-            return;
+            return Ok(());
         }
         // Drop any stale entries first: on a re-subscribe these points are currently marked
         // as pushed, and if the call below fails they must go back to being polled rather
@@ -1192,13 +1219,60 @@ async fn subscribe_device(
                 }
             }
             Err(ConnectorError::Unsupported(_)) => {
+                // The module polls these points instead, which is a complete delivery path.
                 debug!(device = %device.name, "subscribe unsupported; polling");
             }
             Err(e) => {
-                warn!(device = %device.name, "subscribe failed: {e}; falling back to polling");
+                // Falling back to polling is only a fallback for a module that can also poll
+                // these points. One that delivers them by push alone (`pushes_point`) has
+                // nothing behind them once the subscription fails: `read_points` drops them,
+                // so they would never produce a sample again, while the device's other points
+                // keep the link green and nothing retries. Report it so the caller can put the
+                // device on the reconnect schedule.
+                warn!(device = %device.name, "subscribe failed: {e}");
+                return Err(e);
             }
         }
     }
+    Ok(())
+}
+
+/// The points of `device` to ask `connector` to push: those not configured `subscribe = false`
+/// that the module delivers by push ([`Connector::pushes_point`]). Everything else stays on the
+/// polling schedule. Each carries its effective poll interval as the sampling hint.
+fn push_points(
+    connector: &dyn Connector,
+    config: &ConnectorConfig,
+    device: &crate::config::DeviceConfig,
+) -> Vec<PointRef> {
+    let connector_default = parse_duration(&config.connector.poll_interval)
+        .unwrap_or_else(|| Duration::from_secs(2));
+    let device_default = device
+        .poll_interval
+        .as_deref()
+        .and_then(parse_duration)
+        .unwrap_or(connector_default);
+    // `subscribe = false` is honoured as written: it means "poll this instead". A module with
+    // points it can only push must REJECT the combination in its own configuration validation
+    // rather than have the runtime quietly override the operator (the SNMP connector does, for
+    // notification points) -- overriding an explicit setting here would be worse than the
+    // silent drop it was meant to prevent.
+    device
+        .points
+        .iter()
+        .filter(|p| p.subscribe.unwrap_or(true))
+        .map(|p| {
+            let mut r = point_ref(p, device.default_mode);
+            r.interval = Some(
+                p.poll_interval
+                    .as_deref()
+                    .and_then(parse_duration)
+                    .unwrap_or(device_default),
+            );
+            r
+        })
+        .filter(|r| connector.pushes_point(&device.name, r))
+        .collect()
 }
 
 /// Per-point `meta` lookup, keyed by `(device name, point id)`; injected into every published
@@ -2477,13 +2551,26 @@ default_mode = "typed"
     /// change does not compare equal.
     #[test]
     fn a_reload_sees_through_edits_that_change_nothing() {
+        // `reload_from_file` asks two questions in order: `needs_restart`, then whether the new
+        // configuration compares equal to the running one (`Reloaded::Unchanged`). Both are
+        // asserted here -- comparing two `toml::from_str` results alone would only exercise the
+        // toml crate and the derived `PartialEq`, not anything this module decides.
         let running: ConnectorConfig = toml::from_str(BASE).unwrap();
         let commented: ConnectorConfig =
             toml::from_str(&format!("# edited by the operator\n{BASE}")).unwrap();
-        assert_eq!(running, commented);
+        assert_eq!(running, commented, "a comment does not change the resolved configuration");
+        assert!(!needs_restart(&running, &commented), "and it certainly does not restart it");
+
         let moved: ConnectorConfig =
             toml::from_str(&BASE.replace("address = 7", "address = 8")).unwrap();
-        assert_ne!(running, moved);
+        assert_ne!(running, moved, "a moved register is a real change");
+        // ...but one applied in place: a changed point is not a reason to restart the connector.
+        assert!(!needs_restart(&running, &moved));
+
+        let renamed: ConnectorConfig =
+            toml::from_str(&BASE.replace("protocol = \"modbus\"", "protocol = \"opcua\"")).unwrap();
+        assert_ne!(running, renamed);
+        assert!(needs_restart(&running, &renamed), "a different protocol does restart it");
     }
 
     #[test]
@@ -2655,6 +2742,93 @@ default_mode = "typed"
         // The same device with a point still on the schedule.
         let polled = build_schedule(&config, &HashSet::new());
         assert_eq!(pushed_devices(&subscribed, &polled), vec![(0, true)]);
+    }
+
+    /// A module stand-in that pushes only the points whose id starts with `trap`, like SNMP
+    /// (notifications pushed, objects polled); `None` keeps the default (push everything).
+    struct PushPrefix(Option<&'static str>);
+    use crate::model::DeviceId;
+
+    #[async_trait::async_trait]
+    impl Connector for PushPrefix {
+        fn configure(&mut self, _: &ConnectorConfig) -> Result<(), crate::connector::ConfigError> {
+            Ok(())
+        }
+        fn capabilities(&self) -> crate::connector::Capabilities {
+            crate::connector::Capabilities {
+                protocol: "test",
+                version: "0",
+                modes: vec![Mode::Typed],
+                datatypes: vec![],
+                point_kinds: vec![],
+                command_verbs: vec![],
+                features: vec![],
+                subscribe: true,
+            }
+        }
+        fn pushes_point(&self, device: &DeviceId, point: &PointRef) -> bool {
+            match self.0 {
+                Some(prefix) => device == "plc-1" && point.id.starts_with(prefix),
+                None => true,
+            }
+        }
+        async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError> {
+            Ok(vec![])
+        }
+        async fn read_points(&mut self, _: &DeviceId, _: &[PointRef]) -> Result<Vec<Sample>, ConnectorError> {
+            Ok(vec![])
+        }
+        async fn disconnect(&mut self) -> Result<(), ConnectorError> {
+            Ok(())
+        }
+    }
+
+    const MIXED: &str = r#"
+[connector]
+protocol = "test"
+poll_interval = "3s"
+
+[[device]]
+name = "plc-1"
+protocol_address = { host = "127.0.0.1" }
+  [[device.point]]
+  id = "trap_link"
+  datatype = "string"
+  address = {}
+  [[device.point]]
+  id = "uptime"
+  datatype = "uint32"
+  address = {}
+  [[device.point]]
+  id = "trap_opted_out"
+  datatype = "string"
+  subscribe = false
+  address = {}
+"#;
+
+    /// Only the points the module pushes are subscribed; the rest of the same device stays on
+    /// the schedule, and the device is then one with both pushed and polled points. Without
+    /// the hook every point is pushed, as before it existed.
+    #[test]
+    fn only_points_the_module_pushes_leave_the_schedule() {
+        let config: ConnectorConfig = toml::from_str(MIXED).unwrap();
+        let device = &config.devices[0];
+
+        let pushed = push_points(&PushPrefix(Some("trap")), &config, device);
+        let ids: Vec<&str> = pushed.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["trap_link"], "objects and opted-out points are not pushed");
+        assert_eq!(pushed[0].interval, Some(Duration::from_secs(3)));
+
+        let subscribed: HashSet<(usize, String)> =
+            pushed.iter().map(|p| (0usize, p.id.clone())).collect();
+        let schedule = build_schedule(&config, &subscribed);
+        let polled: Vec<&str> = schedule.iter().map(|e| e.point.id.as_str()).collect();
+        assert_eq!(polled, ["uptime", "trap_opted_out"]);
+        assert_eq!(pushed_devices(&subscribed, &schedule), vec![(0, true)]);
+
+        let everything = push_points(&PushPrefix(None), &config, device);
+        let ids: Vec<&str> = everything.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["trap_link", "uptime"], "default: every point not opted out");
     }
 
     /// A dead subscription must always lead to recovery. Only on a push-only device does the

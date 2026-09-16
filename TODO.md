@@ -18,9 +18,155 @@
       - `canbus-fd` — classic frames only today; the Rust build has a `canbus-fd` feature.
       - `profibus-serial` — the C module speaks `tcp://` only (no serial PHY, no FDL token
         timing), so it cannot yet drive a multi-master RS-485 bus.
+      - `snmpv3-sha2` — the C build links net-snmp's own crypto (`--with-openssl=internal`), which
+        covers MD5/SHA-1 authentication and DES/AES-128 privacy; SHA-224…512 and AES-192/256 need
+        a real OpenSSL, which would cost the small, dependency-free package. A device configured
+        with one of them loads but stays `disconnected`, naming the capability.
       Also: CAN bus push delivery (the C module renders the push-based bus as drain-into-cache
-      polling — same samples, worse latency, so it is not tagged), and the 64-byte cap on
-      string/raw values (`TDOT_RAW_MAX`).
+      polling — same samples, worse latency, so it is not tagged), and the 255/256-byte cap on
+      string/raw values (`tdot_value_t.str`, `TDOT_RAW_MAX`).
+
+* [ ] SNMP connector follow-ups (`doc/connectors/snmp-connector-spec.md`; polling, SET writes,
+      v1/v2c/v3 traps and informs shipped):
+      - **File the `snmp2` issues upstream** and drop the patches as they are released: six drafts
+        wait in `doc/upstream/snmp2-*.md` and the patched copy is `impl/rust/vendor/snmp2`
+        (with its `TEDGE-DOT-PATCH.md`), the same arrangement as `vendor/async-opcua-crypto`.
+      - **Table walks** (GETBULK over a column, one sample per row): deliberately deferred — rows
+        exist only at runtime while the contract's point list is static (link status `points`,
+        the capability descriptor, "one sample per point per read"), so it needs an additive RFC.
+        Sketch: one point per column (`address = { column = "…", label = "…" }`) publishing a
+        sample per row told apart by `addr.index`, with `ot-measurement`/`ot-alarm` naming the
+        series per row.
+      - MIB name resolution (`sysUpTime.0` instead of the numeric OID): `snmp2` has a `mibs`
+        feature needing `libnetsnmp`, the C build links net-snmp already — but the packages would
+        have to ship MIB files.
+      - A catch-all for notifications from unconfigured senders (today dropped at debug level),
+        which would let a discovery flow onboard equipment with `define-device`.
+      - Name resolution only at connect: a DHCP address change is picked up on the next
+        reconnect, not while the link is up.
+      - Track net-snmp releases: the C build compiles a pinned tarball (version and SHA-256 in
+        `impl/c/CMakeLists.txt`), so a security fix there means bumping the pin.
+      - **Two devices on one host, different ports** are refused: `check_unique_hosts` compares
+        the host literal alone, though an SNMP agent is addressed by host *and* port. The
+        restriction exists because notifications are routed by source address, so it should
+        apply to devices that have notification points, not to polled-only ones. Changing it
+        means the spec (§3.2) and both implementations together, which is why it is not in the
+        connector's first PR.
+      - **v3 notifications through a forwarder** work in Rust but are refused by the C module
+        ("v3 through a forwarder is not supported"), and no test covers it — the e2e forwarder
+        relays v2c only. Either implement it in C or record it as a tagged capability gap.
+      - **GETBULK for scalars** buys no round trip over a multi-varbind GET, and its
+        GETNEXT semantics turn a missing instance into "the agent answered X instead of Y"
+        rather than a plain noSuchObject. Reconsider `bulk = true` as the v2c/v3 default.
+      - The receiver's `LocalEngine` state is not rolled back when a forwarded v3 notification
+        is tried against a device it turns out not to belong to (`listener.rs`), unlike the
+        per-device security state beside it.
+      - **Rust/C parity gaps found by a review of both implementations, none covered by a test.**
+        Each needs its own change and its own test; they are behaviour changes, not slips:
+        - **Inform vs trap dispatch disagrees.** Rust decides from the msgFlags *reportable* bit
+          (`listener.rs`), C from whether the message's engine ID is ours (`connector_snmp.c`).
+          A v3 Trap that wrongly sets the bit is published by C but answered by Rust with a
+          `usmStatsUnknownEngineIDs` Report; an inform with the bit clear is acknowledged by C
+          and dropped unacknowledged by Rust.
+        - **A poll timeout ends the C device's link, not just its samples.** C returns a
+          transport verdict, so its runtime publishes `disconnected` and calls
+          `disconnect_device` — which releases the listener, so a device with both object and
+          trap points stops receiving notifications during a polling outage. Rust reports
+          `degraded` and keeps the listener. The outage test accepts either status and stops a
+          device that has no trap points, so it cannot see this.
+        - **C pays a timeout per batch.** Rust marks the cycle's remaining batches bad once one
+          fails (spec §5.1 requires this); C issues every batch, costing
+          `request_timeout × (1 + retries)` each, stalling the whole tick. The outage test stops
+          a 4-point device, which is a single batch.
+        - **v1 error-status retry scope.** Rust drops the point named by `error-index` and
+          retries the rest for any non-zero status; C only for `noSuchName`, so a `genErr`
+          marks the whole batch bad and degrades the link.
+        - **Raw-mode exception varbinds.** A notification varbind carrying
+          `noSuchObject`/`noSuchInstance`/`endOfMibView` for a `mode = "raw"` point is a good
+          sample with empty raw on Rust and a bad sample on C. Rust's own polled path reports
+          it bad, so Rust also disagrees with itself.
+        - **A `level` below what the passwords imply** is rejected by Rust (the whole config
+          fails) and accepted by C, which then runs that device at the lower level — a shared
+          config file is not portable, in the direction that lowers security.
+        - **Numeric bounds differ**: C enforces `retries` 0–100, `max_varbinds` 1–256, `port`
+          1–65535; Rust enforces only `max_varbinds ≠ 0`. A file one build runs, the other
+          refuses to start on.
+      - **`malformed[7]` does not test what it says.** It is named "SNMPv3 message" with the
+        reason "SNMPv3 needs credentials", but its bytes are a v2c-shaped datagram whose version
+        field is simply set to 3: `020103` is followed by `0406 7075626c6963` (an OCTET STRING
+        community) where RFC 3412 requires msgGlobalData, a `0x30` SEQUENCE — every genuine v3
+        vector in the file has `0x30` there. It is still correctly rejected, so no valid input is
+        refused, but it pins "a datagram claiming version 3 is refused" rather than "a well-formed
+        v3 message with no credentials is refused". Replacing its hex with a properly structured
+        v3 message carrying an unknown user would make it test its own premise.
+      - **`a_values_canonical_octets_decode_back_to_it`** (`connector-snmp/tests/properties.rs`)
+        builds both sides of its comparison with `VarValue::from_library`, so a wrong mapping in
+        that function cancels out — the same defect that was just fixed in
+        `encode_then_decode_round_trips`. It is partly saved by constructing the BER element from
+        an independent tag table, which would catch a type whose tag changed, but not a value that
+        decodes to the wrong number.
+      - **The C conformance harness does not assert the usmStats counter's VALUE on a discovery
+        probe.** The probe itself is now checked (Report produced, msgID, request-id, one
+        varbind, counter OID, counter32 type), but net-snmp keeps usmStats process-wide and the
+        message vectors run before it, so the number depends on what the harness did earlier.
+        The Rust side pins it at 1 because it drives its own `LocalEngine`. Making the C side
+        equivalent means either resetting the library's statistics between phases or running the
+        probe in its own process; neither is worth it for one integer, but it is the one
+        assertion the two harnesses do not share.
+      - **The C build's USM tables grow with every engine ID a spoofed source claims.**
+        Authenticating a v3 notification needs keys localized to the engine the message *claims*,
+        so `v3_prepare` (`impl/c/connectors/snmp/connector_snmp.c`) installs them before the
+        message can be verified — and net-snmp's user table and engine-time cache are
+        process-wide and never shrink. A source spoofing a configured device's address (the only
+        routing check) and sending forged engine IDs with the device's user name — which every
+        v3 message carries in the clear — grows the process without bound and slows the linear
+        `usm_get_user` scan on every message. Not fixed, because the obvious cleanup is worse:
+        `free_enginetime()` frees the whole 1-of-23 hash bucket without comparing engine IDs, so
+        it discards the boots and time of unrelated engines (this connector's own among them),
+        and `usm_remove_user()` deletes an entry another device's session owns and that net-snmp
+        never rebuilds (it returns early once `SNMP_FLAGS_USER_CREATED` is set). A safe fix needs
+        a per-engine removal primitive upstream, or a design that does not install until the
+        level check has passed. The Rust build is unaffected: it localizes keys itself and rolls
+        the state back on any failure.
+      - **The e2e case `An Unauthenticated v3 Trap Is Dropped And The Device Keeps Working`
+        does not discriminate the fix it was written for.** Every v3 trap device in
+        `connectors/snmp/connector.toml` pins `engine_id`, and the simulator sends the
+        unauthenticated trap from that same engine, so the engine-learning branch is never
+        reached and the case passes with or without the receiver-side fix — it currently proves
+        only that a below-level notification is dropped, which is worth having but is not the
+        security property. Discriminating it needs a trap device whose engine is *unpinned* at
+        the moment the case runs (so the case must also precede any authenticated trap from that
+        device), which means a new device and notification sender in the stack. The property
+        itself is covered at unit level by
+        `an_unauthenticated_notification_teaches_an_authenticated_user_nothing`
+        (`impl/rust/vendor/snmp2/src/tedge_dot_tests.rs`), which does fail without the fix.
+      - **Push recovery ends when a re-subscribe fails** (`retain_pushed`, `impl/rust/crates/sdk/src/runtime.rs`):
+        a device drops out of `pushed_devices` the moment it has no subscribed points, which is
+        exactly when a failed re-subscribe means recovery should keep trying — so a mixed device
+        whose subscription dies and fails to come back loses both retry paths at once (its polls
+        keep succeeding, so `reconnects` stays clear too) and its push-only points go quiet until
+        a restart. Not fixed here: keeping every configured device instead reconnects a healthy
+        polled-only device once a minute forever, which the existing test
+        `push_recovery_ends_when_a_device_falls_back_to_polling` pins deliberately. Telling the
+        two apart needs `Connector::pushes_point` threaded into `retain_pushed` (both call sites),
+        a change to shared runtime behaviour that wants its own PR.
+      - **`subscribe = false` on a point a module can only push** is scheduled for polling, where
+        `read_points` silently drops it: no sample, no bad sample, no warning. Not fixed in the
+        runtime: having `push_points` override an explicit `subscribe = false` is worse than the
+        drop, since it silently contradicts the operator. Both SNMP implementations already
+        reject the combination in their own validation (`config.rs`, `connector_snmp.c`), which is
+        where it belongs; the gap is only that the SDK does not *require* a module to do so.
+      - **A transport error ends the whole device cycle in the C runtime**, for every connector:
+        the poll loop in `impl/c/sdk/src/runtime.c` stops at the first read returning non-zero,
+        so the remaining due points never publish the bad samples they already hold — and a
+        consumer that simply stops hearing about a point cannot tell a stalled device from a
+        value that has not changed. The SNMP module works around it for itself by holding the
+        verdict back to the last point of a failed batch (`transport_pending` in
+        `connector_snmp.c`); modbus, opcua and canbus still lose the rest of the tick. The Rust
+        runtime publishes every sample of a failed batch before it judges the link, so fixing
+        this in the C SDK would restore parity and let the SNMP workaround go. Only the SNMP
+        e2e suite covers the path at all (`A Stopped Agent Gives Bad Samples And The Link
+        Recovers`), which is why it went unnoticed.
 
 * [ ] The `.apk` packages carry versions apk-tools rejects, for BOTH implementations and for
       real releases, not just snapshots: `apk version -c` reports `0.0.1-alpha.2` (this

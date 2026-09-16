@@ -17,10 +17,15 @@ ARG ZIG_VERSION=0.16.0
 
 SHELL ["/bin/sh", "-eux", "-c"]
 
+# net-snmp (the SNMP connector's libnetsnmp) is also built from source by CMake, with
+# autotools: it needs make, perl and file, plus the target's binutils because libtool
+# insists on a real `ld` next to zig cc (see TDOT_NETSNMP_HOST in cross/build.sh).
 RUN for a in ${DEB_ARCHS}; do dpkg --add-architecture "$a"; done; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates cmake curl git ninja-build pkg-config python3 xz-utils; \
+      ca-certificates cmake curl git ninja-build pkg-config python3 xz-utils \
+      make perl file patch \
+      binutils-x86-64-linux-gnu binutils-aarch64-linux-gnu binutils-arm-linux-gnueabihf; \
     for a in ${DEB_ARCHS}; do \
       apt-get install -y --no-install-recommends \
         "libcjson-dev:$a" "libmodbus-dev:$a" "libmosquitto-dev:$a"; \

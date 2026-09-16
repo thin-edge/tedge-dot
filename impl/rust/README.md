@@ -7,7 +7,7 @@ per protocol module, the conformance harness, and the `tedge-dot` binary.
 | Path | Contents |
 |---|---|
 | [crates/sdk](crates/sdk/) | `tedge-dot-sdk` — runtime, `Connector` trait, config model, decode helpers, golden vectors |
-| [crates/connector-*](crates/) | one crate per protocol module (modbus, opcua, canbus, canopen, profibus) |
+| [crates/connector-*](crates/) | one crate per protocol module (modbus, opcua, canbus, canopen, profibus, snmp) |
 | [crates/ot-conformance](crates/ot-conformance/) | the contract conformance harness (schema, decode vectors, behavioural checks) |
 | [src/main.rs](src/main.rs) | the binary: `run` service plus the `read`/`write`/`describe` CLI |
 | [vendor/](vendor/) | patched copies of upstream crates (see the `TEDGE-DOT-PATCH.md` in each) |
@@ -38,7 +38,7 @@ cargo run  --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.to
 ```
 
 Protocol modules are cargo features on the binary (`modbus`, `opcua`, `canbus`,
-`canbus-fd`, `canopen`, `profibus`); see [Cargo.toml](Cargo.toml). `profibus` is
+`canbus-fd`, `canopen`, `profibus`, `snmp`); see [Cargo.toml](Cargo.toml). `profibus` is
 excluded from the released package because its serial dependency has a native
 libudev build script that does not cross-compile with cargo-zigbuild — build it
 from source on Linux, or use `tedge-dot-c`, which ships it.

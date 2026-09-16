@@ -1,0 +1,28 @@
+[package]
+name = "connector-snmp"
+version.workspace = true
+edition.workspace = true
+description = "SNMP module for thin-edge.io OT connectors (GET/GETBULK polling, SET, v1/v2c/v3 traps and informs)"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tedge-dot-sdk = { path = "../sdk" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+time = { version = "0.3", features = ["std"] }
+# Only to bind the listening socket without SO_REUSEADDR and dual-stack on an IPv6 wildcard;
+# tokio already depends on it.
+socket2 = "0.6"
+# The protocol library, patched in vendor/snmp2 (see its TEDGE-DOT-PATCH.md). Pure-Rust crypto:
+# no OpenSSL to cross-compile or ship.
+snmp2 = { version = "0.5.2", default-features = false, features = ["tokio", "crypto-rust", "heap_buffers"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+proptest = "1"

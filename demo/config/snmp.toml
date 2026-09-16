@@ -1,0 +1,58 @@
+# Demo SNMP connector config — pairs with two services of ../docker-compose.yaml, both on the host
+# network:
+#
+#   snmp-agent-sim  the pysnmp agent this device POLLS and WRITES to, on udp/1161
+#                   (or `just sim snmp`, which publishes the same agent on host port 1161)
+#   snmp-sim        net-snmp, sending a round of traps to 127.0.0.1:162 every 10 seconds
+#
+# One device, both ways: its object points are polled from 127.0.0.1:1161, and notifications from
+# 127.0.0.1 are routed to it by their source address.
+#
+# Ships with the tedge-dot package in /usr/share/tedge-dot/demo/. Copy it to
+# /etc/tedge/plugins/ot/ (keep it 0640: SNMP configs carry communities and v3 passwords) and
+# reload tedge-dot.service to run it against the simulators. Publishes to the thin-edge.io broker
+# on 127.0.0.1:1883.
+#
+# Port 162 is privileged: the packaged service may bind it (CAP_NET_BIND_SERVICE). A host
+# already running snmptrapd holds the port; stop it, or change `listen` here and TRAP_TARGET
+# on the simulator (or let snmptrapd forward to the connector, see `forwarders` in
+# /etc/tedge/plugins/ot/snmp.toml).
+
+[connector]
+protocol      = "snmp"
+service_name  = "tedge-dot-snmp"
+poll_interval = "5s"
+log_level     = "info"
+
+[mqtt]
+host = "127.0.0.1"
+port = 1883
+
+[connection]
+listen    = "0.0.0.0:162"
+community = "public"
+
+[[device]]
+name             = "snmp-switch"
+# SNMPv2c: GETBULK for the polled points, community "public" to read, "private" to SET.
+protocol_address = { host = "127.0.0.1", port = 1161, version = "v2c", community = "public", write_community = "private" }
+points_from      = ["demo-sim"]
+
+  # The same agent speaks SNMPv3 too (users in connectors/snmp/agent/agent.py), e.g.:
+  #
+  #   protocol_address = { host = "127.0.0.1", port = 1161, version = "v3", v3 = { user = "rw-priv", auth_protocol = "SHA", auth_password = "rw-auth-pass-1", priv_protocol = "AES", priv_password = "rw-priv-pass-1" } }
+  #
+  # The points come from the packaged point library
+  # points.d/snmp/demo-sim.toml (contract §3.4). An installed package finds it automatically;
+  # from a source checkout point the search path at the copy in this repo:
+  #
+  #   export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+  #
+  # Try it without a broker (Ctrl-C stops), after `just sim snmp`:
+  #
+  #   tedge-dot read  -c demo/config/snmp.toml -p pump_speed
+  #   tedge-dot write -c demo/config/snmp.toml -d snmp-switch -p setpoint --value 55
+  #   tedge-dot run   -c demo/config/snmp.toml --output stdout
+  #
+  # and send a trap from another shell with
+  # `docker compose -f demo/docker-compose.yaml exec snmp-sim send-trap linkdown 2`.

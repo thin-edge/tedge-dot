@@ -1,0 +1,169 @@
+# End-to-end harness for the SNMP connector: polling (GET/GETBULK), SET writes, and
+# notifications (traps/informs, v1/v2c/v3, direct and through a trusted forwarder).
+#
+# The stack is started by the Robot suite itself (DeviceLibrary, see
+# connectors/_shared/stack.resource): every setup creates its own compose project with a
+# random name, so suites are isolated and nothing has to be started beforehand.
+#
+# Services:
+#   agent*       pysnmp agents the connector POLLS and WRITES to (connectors/snmp/agent; seeds,
+#                communities and v3 users are documented in agent.py). One image, several
+#                containers: each device of connector.toml needs a host of its own.
+#   simulator    net-snmp snmptrap/snmpinform sending v1/v2c/v3 notifications to connector:162 on
+#                the suite's command (`docker compose exec simulator send-trap ...`); the device
+#                `switch` is configured for it. It depends on `agent`, so `just sim snmp` (which
+#                starts `simulator`) brings the polled agent up with it, on host port
+#                SNMP_SIM_PORT.
+#   stranger     the same image, configured as no device: what it sends must be ignored.
+#   forwarded    the same image, sending to `forwarder` instead of the connector.
+#   forwarder    net-snmp snmptrapd (`forward default udp:connector:162`). connector.toml trusts it
+#                (`forwarders`), so its notifications are routed by snmpTrapAddress.0 to the device
+#                of the ORIGINAL sender (`branch-switch`, host `forwarded`). snmptrapd 5.9 forwards
+#                v1/v2c notifications unchanged and adds no snmpTrapAddress.0 itself, so
+#                `forwarded` puts it in (`send-trap linkdown-addressed`); a plain trap through it
+#                carries none and must be dropped.
+#
+# Ports are published WITHOUT a fixed host port (parallel-safe). Pin them for manual work with
+# BROKER_PORT (`just e2e-up snmp`) and SNMP_SIM_PORT (`just sim snmp`, the demo config's 1161).
+
+# Ten services run two images, and exactly one service per image builds it (`agent`,
+# `simulator`); the rest only reference the built tag. Ten services building two identical
+# contexts is what must be avoided: compose builds in parallel, so several builds writing one
+# tag fail with `image ... already exists`, and giving each service its own tag instead makes
+# BuildKit dedupe the identical builds and leave some per-project tags untagged, which fails
+# creation with `No such image: ...:latest`. `just test-e2e` pre-builds these tags (see the
+# `_e2e` recipe), so they exist before any container is created.
+x-agent: &agent
+  image: tedge-dot-snmp-agent-sim
+
+x-notifier: &notifier
+  image: tedge-dot-snmp-sim
+
+services:
+  broker:
+    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    volumes:
+      - ../_shared/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - target: 1883
+        published: "${BROKER_PORT:-}"
+
+  # v1/v2c agent: device `agent` (v2c, GETBULK) — every value type and the writable objects.
+  agent:
+    <<: *agent
+    build:
+      context: ../..
+      dockerfile: connectors/snmp/agent/Dockerfile
+    environment:
+      SNMP_ENGINE_ID: 80001f8880e2e0000000000001
+    ports:
+      - target: 161
+        protocol: udp
+        published: "${SNMP_SIM_PORT:-}"
+
+  # device `agent-v1` (SNMPv1, GET only); stopped and started again by the outage test.
+  agent-v1:
+    <<: *agent
+    environment:
+      SNMP_ENGINE_ID: 80001f8880e2e0000000000002
+
+  # device `agent-v3-auth` (v3 authNoPriv SHA, password from a file, GET only).
+  agent-v3-auth:
+    <<: *agent
+    environment:
+      SNMP_ENGINE_ID: 80001f8880e2e0000000000003
+
+  # device `agent-v3-priv` (v3 authPriv SHA + AES-128, polled and written).
+  agent-v3-priv:
+    <<: *agent
+    environment:
+      SNMP_ENGINE_ID: 80001f8880e2e0000000000004
+
+  # device `agent-sha2` (v3 authPriv SHA-256 + AES-256).
+  agent-sha2:
+    <<: *agent
+    environment:
+      SNMP_ENGINE_ID: 80001f8880e2e0000000000005
+
+  # device `agent-badauth` (v3, configured with the wrong password).
+  agent-badauth:
+    <<: *agent
+    environment:
+      SNMP_ENGINE_ID: 80001f8880e2e0000000000006
+
+  simulator:
+    <<: *notifier
+    build:
+      context: ../..
+      dockerfile: connectors/snmp/sim/Dockerfile
+    environment:
+      TRAP_TARGET: connector:162
+      TRAP_ENGINE_ID: 80001f8880e2e000000000a001
+    depends_on:
+      agent:
+        condition: service_healthy
+
+  stranger:
+    <<: *notifier
+    environment:
+      TRAP_TARGET: connector:162
+
+  forwarded:
+    <<: *notifier
+    environment:
+      TRAP_TARGET: forwarder:162
+
+  forwarder:
+    <<: *notifier
+    environment:
+      FORWARD_TO: connector:162
+
+  connector:
+    # Stable image name so every (randomly named) project reuses the built image instead of
+    # rebuilding it. IMPL/CONNECTOR_DOCKERFILE select the implementation under test:
+    # the Rust build by default, the C build (impl/c/) via `just test-e2e-c snmp`.
+    image: tedge-dot-${IMPL:-rust}-snmp-connector
+    build:
+      context: ../..
+      dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/snmp/Dockerfile.connector}
+      args:
+        PROTOCOL: snmp
+    labels:
+      # Marks the service DeviceLibrary treats as the device under test, so `Execute Command`
+      # runs inside the connector container ("${SERIAL}:broker" etc. address the others).
+      device-test-core.role: main
+    depends_on:
+      broker:
+        condition: service_started
+      agent:
+        condition: service_healthy
+      agent-v1:
+        condition: service_healthy
+      agent-v3-auth:
+        condition: service_healthy
+      agent-v3-priv:
+        condition: service_healthy
+      agent-sha2:
+        condition: service_healthy
+      agent-badauth:
+        condition: service_healthy
+      simulator:
+        condition: service_healthy
+      stranger:
+        condition: service_healthy
+      forwarded:
+        condition: service_healthy
+      forwarder:
+        condition: service_healthy
+
+  # thin-edge flows engine (user-defined mapper, no cloud) running this repo's flows against the
+  # same broker, so the suite can check that notifications become events and alarms.
+  flows:
+    build:
+      context: ../..
+      dockerfile: connectors/_shared/Dockerfile.flows
+      args:
+        PROTOCOL: snmp
+    depends_on:
+      broker:
+        condition: service_started

@@ -75,3 +75,8 @@ async fn canopen_manifest_is_conformant() {
 async fn profibus_manifest_is_conformant() {
     assert_conformant("profibus").await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snmp_manifest_is_conformant() {
+    assert_conformant("snmp").await;
+}

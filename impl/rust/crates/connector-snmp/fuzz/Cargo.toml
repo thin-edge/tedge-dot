@@ -1,0 +1,29 @@
+[package]
+name = "connector-snmp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone: fuzzing builds with cargo-fuzz (nightly), outside the main workspace.
+[workspace]
+
+# ...so the workspace's patch does not reach it: point the fuzz build at the same patched
+# snmp2 the connector is built against (impl/rust/vendor/snmp2, see its TEDGE-DOT-PATCH.md).
+[patch.crates-io]
+snmp2 = { path = "../../../vendor/snmp2" }
+
+[dependencies]
+libfuzzer-sys = "0.4"
+connector-snmp = { path = ".." }
+tedge-dot-sdk = { path = "../../sdk" }
+
+[[bin]]
+name = "trap_message"
+path = "fuzz_targets/trap_message.rs"
+test = false
+doc = false
+bench = false
