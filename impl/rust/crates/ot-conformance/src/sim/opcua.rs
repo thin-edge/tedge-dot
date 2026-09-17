@@ -7,13 +7,27 @@
 //! *advertises the proxy's port* in its endpoints: OPC UA clients (re)connect to the
 //! advertised endpoint URL, so without this the session would bypass the proxy and
 //! transport-drop checks (B5) would test nothing.
+//!
+//! A seed with a `security` section makes the server secured (doc/connectors/
+//! opcua-connector-spec.md): it presents a certificate generated for the run, offers the
+//! listed policy/mode pairs, accepts the listed username and an X.509 user, and hands the
+//! connector a PKI directory (`[connection] pki_dir`) that already trusts the server. Values
+//! `"@password"`, `"@user_certificate"` and `"@user_private_key"` in a device's
+//! `protocol_address` are replaced with the generated credentials.
 
 use super::proxy::TransportProxy;
 use super::{PointData, PointSpec, Simulator};
 use opcua::nodes::VariableBuilder;
 use opcua::server::diagnostics::NamespaceMetadata;
 use opcua::server::node_manager::memory::{simple_node_manager, SimpleNodeManager};
-use opcua::server::{ServerBuilder, ServerHandle};
+use connector_opcua::pki::{CertificateRequest, Group, Pki};
+use opcua::crypto::SecurityPolicy;
+use opcua::crypto::Thumbprint;
+use opcua::server::authenticator::{AuthManager, DefaultAuthenticator, Password, UserToken};
+use opcua::server::{
+    ServerBuilder, ServerEndpoint, ServerHandle, ServerUserToken, ANONYMOUS_USER_TOKEN_ID,
+};
+use opcua::types::MessageSecurityMode;
 use opcua::types::{DataTypeId, DataValue, DateTime, NodeId, ObjectId, StatusCode, UAString, Variant};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -37,6 +51,40 @@ struct Seed {
     #[serde(default, rename = "$comment")]
     _comment: Option<String>,
     variables: Vec<SeedVariable>,
+    #[serde(default)]
+    security: Option<SeedSecurity>,
+}
+
+/// A secured simulator (see the module documentation).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedSecurity {
+    /// `[policy, mode]` pairs the server offers besides None, e.g.
+    /// `["Basic256Sha256", "sign_and_encrypt"]`.
+    endpoints: Vec<(String, String)>,
+    /// The username the server accepts (`"@password"` is its password).
+    user: String,
+}
+
+const SERVER_URI: &str = "urn:tedge-dot-conformance";
+
+/// The credentials and directories of a secured simulator.
+struct Secured {
+    /// Holds every generated file; removed with the simulator.
+    dir: crate::host::TempDir,
+    password: String,
+}
+
+impl Secured {
+    fn client_pki(&self) -> std::path::PathBuf {
+        self.dir.path().join("client-pki")
+    }
+    fn user_certificate(&self) -> std::path::PathBuf {
+        self.dir.path().join("user/own/certs/cert.der")
+    }
+    fn user_private_key(&self) -> std::path::PathBuf {
+        self.dir.path().join("user/own/private/key.pem")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +110,7 @@ struct VarState {
 type SharedState = Arc<Mutex<HashMap<String, VarState>>>;
 
 pub struct OpcuaSim {
+    secured: Option<Secured>,
     state: SharedState,
     outage: Arc<AtomicBool>,
     proxy: TransportProxy,
@@ -106,9 +155,16 @@ impl OpcuaSim {
             .port();
         let proxy = TransportProxy::start(internal_port).await?;
 
-        let (server, handle) = ServerBuilder::new_anonymous("tedge-dot-conformance")
-            .application_uri("urn:tedge-dot-conformance")
-            .product_uri("urn:tedge-dot-conformance")
+        let mut builder = ServerBuilder::new_anonymous("tedge-dot-conformance");
+        let mut secured = None;
+        if let Some(security) = &seed.security {
+            let (b, s) = secure_server(builder, security)?;
+            builder = b;
+            secured = Some(s);
+        }
+        let (server, handle) = builder
+            .application_uri(SERVER_URI)
+            .product_uri(SERVER_URI)
             .host("127.0.0.1")
             .port(proxy.port())
             .discovery_urls(vec![format!("opc.tcp://127.0.0.1:{}", proxy.port())])
@@ -200,6 +256,7 @@ impl OpcuaSim {
         });
 
         Ok(OpcuaSim {
+            secured,
             state,
             outage,
             proxy,
@@ -268,8 +325,148 @@ impl Simulator for OpcuaSim {
             "endpoint".into(),
             toml::Value::String(format!("opc.tcp://127.0.0.1:{}", self.proxy.port())),
         );
+        for (_, value) in table.iter_mut() {
+            let Some(text) = value.as_str() else { continue };
+            if !text.starts_with('@') {
+                continue;
+            }
+            let secured = self
+                .secured
+                .as_ref()
+                .ok_or_else(|| format!("'{text}' needs a seed with a security section"))?;
+            *value = toml::Value::String(match text {
+                "@password" => secured.password.clone(),
+                "@user_certificate" => secured.user_certificate().display().to_string(),
+                "@user_private_key" => secured.user_private_key().display().to_string(),
+                other => return Err(format!("unknown placeholder '{other}'")),
+            });
+        }
         Ok(())
     }
+
+    fn connection_overrides(&self) -> Vec<(String, toml::Value)> {
+        match &self.secured {
+            Some(secured) => vec![(
+                "pki_dir".into(),
+                toml::Value::String(secured.client_pki().display().to_string()),
+            )],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// async-opcua's default authenticator advertises its X.509 user token policy with the
+/// deprecated Basic128Rsa15, which open62541 (the C build) no longer offers, so the token
+/// could never be signed. This one advertises (and verifies with) the endpoint's own policy,
+/// as servers commonly do.
+struct EndpointPolicyAuthenticator(DefaultAuthenticator);
+
+#[async_trait::async_trait]
+impl AuthManager for EndpointPolicyAuthenticator {
+    async fn authenticate_anonymous_token(&self, endpoint: &ServerEndpoint) -> Result<(), opcua::types::Error> {
+        self.0.authenticate_anonymous_token(endpoint).await
+    }
+
+    async fn authenticate_username_identity_token(
+        &self,
+        endpoint: &ServerEndpoint,
+        username: &str,
+        password: &Password,
+    ) -> Result<UserToken, opcua::types::Error> {
+        self.0.authenticate_username_identity_token(endpoint, username, password).await
+    }
+
+    async fn authenticate_x509_identity_token(
+        &self,
+        endpoint: &ServerEndpoint,
+        signing_thumbprint: &Thumbprint,
+    ) -> Result<UserToken, opcua::types::Error> {
+        self.0.authenticate_x509_identity_token(endpoint, signing_thumbprint).await
+    }
+
+    fn user_token_policies(&self, endpoint: &ServerEndpoint) -> Vec<opcua::types::UserTokenPolicy> {
+        let mut policies = self.0.user_token_policies(endpoint);
+        for policy in &mut policies {
+            if policy.token_type == opcua::types::UserTokenType::Certificate {
+                policy.security_policy_uri = endpoint.security_policy().to_uri().into();
+            }
+        }
+        policies
+    }
+}
+
+/// Make the server secured: a generated certificate, the seeded endpoints and users, and a
+/// connector PKI directory that trusts the server certificate.
+fn secure_server(
+    builder: ServerBuilder,
+    security: &SeedSecurity,
+) -> Result<(ServerBuilder, Secured), String> {
+    let dir = crate::host::TempDir::new()?;
+    let request = |name: &str, uri: &str| CertificateRequest {
+        application_name: name.into(),
+        application_uri: uri.into(),
+        hostnames: vec!["127.0.0.1".into(), "localhost".into()],
+        days: 30,
+    };
+    let server = Pki::new(dir.path().join("server"))
+        .create(&request("tedge-dot conformance server", SERVER_URI), false)?;
+    let user = Pki::new(dir.path().join("user"))
+        .create(&request("conformance operator", "urn:tedge-dot-conformance:user"), false)?;
+    let client = Pki::new(dir.path().join("client-pki"));
+    client.ensure_layout()?;
+    let der = server
+        .certificate
+        .to_der()
+        .map_err(|_| "cannot encode the server certificate".to_string())?;
+    client.store(Group::Trusted, &der)?;
+
+    let password = format!("conformance-{}", std::process::id());
+    let user_tokens = std::collections::BTreeMap::from([
+        ("user".to_string(), ServerUserToken::user_pass(security.user.clone(), password.clone())),
+        (
+            "x509".to_string(),
+            ServerUserToken {
+                user: "x509".into(),
+                x509: Some(user.certificate_path.display().to_string()),
+                // The server fills this in for ITS copy of the tokens only; the
+                // authenticator below gets its own.
+                thumbprint: Some(user.certificate.thumbprint()),
+                ..Default::default()
+            },
+        ),
+    ]);
+    let users = vec![
+        ANONYMOUS_USER_TOKEN_ID.to_string(),
+        "user".to_string(),
+        "x509".to_string(),
+    ];
+    let mut builder = builder
+        .create_sample_keypair(false)
+        .pki_dir(dir.path().join("server-store"))
+        .certificate_path(&server.certificate_path)
+        .private_key_path(&server.private_key_path)
+        .trust_client_certs(true)
+        .with_authenticator(std::sync::Arc::new(EndpointPolicyAuthenticator(
+            DefaultAuthenticator::new(user_tokens.clone()),
+        )));
+    for (id, token) in user_tokens {
+        builder = builder.add_user_token(id, token);
+    }
+    for (i, (policy, mode)) in security.endpoints.iter().enumerate() {
+        let policy = connector_opcua::Policy::parse(policy)
+            .map(|p| SecurityPolicy::from_uri(&p.uri()))
+            .ok_or_else(|| format!("seed: unknown policy '{policy}'"))?;
+        let mode = match mode.as_str() {
+            "sign" => MessageSecurityMode::Sign,
+            "sign_and_encrypt" => MessageSecurityMode::SignAndEncrypt,
+            other => return Err(format!("seed: unknown mode '{other}'")),
+        };
+        builder = builder.add_endpoint(
+            format!("secured-{i}"),
+            ServerEndpoint::new("/", policy, mode, &users),
+        );
+    }
+    Ok((builder, Secured { dir, password }))
 }
 
 /// The point's node identifier within the simulator namespace, from its `address` object.

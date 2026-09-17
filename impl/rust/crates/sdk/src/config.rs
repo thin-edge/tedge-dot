@@ -4,9 +4,10 @@
 
 use crate::model::{DataType, Mode, Transform};
 use serde::Deserialize;
+use std::fmt;
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 pub struct ConnectorConfig {
     pub connector: ConnectorSection,
     #[serde(default)]
@@ -16,6 +17,24 @@ pub struct ConnectorConfig {
     pub connection: serde_json::Value,
     #[serde(rename = "device", default)]
     pub devices: Vec<DeviceConfig>,
+    /// The absolute directory of the configuration file, set by [`crate::library::resolve`].
+    /// Connector modules resolve relative paths in their protocol-specific settings (key
+    /// files, PKI directories) against it, never against the process working directory.
+    /// `None` for a configuration parsed without a file.
+    #[serde(skip)]
+    pub base_dir: Option<std::path::PathBuf>,
+}
+
+impl ConnectorConfig {
+    /// `path` as written in the configuration: an absolute path unchanged, a relative one
+    /// joined to [`ConnectorConfig::base_dir`] (or left relative when there is none).
+    pub fn resolve_path(&self, path: &str) -> std::path::PathBuf {
+        let p = std::path::Path::new(path);
+        match &self.base_dir {
+            Some(base) if p.is_relative() => base.join(p),
+            _ => p.to_path_buf(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -67,7 +86,7 @@ impl Default for MqttSection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 pub struct DeviceConfig {
     pub name: String,
     /// Protocol-specific device address (opaque to the contract).
@@ -97,6 +116,58 @@ pub struct DeviceConfig {
     pub points_from: Vec<String>,
     #[serde(rename = "point", default)]
     pub points: Vec<PointConfig>,
+}
+
+// The opaque protocol tables may hold credentials (an SNMP USM password, an OPC UA user
+// password), and a derived `Debug` is one `{:?}` or failed `assert_eq!` away from a log. These
+// impls print them with every credential-like value masked; see [`redacted`].
+impl fmt::Debug for ConnectorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectorConfig")
+            .field("connector", &self.connector)
+            .field("mqtt", &self.mqtt)
+            .field("connection", &redacted(&self.connection))
+            .field("devices", &self.devices)
+            .field("base_dir", &self.base_dir)
+            .finish()
+    }
+}
+
+impl fmt::Debug for DeviceConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceConfig")
+            .field("name", &self.name)
+            .field("protocol_address", &redacted(&self.protocol_address))
+            .field("device_type", &self.device_type)
+            .field("poll_interval", &self.poll_interval)
+            .field("default_mode", &self.default_mode)
+            .field("points_from", &self.points_from)
+            .field("points", &self.points)
+            .finish()
+    }
+}
+
+/// A copy of an opaque protocol table with the value of every key that names a credential
+/// (containing `password`, `secret`, `passphrase` or `token`, in any case) replaced by `"***"`,
+/// at any depth.
+pub fn redacted(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    let key = k.to_ascii_lowercase();
+                    let secret = ["password", "secret", "passphrase", "token"]
+                        .iter()
+                        .any(|word| key.contains(word));
+                    let v = if secret { Value::String("***".into()) } else { redacted(v) };
+                    (k.clone(), v)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(redacted).collect()),
+        other => other.clone(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -233,6 +304,30 @@ impl ConnectorConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_redacts_credentials_in_opaque_tables() {
+        let cfg: ConnectorConfig = toml::from_str(
+            r#"
+[connector]
+protocol = "x"
+[connection]
+Auth_Password = "conn-secret-1"
+nested = { list = [{ priv_passphrase = "conn-secret-2" }], host = "keep-me" }
+[[device]]
+name = "d"
+protocol_address = { user = "u", password = "dev-secret-3", client_secret = 42 }
+"#,
+        )
+        .unwrap();
+        let text = format!("{cfg:?}");
+        for leaked in ["conn-secret-1", "conn-secret-2", "dev-secret-3", "42"] {
+            assert!(!text.contains(leaked), "{leaked} in {text}");
+        }
+        assert!(text.contains("keep-me") && text.contains("\"u\""), "{text}");
+        // Only the Debug view is masked.
+        assert_eq!(cfg.devices[0].protocol_address["password"], "dev-secret-3");
+    }
 
     #[test]
     fn timeout_defaults_are_sane_and_overridable() {

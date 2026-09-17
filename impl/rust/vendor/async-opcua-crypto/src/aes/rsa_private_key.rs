@@ -163,6 +163,12 @@ impl PrivateKey {
         self.value.to_pkcs8_der()
     }
 
+    /// tedge-dot patch: the key as PKCS#8 PEM text with LF line endings.
+    pub fn to_pem(&self) -> pkcs8::Result<String> {
+        use pkcs8::EncodePrivateKey;
+        Ok(self.value.to_pkcs8_pem(pkcs8::LineEnding::LF)?.to_string())
+    }
+
     /// Get the public key info for this private key.
     pub fn public_key_to_info(&self) -> x509_cert::spki::Result<SubjectPublicKeyInfoOwned> {
         use rsa::pkcs8::EncodePublicKey;

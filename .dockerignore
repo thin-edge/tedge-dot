@@ -1,5 +1,12 @@
 # Build artifacts and local-only files that must not go into the Docker build context.
 target/
+# .dockerignore patterns are anchored at the context root, so nested build output needs its own
+# entries (impl/rust/target alone is gigabytes, and a build context holding it can exhaust the
+# Docker VM's disk).
+**/target/
+**/target-*/
+impl/c/build/
+impl/c/dist/
 # dist/
 connectors/*/.venv/
 connectors/*/output/

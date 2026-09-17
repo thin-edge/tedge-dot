@@ -54,7 +54,7 @@ one protocol, selected by `connector.protocol` in its config file.
 | Protocol | Transport | `tedge-dot-rs` | `tedge-dot-c` |
 |---|---|---|---|
 | Modbus (reference) | TCP + RTU | ✅ | ✅ |
-| OPC UA | opc.tcp | ✅ | ✅ |
+| OPC UA (None, Basic256Sha256, Aes128/Aes256 policies; username and X.509 users) | opc.tcp | ✅ | ✅ |
 | CAN bus | Linux SocketCAN + DBC | ✅ | ✅ |
 | CANopen | Linux SocketCAN (SDO) | ✅ | ✅ |
 | PROFIBUS-DP | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
@@ -77,6 +77,13 @@ for both directions. What a notification *means* — an event, an alarm — is d
 raised by the flows. The Rust build uses [snmp2](https://github.com/roboplc/snmp2), the C build a
 minimal static [net-snmp](https://github.com/net-snmp/net-snmp); see the
 [SNMP connector spec](doc/connectors/snmp-connector-spec.md).
+
+The OPC UA connector connects to secured servers as well as open ones: it generates (or uses) an
+application instance certificate and trusts a server only when its certificate is pinned or
+issued by a trusted CA whose CRL it has. An unknown server certificate is quarantined, and the
+device's link status says so; `tedge-dot pki trust <thumbprint>` trusts it, no restart needed.
+`tedge-dot pki` manages the whole PKI directory (`/var/lib/tedge-dot/opcua/pki`); see the
+[OPC UA connector spec](doc/connectors/opcua-connector-spec.md).
 
 ## Install
 

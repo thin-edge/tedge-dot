@@ -1,0 +1,62 @@
+# SECURED end-to-end stack for the OPC UA connector (tests/opcua_security_e2e.robot starts it
+# with `Setup OT Stack    opcua    compose_file=...`).
+#
+# simulator-secure generates the PKI test vectors (conformance/tools/genpki.py) into the
+# `pki-vectors` volume and serves one OPC UA server per PKI scenario (see
+# secure/connector.toml for the port map). The connector image is the one of
+# docker-compose.yaml (IMPL / CONNECTOR_DOCKERFILE select the implementation); secure/ is
+# mounted over it and its entrypoint builds the trust lists with `tedge-dot pki`.
+#
+# Ports are published without a fixed host port (parallel-safe); BROKER_PORT pins it by hand.
+services:
+  broker:
+    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    volumes:
+      - ../_shared/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - target: 1883
+        published: "${BROKER_PORT:-}"
+
+  simulator-secure:
+    build:
+      context: ../..
+      dockerfile: connectors/opcua/sim/Dockerfile
+    environment:
+      OPCUA_ENDPOINT_HOST: simulator-secure
+      OPCUA_PKI_VECTORS: /pki-vectors
+      OPCUA_CERT_HOSTNAMES: simulator-secure
+      OPCUA_SECURE_SERVERS: "4841=pinned,4842=ca_issued,4843=untrusted,4844=revoked,4845=wrong_host,4846=expired,4847=foreign_ca,4848=intermediate_no_crl"
+      OPCUA_SECURE_POLICIES: "Basic256Sha256_SignAndEncrypt,Basic256Sha256_Sign,Aes256Sha256RsaPss_SignAndEncrypt"
+      OPCUA_PLAIN_PORT: "4850"
+      OPCUA_USERS: "operator:operator-secret-e2e"
+    volumes:
+      - pki-vectors:/pki-vectors
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('simulator-secure', 4850), 1)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  connector:
+    image: tedge-dot-${IMPL:-rust}-opcua-connector
+    build:
+      context: ../..
+      dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/opcua/Dockerfile.connector}
+      args:
+        PROTOCOL: opcua
+    entrypoint: ["/opt/secure/entrypoint.sh"]
+    volumes:
+      - ./secure:/opt/secure:ro
+      - pki-vectors:/pki-vectors:ro
+    labels:
+      device-test-core.role: main
+    depends_on:
+      broker:
+        condition: service_started
+      simulator-secure:
+        condition: service_healthy
+
+volumes:
+  pki-vectors:

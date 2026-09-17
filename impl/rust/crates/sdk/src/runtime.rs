@@ -1823,6 +1823,15 @@ async fn handle_management(
         publish_failed(client, topic, &e, origin).await?;
         return Ok(false);
     }
+    // Nor may it set what names local files or relaxes security (the connector's list).
+    if let Err(e) = crate::library::reject_local_only_settings(
+        &config_doc.to_string(),
+        &candidate_text,
+        connector.local_only_settings(),
+    ) {
+        publish_failed(client, topic, &e, origin).await?;
+        return Ok(false);
+    }
     let new_config: ConnectorConfig = match crate::library::resolve(
         &candidate_text,
         crate::library::config_base_dir(config_path),

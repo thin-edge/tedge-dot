@@ -1,0 +1,18 @@
+# cargo-audit configuration for the Rust workspace (run `cargo audit` from impl/rust).
+#
+# Every ignored advisory states why it does not apply and when to revisit it.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — `rsa` (Marvin attack: timing side channel in RSA private-key
+    # operations; no fixed release of the crate exists yet).
+    #
+    # Pulled in by async-opcua (OPC UA security policies), pure Rust on purpose: the openssl
+    # alternative brings back the system-library cross-compile problems of the release build
+    # (openspec/changes/opcua-secure-connections/design.md, D5). The connector performs RSA
+    # private-key operations only for the asymmetric OpenSecureChannel exchange and to sign an
+    # X.509 user identity token -- a handful per (re)connect, which the connector initiates on
+    # its own backoff. A remote party cannot make it decrypt chosen ciphertexts at will, which
+    # is what the attack needs. Revisit when `rsa` ships a constant-time release (0.10).
+    "RUSTSEC-2023-0071",
+]

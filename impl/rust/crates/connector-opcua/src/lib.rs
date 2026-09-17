@@ -12,8 +12,13 @@
 //! address slots with a very different protocol.
 
 mod config;
+pub mod pki;
+pub mod pki_cli;
+pub mod security;
 
-pub use config::{NodeAddress, OpcuaConnection, OpcuaEndpoint};
+pub use config::{
+    DeviceSecurity, Identity, NodeAddress, OpcuaConnection, OpcuaEndpoint, Policy, SecurityMode,
+};
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -32,12 +37,14 @@ use opcua::client::{
     ClientBuilder, DataChangeCallback, IdentityToken, Session, SessionPollResult,
     SubscriptionActivity,
 };
-use opcua::crypto::SecurityPolicy;
+use opcua::crypto::{CertificateStore, PrivateKey, SecurityPolicy, X509};
 use opcua::types::{
     AttributeId, DataValue, MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode,
     MonitoringParameters, NodeId, ReadValueId, StatusCode, TimestampsToReturn, UAString,
     UserTokenPolicy, Variant, WriteValue,
 };
+use pki::{OwnCertificate, Pki};
+use tracing::warn;
 
 const PROTOCOL: &str = "opcua";
 
@@ -60,6 +67,9 @@ struct OpcuaPoint {
 
 struct DeviceModel {
     endpoint: OpcuaEndpoint,
+    security: DeviceSecurity,
+    /// The X.509 user identity, loaded at configure.
+    user_x509: Option<(X509, PrivateKey)>,
     points: HashMap<String, OpcuaPoint>,
 }
 
@@ -103,6 +113,8 @@ struct SessionHealth {
     connected: bool,
     /// Why the session is not usable, for the link status.
     reason: Option<String>,
+    /// The status code of the last failed (re)connect, to categorise security failures.
+    last_status: Option<StatusCode>,
     /// The last publish response (a notification or a keep-alive), or the last (re)connect. A
     /// server with a live subscription answers at least once per keep-alive window.
     last_publish: Instant,
@@ -123,9 +135,95 @@ struct SubscriptionHandle {
 #[derive(Default)]
 pub struct OpcuaConnector {
     conn: OpcuaConnection,
+    /// The PKI directory (resolved against the configuration file).
+    pki_root: std::path::PathBuf,
+    /// The application instance certificate, when a device is secured: loaded (or generated)
+    /// at configure, its failure reported per secured device.
+    own: Option<Result<OwnCertificate, String>>,
+    /// When the expiry of `own` was last warned about.
+    expiry_warned: Option<Instant>,
     devices: HashMap<String, DeviceModel>,
     sessions: HashMap<String, SessionHandle>,
     subscriptions: HashMap<String, SubscriptionHandle>,
+}
+
+impl OpcuaConnector {
+    /// Connect one device and describe the outcome as its link report.
+    async fn connect_one(&mut self, name: &str) -> LinkReport {
+        self.warn_expiry();
+        let dev = &self.devices[name];
+        let attempt = Attempt {
+            conn: &self.conn,
+            endpoint: &dev.endpoint,
+            security: &dev.security,
+            user_x509: dev.user_x509.as_ref(),
+            own: self.own.as_ref(),
+            pki_root: &self.pki_root,
+        };
+        let (result, info) = attempt.connect().await;
+        match result {
+            Ok(handle) => {
+                self.sessions.insert(name.to_string(), handle);
+                LinkReport {
+                    device: name.to_string(),
+                    status: LinkStatus::Connected,
+                    reason: None,
+                    info: Some(info),
+                }
+            }
+            Err(reason) => LinkReport {
+                device: name.to_string(),
+                status: LinkStatus::Disconnected,
+                reason: Some(reason),
+                info: Some(info),
+            },
+        }
+    }
+
+    /// Warn (at most daily) while the application certificate is close to or past its expiry.
+    fn warn_expiry(&mut self) {
+        let Some(Ok(own)) = &self.own else { return };
+        if self
+            .expiry_warned
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(86_400))
+        {
+            return;
+        }
+        let Ok(not_after) = own.certificate.not_after() else { return };
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        match security::expiry(not_after.timestamp(), now, pki::EXPIRY_WARNING_DAYS) {
+            security::Expiry::Valid => return,
+            security::Expiry::ExpiresSoon(days) => warn!(
+                "the application certificate {} expires in {days} day(s), on {not_after}; renew it with `tedge-dot pki create --force`",
+                own.certificate_path.display()
+            ),
+            security::Expiry::Expired => warn!(
+                "the application certificate {} expired on {not_after}; secured devices cannot connect",
+                own.certificate_path.display()
+            ),
+        }
+        self.expiry_warned = Some(Instant::now());
+    }
+}
+
+/// Load an X.509 user identity (certificate DER or PEM, key PEM). Errors name paths only.
+fn load_user_certificate(cert: &std::path::Path, key: &std::path::Path) -> Result<(X509, PrivateKey), String> {
+    let bytes = std::fs::read(cert)
+        .map_err(|e| format!("user_certificate '{}' cannot be read: {e}", cert.display()))?;
+    let certificate = opcua::crypto::trust_list::parse_certificates(&bytes)
+        .first()
+        .and_then(|der| X509::from_der(der).ok())
+        .ok_or_else(|| format!("user_certificate '{}' is not a certificate", cert.display()))?;
+    let private_key = PrivateKey::read_pem_file(key)
+        .map_err(|_| format!("user_private_key '{}' cannot be read as a PEM private key", key.display()))?;
+    if !certificate.matches_private_key(&private_key) {
+        return Err(format!(
+            "user_private_key '{}' does not belong to user_certificate '{}'",
+            key.display(),
+            cert.display()
+        ));
+    }
+    Ok((certificate, private_key))
 }
 
 /// Factory used by the binary to instantiate the module behind its feature flag.
@@ -136,14 +234,27 @@ pub fn factory() -> Box<dyn Connector> {
 #[async_trait]
 impl Connector for OpcuaConnector {
     fn configure(&mut self, config: &ConnectorConfig) -> Result<(), ConfigError> {
-        self.conn = serde_json::from_value(config.connection.clone()).unwrap_or_default();
+        self.conn = OpcuaConnection::from_value(&config.connection).map_err(ConfigError::Invalid)?;
+        let base_dir = config.base_dir.as_deref();
+        self.pki_root = self.conn.pki_dir(base_dir);
         self.devices.clear();
+        self.own = None;
+        self.expiry_warned = None;
 
         for d in &config.devices {
             let endpoint: OpcuaEndpoint = serde_json::from_value(d.protocol_address.clone())
                 .map_err(|e| {
                     ConfigError::Invalid(format!("device '{}' protocol_address: {e}", d.name))
                 })?;
+            let security = config::device_security(&self.conn, &endpoint, base_dir)
+                .map_err(|e| ConfigError::Invalid(format!("device '{}': {e}", d.name)))?;
+            let user_x509 = match &security.identity {
+                Identity::X509 { certificate, private_key } => Some(
+                    load_user_certificate(certificate, private_key)
+                        .map_err(|e| ConfigError::Invalid(format!("device '{}': {e}", d.name)))?,
+                ),
+                _ => None,
+            };
 
             let mut points = HashMap::new();
             for p in &d.points {
@@ -173,9 +284,29 @@ impl Connector for OpcuaConnector {
                 );
             }
             self.devices
-                .insert(d.name.clone(), DeviceModel { endpoint, points });
+                .insert(d.name.clone(), DeviceModel { endpoint, security, user_x509, points });
+        }
+
+        // Only a configuration with a secured device needs (and may create) a certificate.
+        if self.devices.values().any(|d| d.security.is_secure()) {
+            let own = Pki::new(&self.pki_root).load_or_create_own(&self.conn, base_dir);
+            match &own {
+                Ok(own) if own.generated => tracing::info!(
+                    "generated the application certificate {} (thumbprint {})",
+                    own.certificate_path.display(),
+                    pki::thumbprint(&own.certificate.to_der().unwrap_or_default())
+                ),
+                Ok(_) => {}
+                Err(e) => warn!("application certificate: {e}"),
+            }
+            self.own = Some(own);
+            self.warn_expiry();
         }
         Ok(())
+    }
+
+    fn local_only_settings(&self) -> &'static [&'static str] {
+        config::LOCAL_ONLY_SETTINGS
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -208,24 +339,8 @@ impl Connector for OpcuaConnector {
         let names: Vec<String> = self.devices.keys().cloned().collect();
         let mut reports = Vec::new();
         for name in names {
-            let endpoint = self.devices[&name].endpoint.clone();
-            match connect_device(&self.conn, &endpoint).await {
-                Ok(handle) => {
-                    self.sessions.insert(name.clone(), handle);
-                    reports.push(LinkReport {
-                        device: name,
-                        status: LinkStatus::Connected,
-                        reason: None,
-                        info: None,
-                    });
-                }
-                Err(e) => reports.push(LinkReport {
-                    device: name,
-                    status: LinkStatus::Disconnected,
-                    reason: Some(e),
-                    info: None,
-                }),
-            }
+            let report = self.connect_one(&name).await;
+            reports.push(report);
         }
         Ok(reports)
     }
@@ -520,11 +635,9 @@ impl Connector for OpcuaConnector {
     }
 
     async fn reconnect(&mut self, device: &DeviceId) -> Result<LinkReport, ConnectorError> {
-        let endpoint = self
-            .devices
-            .get(device)
-            .map(|d| d.endpoint.clone())
-            .ok_or_else(|| ConnectorError::Other(format!("unknown device '{device}'")))?;
+        if !self.devices.contains_key(device) {
+            return Err(ConnectorError::Other(format!("unknown device '{device}'")));
+        }
         // Tear down the old session first. It is not necessarily dead -- a reconnect also follows
         // reads failing at application level, or a server that stopped publishing -- so it is
         // closed on the server when that is still possible (see `close_session`).
@@ -534,17 +647,7 @@ impl Connector for OpcuaConnector {
         if let Some(handle) = self.sessions.remove(device) {
             close_session(handle).await;
         }
-        match connect_device(&self.conn, &endpoint).await {
-            Ok(handle) => {
-                self.sessions.insert(device.clone(), handle);
-                Ok(LinkReport::new(device.clone(), LinkStatus::Connected, None))
-            }
-            Err(e) => Ok(LinkReport::new(
-                device.clone(),
-                LinkStatus::Disconnected,
-                Some(e),
-            )),
-        }
+        Ok(self.connect_one(device).await)
     }
 
     async fn execute(
@@ -649,96 +752,290 @@ fn node_id_from(addr: &NodeAddress) -> Result<NodeId, String> {
     }
 }
 
-/// Connect to one OPC-UA server endpoint and wait for the session to activate.
-async fn connect_device(
-    conn: &OpcuaConnection,
-    endpoint: &OpcuaEndpoint,
-) -> Result<SessionHandle, String> {
-    let mut client = ClientBuilder::new()
-        .application_name(conn.application_name.clone())
-        .application_uri(conn.application_uri.clone())
-        .trust_server_certs(true)
-        .create_sample_keypair(false)
-        .session_retry_limit(3)
-        .client()
-        .map_err(|e| format!("client build failed: {e:?}"))?;
+/// Everything one connect attempt needs.
+struct Attempt<'a> {
+    conn: &'a OpcuaConnection,
+    endpoint: &'a OpcuaEndpoint,
+    security: &'a DeviceSecurity,
+    user_x509: Option<&'a (X509, PrivateKey)>,
+    own: Option<&'a Result<OwnCertificate, String>>,
+    pki_root: &'a std::path::Path,
+}
 
-    let policy_str = endpoint
-        .security_policy
-        .as_deref()
-        .or(conn.security_policy.as_deref())
-        .unwrap_or("None");
-    let policy = SecurityPolicy::from_str(policy_str)
-        .map_err(|_| format!("unknown security_policy '{policy_str}'"))?;
-    let mode = parse_security_mode(
-        endpoint
-            .security_mode
-            .as_deref()
-            .or(conn.security_mode.as_deref()),
-    );
-    let identity = match (&endpoint.user, &endpoint.password) {
-        (Some(u), Some(p)) => IdentityToken::UserName(u.clone(), p.clone().into()),
-        (Some(u), None) => IdentityToken::UserName(u.clone(), String::new().into()),
-        _ => IdentityToken::Anonymous,
-    };
+impl Attempt<'_> {
+    /// Connect to one OPC-UA server endpoint and wait for the session to activate. Returns the
+    /// link `info` either way (spec §8): the endpoint, the effective policy and mode and, once
+    /// known, the server certificate's thumbprint and whether it was verified.
+    async fn connect(&self) -> (Result<SessionHandle, String>, serde_json::Value) {
+        let mut info = serde_json::json!({
+            "endpoint": self.endpoint.endpoint,
+            "security_policy": self.security.policy.name(),
+            "security_mode": self.security.mode.name(),
+        });
+        let result = self.try_connect(&mut info).await;
+        (result, info)
+    }
 
-    let endpoint_desc = (
-        endpoint.endpoint.as_str(),
-        policy.to_str(),
-        mode,
-        UserTokenPolicy::anonymous(),
-    );
-    // Without message security there is nothing endpoint discovery provides (no server
-    // certificate to fetch), so dial the configured address directly. This also keeps the
-    // session on the address the operator wrote: industrial servers routinely sit behind
-    // NAT/gateways and advertise endpoint URLs the client cannot reach — following the
-    // discovery redirect would break exactly those setups. Secure endpoints still go
-    // through discovery, which supplies the server certificate.
-    let (session, event_loop) = if policy == SecurityPolicy::None
-        && mode == MessageSecurityMode::None
-    {
-        client
-            .connect_to_endpoint_directly(endpoint_desc, identity)
-            .map_err(|e| format!("connect failed: {e}"))?
-    } else {
-        client
-            .connect_to_matching_endpoint(endpoint_desc, identity)
-            .await
-            .map_err(|e| format!("connect failed: {e}"))?
-    };
+    async fn try_connect(&self, info: &mut serde_json::Value) -> Result<SessionHandle, String> {
+        let security = self.security;
+        let secure = security.is_secure();
+        let url = self.endpoint.endpoint.as_str();
 
-    let health = Arc::new(Mutex::new(SessionHealth {
-        connected: false,
-        reason: None,
-        last_publish: Instant::now(),
-    }));
-    let handle = AbortOnDrop(tokio::spawn(drive_session(event_loop.enter(), health.clone())));
-    let timeout = Duration::from_secs(conn.connect_timeout_s.max(1));
-    match tokio::time::timeout(timeout, session.wait_for_connection()).await {
-        Ok(true) => {
-            // The event loop reports the connect as well, but a check made right after this
-            // returns can run before that report is recorded. A loss recorded since keeps its
-            // reason, and wins.
-            {
-                let mut state = lock_health(&health);
-                if state.reason.is_none() {
-                    state.connected = true;
+        let own = if secure {
+            let own = match self.own {
+                Some(Ok(own)) => own,
+                Some(Err(e)) => return Err(format!("{} {e}", security::APPLICATION_CERTIFICATE)),
+                None => {
+                    return Err(format!(
+                        "{} none loaded",
+                        security::APPLICATION_CERTIFICATE
+                    ))
+                }
+            };
+            if let Ok(not_after) = own.certificate.not_after() {
+                let now = OffsetDateTime::now_utc().unix_timestamp();
+                if security::expiry(not_after.timestamp(), now, 0) == security::Expiry::Expired {
+                    return Err(format!(
+                        "{} {} expired on {not_after}",
+                        security::APPLICATION_CERTIFICATE,
+                        own.certificate_path.display()
+                    ));
                 }
             }
-            Ok(SessionHandle {
-                session,
-                health,
-                event_loop: handle,
-            })
+            Some(own)
+        } else {
+            None
+        };
+
+        let mut builder = ClientBuilder::new()
+            .application_name(self.conn.application_name.clone())
+            .application_uri(self.conn.application_uri.clone())
+            .pki_dir(self.pki_root)
+            .trust_server_certs(security.trust_any_server_certificate)
+            .create_sample_keypair(false)
+            .session_retry_limit(3);
+        if let Some(own) = own {
+            builder = builder
+                .certificate_path(&own.certificate_path)
+                .private_key_path(&own.private_key_path);
         }
-        Ok(false) => {
-            handle.abort();
-            Err("session failed to connect".to_string())
+        let mut client = builder
+            .client()
+            .map_err(|e| format!("client build failed: {e:?}"))?;
+
+        let identity = match (&security.identity, self.user_x509) {
+            (Identity::UserName { user, password }, _) => {
+                IdentityToken::UserName(user.clone(), password.expose().to_string().into())
+            }
+            (Identity::X509 { .. }, Some((cert, key))) => {
+                IdentityToken::X509(Box::new(cert.clone()), Box::new(key.clone()))
+            }
+            _ => IdentityToken::Anonymous,
+        };
+        let connect_timeout = Duration::from_secs(self.conn.connect_timeout_s.max(1));
+
+        // An anonymous session without message security needs nothing endpoint discovery
+        // provides (no server certificate, no token policy), so it dials the configured address
+        // directly -- which also keeps working with servers whose discovery answers are broken.
+        // Everything else discovers, then still dials the configured address (see
+        // `security::select_endpoint`): industrial servers routinely sit behind NAT/gateways
+        // and advertise endpoint URLs the client cannot reach.
+        let (session, event_loop, server_verified) =
+            if !secure && security.identity == Identity::Anonymous {
+                let desc = (
+                    url,
+                    SecurityPolicy::None.to_str(),
+                    MessageSecurityMode::None,
+                    UserTokenPolicy::anonymous(),
+                );
+                let (session, event_loop) = client
+                    .connect_to_endpoint_directly(desc, identity)
+                    .map_err(|e| format!("connect failed: {e}"))?;
+                (session, event_loop, false)
+            } else {
+                let endpoints = tokio::time::timeout(
+                    connect_timeout,
+                    client.get_server_endpoints_from_url(url),
+                )
+                .await
+                .map_err(|_| {
+                    format!(
+                        "timed out after {}s asking the server for its endpoints",
+                        connect_timeout.as_secs()
+                    )
+                })?
+                .map_err(|e| format!("connect failed: {e}"))?;
+                let chosen = security::select_endpoint(&endpoints, security, url)?;
+
+                if matches!(security.identity, Identity::UserName { .. })
+                    && security::password_in_plaintext(&chosen)
+                {
+                    if !security.allow_plaintext_password {
+                        return Err(format!(
+                            "{} the server's endpoint would receive the password unencrypted (no message security and no token encryption); use a secured policy or set allow_plaintext_password = true",
+                            security::PLAINTEXT_PASSWORD_REFUSED
+                        ));
+                    }
+                    warn!(endpoint = url, "sending the password unencrypted (allow_plaintext_password)");
+                }
+
+                let verified = if secure {
+                    self.check_server_certificate(&chosen, info)?
+                } else {
+                    false
+                };
+                let (session, event_loop) = client
+                    .connect_to_endpoint_directly(chosen, identity)
+                    .map_err(|e| format!("connect failed: {e}"))?;
+                (session, event_loop, verified)
+            };
+
+        let health = Arc::new(Mutex::new(SessionHealth {
+            connected: false,
+            reason: None,
+            last_status: None,
+            last_publish: Instant::now(),
+        }));
+        let handle = AbortOnDrop(tokio::spawn(drive_session(event_loop.enter(), health.clone())));
+        let failed = wait_for_security_failure(&health);
+        let outcome = tokio::time::timeout(connect_timeout, async {
+            tokio::select! {
+                connected = session.wait_for_connection() => connected,
+                () = failed => false,
+            }
+        })
+        .await;
+        match outcome {
+            Ok(true) => {
+                // The event loop reports the connect as well, but a check made right after this
+                // returns can run before that report is recorded. A loss recorded since keeps its
+                // reason, and wins.
+                {
+                    let mut state = lock_health(&health);
+                    if state.reason.is_none() {
+                        state.connected = true;
+                    }
+                }
+                Ok(SessionHandle {
+                    session,
+                    health,
+                    event_loop: handle,
+                })
+            }
+            Ok(false) => {
+                handle.abort();
+                let status = lock_health(&health).last_status;
+                Err(self.failure_reason(status, server_verified, own))
+            }
+            Err(_) => {
+                handle.abort();
+                let status = lock_health(&health).last_status;
+                match status.and_then(security::category) {
+                    Some(_) => Err(self.failure_reason(status, server_verified, own)),
+                    None => Err(format!(
+                        "timed out after {}s waiting for connection",
+                        connect_timeout.as_secs()
+                    )),
+                }
+            }
         }
-        Err(_) => {
-            handle.abort();
-            Err(format!("timed out after {}s waiting for connection", timeout.as_secs()))
+    }
+
+    /// Validate the certificate the chosen endpoint advertises against the PKI directory
+    /// before dialling, recording its thumbprint in `info`. `Ok(true)`: verified and trusted;
+    /// `Ok(false)`: accepted unverified (`trust_any_server_certificate`).
+    fn check_server_certificate(
+        &self,
+        chosen: &opcua::types::EndpointDescription,
+        info: &mut serde_json::Value,
+    ) -> Result<bool, String> {
+        let cert = X509::from_byte_string(&chosen.server_certificate).map_err(|_| {
+            format!(
+                "{} the server advertises no usable certificate",
+                security::CERTIFICATE_INVALID
+            )
+        })?;
+        let der = cert.to_der().unwrap_or_default();
+        let thumbprint = pki::thumbprint(&der);
+        info["server_thumbprint"] = thumbprint.clone().into();
+        if self.security.trust_any_server_certificate {
+            warn!(
+                endpoint = %self.endpoint.endpoint,
+                "server certificate {thumbprint} is accepted without verification (trust_any_server_certificate)"
+            );
+            info["server_certificate"] = "not_verified".into();
+            return Ok(false);
         }
+        let host = security::url_host(&self.endpoint.endpoint).unwrap_or_default();
+        let policy = SecurityPolicy::from_uri(&self.security.policy.uri());
+        let store = CertificateStore::new(self.pki_root);
+        if let Err(status) = store.validate_or_reject_application_instance_cert(
+            &cert,
+            policy,
+            Some(&host),
+            Some(chosen.server.application_uri.as_ref()),
+        ) {
+            let category = security::category(status).unwrap_or(security::CERTIFICATE_INVALID);
+            let mut reason = format!(
+                "{category} {} ({status}; thumbprint {thumbprint}, subject {})",
+                security::describe(status),
+                cert.subject_text()
+            );
+            if category == security::CERTIFICATE_UNTRUSTED {
+                reason.push_str(&format!(
+                    "; trust it with `tedge-dot pki trust {}`",
+                    &thumbprint[..8]
+                ));
+            }
+            return Err(reason);
+        }
+        info["server_certificate"] = "trusted".into();
+        Ok(true)
+    }
+
+    /// The link reason for a session that did not activate.
+    fn failure_reason(
+        &self,
+        status: Option<StatusCode>,
+        server_verified: bool,
+        own: Option<&OwnCertificate>,
+    ) -> String {
+        let Some(status) = status else {
+            return "session failed to connect".to_string();
+        };
+        match security::category(status) {
+            // The server certificate passed our checks, so the refusal is the server's: it does
+            // not accept this connector's certificate.
+            Some(security::CERTIFICATE_UNTRUSTED) if server_verified || own.is_some() => {
+                let thumbprint = own
+                    .and_then(|o| o.certificate.to_der().ok())
+                    .map(|d| pki::thumbprint(&d))
+                    .unwrap_or_default();
+                format!(
+                    "{} the server rejected the connection ({status}); it may not trust this connector's application certificate (thumbprint {thumbprint}, export it with `tedge-dot pki export`)",
+                    security::CERTIFICATE_UNTRUSTED
+                )
+            }
+            Some(security::IDENTITY_REJECTED) => format!(
+                "{} the server rejected the {} identity ({status})",
+                security::IDENTITY_REJECTED,
+                self.security.identity.kind()
+            ),
+            Some(category) => format!("{category} {} ({status})", security::describe(status)),
+            None => format!("session failed to connect: {status}"),
+        }
+    }
+}
+
+/// Resolves once the event loop has recorded a failure that retrying cannot fix (a security
+/// failure), so the attempt ends without waiting out the retries and the timeout.
+async fn wait_for_security_failure(health: &Mutex<SessionHealth>) {
+    loop {
+        let status = lock_health(health).last_status;
+        if status.and_then(security::category).is_some() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -759,10 +1056,12 @@ async fn drive_session(
             }
             Some(Ok(SessionPollResult::ConnectionLost(status))) => {
                 state.connected = false;
+                state.last_status = Some(status);
                 state.reason = Some(format!("connection lost: {status}"));
             }
             Some(Ok(SessionPollResult::ReconnectFailed(status))) => {
                 state.connected = false;
+                state.last_status = Some(status);
                 state.reason = Some(format!("reconnect failed: {status}"));
             }
             Some(Ok(SessionPollResult::Subscription(SubscriptionActivity::Publish))) => {
@@ -771,6 +1070,7 @@ async fn drive_session(
             Some(Ok(_)) => {}
             Some(Err(status)) => {
                 state.connected = false;
+                state.last_status = Some(status);
                 state.reason = Some(format!("session gave up reconnecting: {status}"));
                 return;
             }
@@ -798,14 +1098,6 @@ async fn close_session(handle: SessionHandle) {
         let _ = tokio::time::timeout(CLOSE_SESSION_TIMEOUT, handle.session.disconnect()).await;
     }
     handle.event_loop.abort();
-}
-
-fn parse_security_mode(mode: Option<&str>) -> MessageSecurityMode {
-    match mode.map(|m| m.to_ascii_lowercase()).as_deref() {
-        Some("sign") => MessageSecurityMode::Sign,
-        Some("sign_and_encrypt") | Some("signandencrypt") => MessageSecurityMode::SignAndEncrypt,
-        _ => MessageSecurityMode::None,
-    }
 }
 
 /// Convert an OPC-UA `Variant` into the SDK value model plus a best-effort raw byte echo.

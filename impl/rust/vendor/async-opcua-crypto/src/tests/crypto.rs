@@ -30,11 +30,39 @@ fn create_cert() {
     println!("Not after = {not_after}");
 }
 
+/// tedge-dot patch: a server certificate chain (leaf first) yields the leaf.
+#[test]
+fn certificate_chain_yields_the_leaf() {
+    let (leaf, _) = make_test_cert_2048();
+    let (issuer, _) = make_test_cert_1024();
+    let mut chain = leaf.to_der().unwrap();
+    chain.extend(issuer.to_der().unwrap());
+    let parsed = X509::from_byte_string(&opcua_types::ByteString::from(&chain)).unwrap();
+    assert_eq!(parsed.to_der().unwrap(), leaf.to_der().unwrap());
+    // A single certificate still parses; the strict DER parser still refuses a chain.
+    let single = X509::from_byte_string(&leaf.as_byte_string()).unwrap();
+    assert_eq!(single.to_der().unwrap(), leaf.to_der().unwrap());
+    assert!(X509::from_der(&chain).is_err());
+    // Garbage does not.
+    assert!(X509::from_byte_string(&opcua_types::ByteString::from(&[0x30u8, 0x03, 1, 2][..])).is_err());
+}
+
 #[test]
 fn ensure_pki_path() {
     let (tmp_dir, cert_store) = make_certificate_store();
     let pki = cert_store.pki_path.clone();
-    for dirname in ["rejected", "trusted"].iter() {
+    // tedge-dot patch: the Part 12 layout.
+    for dirname in [
+        "own/certs",
+        "own/private",
+        "trusted/certs",
+        "trusted/crl",
+        "issuers/certs",
+        "issuers/crl",
+        "rejected/certs",
+    ]
+    .iter()
+    {
         let mut subdir = pki.to_path_buf();
         subdir.push(dirname);
         assert!(subdir.exists());
@@ -388,7 +416,8 @@ fn sign_hmac_sha256() {
 #[test]
 fn generate_nonce() {
     // Generate a random nonce through the function and ensure it is the expected length
-    assert!(SecurityPolicy::None.random_nonce().is_null());
+    // tedge-dot patch (TEDGE-DOT-PATCH.md): 32 bytes even for None, not a null ByteString.
+    assert_eq!(SecurityPolicy::None.random_nonce().as_ref().len(), 32);
     assert_eq!(
         SecurityPolicy::Basic128Rsa15.random_nonce().as_ref().len(),
         16

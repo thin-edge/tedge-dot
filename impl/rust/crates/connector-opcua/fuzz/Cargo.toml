@@ -1,0 +1,30 @@
+[package]
+name = "connector-opcua-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone: fuzzing builds with cargo-fuzz (nightly), outside the main workspace.
+[workspace]
+
+# ...so the workspace's patch does not reach it: point the fuzz build at the same patched
+# certificate store the connector is built against (impl/rust/vendor/async-opcua-crypto, see
+# its TEDGE-DOT-PATCH.md).
+[patch.crates-io]
+async-opcua-crypto = { path = "../../../vendor/async-opcua-crypto" }
+
+[dependencies]
+libfuzzer-sys = "0.4"
+async-opcua = { version = "0.18", default-features = false, features = ["client"] }
+chrono = "0.4"
+
+[[bin]]
+name = "pki_files"
+path = "fuzz_targets/pki_files.rs"
+test = false
+doc = false
+bench = false

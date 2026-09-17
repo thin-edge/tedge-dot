@@ -1,1 +1,3 @@
 asyncua~=1.1
+# asyncua needs it for secured endpoints; pinned explicitly because server.py loads certificates.
+cryptography>=42

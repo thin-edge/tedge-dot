@@ -88,7 +88,7 @@ upstream — the async-opcua precedent) rather than worked around with a second 
 | `user` | yes | USM user name. |
 | `level` | no | `"noAuthNoPriv"`, `"authNoPriv"`, `"authPriv"`; default derived from which passwords are present. |
 | `auth_protocol` | with auth | `"MD5"`, `"SHA"` (SHA-1); `"SHA224"`, `"SHA256"`, `"SHA384"`, `"SHA512"`: Rust only (capability `snmpv3-sha2`, §10). |
-| `auth_password` / `auth_password_file` | with auth | Exactly one. A `_file` path is read at configure (first line, trailing newline stripped), so the secret need not live in a config file management commands rewrite. |
+| `auth_password` / `auth_password_file` | with auth | Exactly one. A `_file` path is read at configure (first line, trailing newline stripped), so the secret need not live in a config file management commands rewrite. A management command may not add or change either `_file` key (contract §3.4). |
 | `priv_protocol` | with priv | `"DES"`, `"AES"` (AES-128). `"AES192"`, `"AES256"` (Blumenthal key extension): Rust only (capability `snmpv3-sha2`, §10). |
 | `priv_password` / `priv_password_file` | with priv | Exactly one. |
 | `context` | no | Context name for requests. |

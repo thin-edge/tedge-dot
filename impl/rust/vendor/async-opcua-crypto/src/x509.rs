@@ -427,6 +427,15 @@ impl X509 {
         Ok(X509 { value: val })
     }
 
+    /// The first certificate of a DER chain (one certificate, or several concatenated).
+    pub fn from_der_first(data: &[u8]) -> Result<Self, X509Error> {
+        use x509::der::{Decode, SliceReader};
+
+        let mut reader = SliceReader::new(data)?;
+        let val = x509::certificate::Certificate::decode(&mut reader)?;
+        Ok(X509 { value: val })
+    }
+
     /// Serialize the X509 file to a der file.
     pub fn to_der(&self) -> Result<Vec<u8>, X509Error> {
         use x509_cert::der::Encode;
@@ -516,7 +525,13 @@ impl X509 {
 
         let signing_key = pkcs1v15::SigningKey::<sha2::Sha256>::new(pkey.value.clone());
 
-        let serial_number = SerialNumber::from(42u32);
+        // tedge-dot patch: a random positive serial (upstream uses 42 for every certificate).
+        let serial_number = {
+            let mut bytes = [0u8; 16];
+            crate::random::bytes(&mut bytes);
+            bytes[0] = (bytes[0] & 0x7f) | 0x01;
+            SerialNumber::new(&bytes).map_err(BuilderError::Asn1)?
+        };
 
         let subject;
 
@@ -612,7 +627,10 @@ impl X509 {
                 "Cannot make certificate from null bytestring",
             ))
         } else {
-            let r = Self::from_der(data.value.as_ref().unwrap());
+            // tedge-dot patch: a server may send its certificate chain (OPC UA Part 6 §6.7.2:
+            // the leaf first, then its issuers, concatenated). The leaf is the certificate;
+            // the issuers are ignored (CAs come from the trust list).
+            let r = Self::from_der_first(data.value.as_ref().unwrap());
             match r {
                 Err(e) => Err(Error::new(StatusCode::BadCertificateInvalid, e)),
                 Ok(cert) => Ok(cert),
@@ -807,6 +825,55 @@ impl X509 {
         Thumbprint::new(&digest)
     }
 
+    /// tedge-dot patch: the subject as `CN=a, O=b` in encoding order (the form mbedTLS'
+    /// `x509_dn_gets` prints, so both tedge-dot builds show the same text).
+    pub fn subject_text(&self) -> String {
+        name_text(&self.value.tbs_certificate.subject)
+    }
+
+    /// tedge-dot patch: the issuer, as [`X509::subject_text`].
+    pub fn issuer_text(&self) -> String {
+        name_text(&self.value.tbs_certificate.issuer)
+    }
+
+    /// tedge-dot patch: the common name's value (upstream's `common_name` returns `CN=value`).
+    pub fn common_name_value(&self) -> Option<String> {
+        self.common_name().ok().map(|cn| attribute_value(&cn))
+    }
+
+    /// tedge-dot patch: whether `pkey` is the private key of this certificate's public key.
+    pub fn matches_private_key(&self, pkey: &PrivateKey) -> bool {
+        use x509_cert::der::Encode;
+        match (
+            pkey.public_key_to_info().ok().and_then(|i| i.to_der().ok()),
+            self.value.tbs_certificate.subject_public_key_info.to_der(),
+        ) {
+            (Some(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    /// tedge-dot patch: every subject alternative name as text (URIs, DNS names, IP addresses),
+    /// in certificate order.
+    pub fn alternate_names(&self) -> Vec<String> {
+        self.get_alternate_names()
+            .map(|names| names.iter().filter_map(AlternateNames::convert_name).collect())
+            .unwrap_or_default()
+    }
+
+    /// tedge-dot patch: the issuer name, in the same form as [`X509::subject_name`].
+    pub fn issuer_name(&self) -> String {
+        self.value.tbs_certificate.issuer.to_string().replace(";", "/")
+    }
+
+    /// tedge-dot patch: whether the certificate is a CA (basicConstraints cA = TRUE).
+    pub fn is_ca(&self) -> bool {
+        matches!(
+            self.value.tbs_certificate.get::<x509::ext::pkix::BasicConstraints>(),
+            Ok(Some((_, x509::ext::pkix::BasicConstraints { ca: true, .. })))
+        )
+    }
+
     /// Turn the Asn1 values into useful portable types
     pub fn not_before(&self) -> Result<ChronoUtc, X509Error> {
         let dur = self
@@ -896,4 +963,37 @@ mod tests {
             assert!(x509.is_hostname_valid(n.as_str()).is_ok());
         })
     }
+}
+
+/// tedge-dot patch: `CN=a, O=b` in encoding order, values unescaped.
+fn name_text(name: &x509::name::Name) -> String {
+    name.0
+        .iter()
+        .flat_map(|rdn| rdn.0.iter())
+        .map(|atv| {
+            let text = atv.to_string();
+            match text.split_once('=') {
+                Some((key, _)) => format!("{key}={}", attribute_value(&text)),
+                None => text,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// tedge-dot patch: the value of an RFC 4514 `KEY=value` string, backslash escapes removed.
+fn attribute_value(text: &str) -> String {
+    let value = text.split_once('=').map_or(text, |(_, v)| v);
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }

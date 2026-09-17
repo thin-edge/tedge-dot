@@ -151,6 +151,8 @@ static void publish_link_status(rt_t *rt, tdot_device_t *dev) {
     for (size_t j = 0; points && j < dev->npoints; j++)
         cJSON_AddItemToArray(points, cJSON_CreateString(dev->points[j].id));
     cJSON_AddStringToObject(obj, "since", ts);
+    if (dev->link != TDOT_LINK_CONNECTED && dev->link_reason[0])
+        cJSON_AddStringToObject(obj, "reason", dev->link_reason);
     /* Optional device descriptor from the module (contract status schema
      * `info`); the registration flow forwards it into a twin fragment. */
     if (rt->conn->device_info) {
@@ -227,14 +229,16 @@ static void arm_subscriptions(rt_t *rt, tdot_device_t *dev) {
 }
 
 static void connect_device(rt_t *rt, tdot_device_t *dev) {
-    char err[TDOT_ERR_MAX];
+    char err[TDOT_REASON_MAX] = "";
     if (rt->conn->connect_device(rt->conn, dev, err, sizeof err) == 0) {
+        dev->link_reason[0] = '\0';
         dev->backoff_s = 0;
         arm_subscriptions(rt, dev);
         publish_link(rt, dev, TDOT_LINK_CONNECTED);
     } else {
         clear_subscriptions(dev);
         logmsg("warn", "device %s: connect failed: %s", dev->name, err);
+        snprintf(dev->link_reason, sizeof dev->link_reason, "%s", err);
         publish_link(rt, dev, TDOT_LINK_DISCONNECTED);
         dev->backoff_s = dev->backoff_s > 0
                              ? (dev->backoff_s * 2 > BACKOFF_MAX_S
@@ -1015,6 +1019,80 @@ static int reject_path_references(const cJSON *before, const cJSON *after,
     return 0;
 }
 
+static bool listed(const char *const *keys, const char *key) {
+    for (; *keys; keys++)
+        if (strcmp(*keys, key) == 0)
+            return true;
+    return false;
+}
+
+/* Walk `node` (a table); for each restricted key, require the same value at the
+ * same path in `prev`. `path` holds the dotted path so far. */
+static int check_local_only(const cJSON *node, const cJSON *prev, const char *const *keys,
+                            char *path, size_t plen, const char *place, char *reason,
+                            size_t rlen) {
+    if (!cJSON_IsObject(node))
+        return 0;
+    size_t base = strlen(path);
+    const cJSON *item;
+    cJSON_ArrayForEach(item, node) {
+        snprintf(path + base, plen - base, "%s%s", base ? "." : "", item->string);
+        const cJSON *old = cJSON_IsObject(prev)
+                               ? cJSON_GetObjectItemCaseSensitive(prev, item->string)
+                               : NULL;
+        if (listed(keys, item->string)) {
+            if (!old || !cJSON_Compare(old, item, 1)) {
+                snprintf(reason, rlen,
+                         "%s%s may only be set in the configuration file, not by a "
+                         "management command",
+                         place, path);
+                path[base] = '\0';
+                return -1;
+            }
+        } else if (check_local_only(item, old, keys, path, plen, place, reason, rlen) != 0) {
+            path[base] = '\0';
+            return -1;
+        }
+    }
+    path[base] = '\0';
+    return 0;
+}
+
+int tdot_reject_local_only_settings(const cJSON *before, const cJSON *after,
+                                    const char *const *keys, char *reason, size_t rlen) {
+    if (!keys || !*keys)
+        return 0;
+    char path[512] = "";
+    if (check_local_only(cJSON_GetObjectItemCaseSensitive(after, "connection"),
+                         cJSON_GetObjectItemCaseSensitive(before, "connection"), keys, path,
+                         sizeof path, "[connection] ", reason, rlen) != 0)
+        return -1;
+    const cJSON *devices = cJSON_GetObjectItemCaseSensitive(after, "device");
+    const cJSON *old_devices = cJSON_GetObjectItemCaseSensitive(before, "device");
+    if (!cJSON_IsArray(devices))
+        return 0;
+    const cJSON *dev;
+    cJSON_ArrayForEach(dev, devices) {
+        const cJSON *name = cJSON_GetObjectItemCaseSensitive(dev, "name");
+        const char *device = cJSON_IsString(name) ? name->valuestring : "<unnamed>";
+        const cJSON *prev = NULL, *d;
+        if (cJSON_IsArray(old_devices))
+            cJSON_ArrayForEach(d, old_devices) {
+                const cJSON *n = cJSON_GetObjectItemCaseSensitive(d, "name");
+                if (cJSON_IsString(n) && strcmp(n->valuestring, device) == 0) {
+                    prev = cJSON_GetObjectItemCaseSensitive(d, "protocol_address");
+                    break;
+                }
+            }
+        char place[300];
+        snprintf(place, sizeof place, "device '%s': protocol_address.", device);
+        if (check_local_only(cJSON_GetObjectItemCaseSensitive(dev, "protocol_address"), prev,
+                             keys, path, sizeof path, place, reason, rlen) != 0)
+            return -1;
+    }
+    return 0;
+}
+
 static cJSON *find_device(cJSON *devices, const char *name, int *index) {
     int i = 0;
     cJSON *d;
@@ -1187,6 +1265,9 @@ static void handle_management(rt_t *rt, const char *topic, const char *verb,
     int rc = apply_management(doc, verb, req, reason, sizeof reason);
     if (rc == 0)
         rc = reject_path_references(before, doc, reason, sizeof reason);
+    if (rc == 0) /* nor what names local files or relaxes security */
+        rc = tdot_reject_local_only_settings(before, doc, rt->conn->local_only_settings,
+                                             reason, sizeof reason);
     cJSON_Delete(before);
     if (rc != 0) {
         cJSON_Delete(doc);

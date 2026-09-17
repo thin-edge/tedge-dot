@@ -106,6 +106,7 @@ Read them roughly in this order:
 | 5 | [sdk/connector-sdk.md](sdk/connector-sdk.md) | The Rust SDK and the `Connector` trait every protocol module implements; what the runtime provides for free. |
 | 6 | [connectors/modbus-connector-spec.md](connectors/modbus-connector-spec.md) | **AI-implementable** reference spec for the Modbus connector, including decode rules and acceptance test vectors. |
 | 6a | [connectors/snmp-connector-spec.md](connectors/snmp-connector-spec.md) | Spec for the SNMP trap receiver (v1/v2c traps and informs): device matching by source address, trap/varbind points, the BER decoding rules and the golden vectors both implementations are held to. |
+| 6b | [connectors/opcua-connector-spec.md](connectors/opcua-connector-spec.md) | Spec for the OPC UA connector's sessions and security: policies and modes, the application certificate, the PKI directory and trust rules (pinned, CA chain, CRLs), user identities, the link-status reasons and `tedge-dot pki`. |
 | 7 | [connectors/_template-connector-spec.md](connectors/_template-connector-spec.md) | A blank protocol spec template, plus capability sketches for CAN, BACnet and OPC-UA. |
 | 8 | [flows/](flows/) | Example flow packages that move transformation out of the driver (scaling, alarms, registration). |
 | 9 | [conformance/conformance-suite.md](conformance/conformance-suite.md) | The acceptance/conformance suite every connector must pass, and the simulator harness. |

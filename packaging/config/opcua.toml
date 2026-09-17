@@ -24,13 +24,44 @@ port = 1883
 
 [connection]
 application_name  = "tedge-dot"
+application_uri   = "urn:tedge-dot"
 security_policy   = "None"
-security_mode     = "None"
+security_mode     = "none"
 connect_timeout_s = 10
+
+# Secured servers (see /usr/share/doc or doc/connectors/opcua-connector-spec.md). Set a policy
+# here (every device) or per device; the connector then generates its application certificate
+# in the PKI directory on first start and trusts a server only when its certificate is pinned or
+# issued by a trusted CA whose CRL it has. An unknown server certificate is quarantined — the
+# device's link status says "certificate untrusted: ..." — until you trust it:
+#
+#   tedge-dot pki list rejected
+#   tedge-dot pki trust <thumbprint>        # no restart needed
+#   tedge-dot pki export --pem              # give this connector's certificate to the server admin
+#
+# security_policy  = "Basic256Sha256"      # or Aes128_Sha256_RsaOaep, Aes256_Sha256_RsaPss
+# security_mode    = "sign_and_encrypt"    # or "sign"
+# pki_dir          = "/var/lib/tedge-dot/opcua/pki"
+# certificate      = "/etc/tedge-dot/opcua/cert.der"   # your own certificate instead of a generated one
+# private_key      = "/etc/tedge-dot/opcua/key.pem"    #   (both or neither; the key must be mode 0600)
+# create_certificate = true
+# trust_any_server_certificate = false     # INSECURE: accept any server certificate
+# allow_deprecated_security    = false     # allow Basic128Rsa15 / Basic256
+# allow_plaintext_password     = false     # allow a password without message or token encryption
 
 # Add devices below, for example:
 #
 # [[device]]
 # name             = "opc-server-1"
 # type             = "acme-plc-v3"   # the device TYPE: names its parameter sets (§5.2)
-# protocol_address = { endpoint = "opc.tcp://127.0.0.1:4840/", security_policy = "None", security_mode = "None" }
+# protocol_address = { endpoint = "opc.tcp://127.0.0.1:4840/", security_policy = "None", security_mode = "none" }
+#
+# A secured server with a user whose password is kept out of this file:
+#
+# [[device]]
+# name             = "opc-server-2"
+# protocol_address = { endpoint = "opc.tcp://plc.example.com:4840/", security_policy = "Basic256Sha256", user = "operator", password_file = "/etc/tedge-dot/secrets/opc-server-2" }
+#
+# ...or an X.509 user identity:
+#
+# protocol_address = { endpoint = "opc.tcp://plc.example.com:4840/", security_policy = "Aes256_Sha256_RsaPss", user_certificate = "/etc/tedge-dot/opcua/user.der", user_private_key = "/etc/tedge-dot/opcua/user.pem" }

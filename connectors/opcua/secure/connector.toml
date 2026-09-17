@@ -1,0 +1,156 @@
+# Connector configuration of the SECURED OPC UA e2e stack (docker-compose.secure.yaml,
+# tests/opcua_security_e2e.robot). One device per situation; every device reads the same
+# Temperature node (21.5) from its own server of the simulator-secure container, and each
+# server presents the certificate of one genpki.py scenario:
+#
+#   4841 pinned               4845 wrong_host (pinned, names another host)
+#   4842 ca_issued            4846 expired (pinned)
+#   4843 untrusted            4847 foreign_ca (issued by a CA nobody trusts)
+#   4844 revoked              4848 intermediate_no_crl
+#   4850 None only (a password sent to it travels in plaintext)
+#
+# The PKI directory is the default (/var/lib/tedge-dot/opcua/pki); secure/entrypoint.sh fills
+# its trust lists with `tedge-dot pki`. Relative paths resolve against this file's directory.
+
+[connector]
+protocol      = "opcua"
+service_name  = "tedge-dot"
+poll_interval = "1s"
+log_level     = "info"
+operation_timeout = "10s"
+
+[mqtt]
+host = "broker"
+port = 1883
+
+[connection]
+application_uri   = "urn:tedge-dot"
+security_policy   = "Basic256Sha256"
+security_mode     = "sign_and_encrypt"
+connect_timeout_s = 10
+
+# A pinned server, username from a password file.
+[[device]]
+name             = "pinned"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4841/", user = "operator", password_file = "operator-password" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# A server trusted through its CA (root CA + CRL in trusted/).
+[[device]]
+name             = "ca"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4842/" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# An X.509 user identity over Aes256_Sha256_RsaPss.
+[[device]]
+name             = "x509"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4842/", security_policy = "Aes256_Sha256_RsaPss", user_certificate = "/pki-vectors/users/operator.der", user_private_key = "/pki-vectors/users/operator.key.pem" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# An unknown server: quarantined until the suite trusts it.
+[[device]]
+name             = "untrusted"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4843/" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+[[device]]
+name             = "revoked"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4844/" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+[[device]]
+name             = "wronghost"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4845/" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+[[device]]
+name             = "expired"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4846/" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# Accepted without verification.
+[[device]]
+name             = "trustany"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4847/", trust_any_server_certificate = true }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# Revocation unknown until the suite adds the intermediate CA's CRL.
+[[device]]
+name             = "nocrl"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4848/" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# The servers offer Basic256Sha256 and Aes256_Sha256_RsaPss only.
+[[device]]
+name             = "noendpoint"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4841/", security_policy = "Aes128_Sha256_RsaOaep" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+[[device]]
+name             = "badpassword"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4841/", user = "operator", password = "wrong-guess-e2e" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# No message security and no token encryption: refused...
+[[device]]
+name             = "plaintext"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4850/", security_policy = "None", user = "operator", password_file = "operator-password" }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }
+
+# ...unless allowed.
+[[device]]
+name             = "plaintextok"
+protocol_address = { endpoint = "opc.tcp://simulator-secure:4850/", security_policy = "None", user = "operator", password_file = "operator-password", allow_plaintext_password = true }
+  [[device.point]]
+  id = "temperature"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=2;s=Temperature" }

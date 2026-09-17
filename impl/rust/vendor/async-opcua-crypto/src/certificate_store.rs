@@ -6,10 +6,10 @@
 //! for checking certificates supplied by the remote end to see if they are valid and trusted or not.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use opcua_types::status_code::StatusCode;
 
@@ -20,14 +20,17 @@ use super::{
     x509::{X509Data, X509},
 };
 
+// tedge-dot patch: the OPC UA Part 12 (F.1) layout shared with the C build
+// (doc/connectors/opcua-connector-spec.md). Upstream uses own/cert.der, private/private.pem and
+// flat trusted/ and rejected/ directories.
 /// Default path to the applications own certificate
-const OWN_CERTIFICATE_PATH: &str = "own/cert.der";
+pub const OWN_CERTIFICATE_PATH: &str = "own/certs/cert.der";
 /// Default path to the applications own private key
-const OWN_PRIVATE_KEY_PATH: &str = "private/private.pem";
-/// The directory holding trusted certificates
-const TRUSTED_CERTS_DIR: &str = "trusted";
-/// The directory holding rejected certificates
-const REJECTED_CERTS_DIR: &str = "rejected";
+pub const OWN_PRIVATE_KEY_PATH: &str = "own/private/key.pem";
+use crate::trust_list::{
+    TrustList, ISSUER_CERTS_DIR, ISSUER_CRL_DIR, REJECTED_CERTS_DIR, TRUSTED_CERTS_DIR,
+    TRUSTED_CRL_DIR,
+};
 
 /// The certificate store manages the storage of a server/client's own certificate & private key
 /// and the trust / rejection of certificates from the other end.
@@ -83,7 +86,9 @@ impl CertificateStore {
             certificate_store.own_certificate_path = cert_path.to_path_buf();
             certificate_store.own_private_key_path = pkey_path.to_path_buf();
         }
-        let (cert, pkey) = if certificate_store.ensure_pki_path().is_err() {
+        // tedge-dot patch: only a store that may have to generate its certificate creates the
+        // PKI directory; reading an existing one (or finding none) changes nothing on disk.
+        let (cert, pkey) = if x509_data.is_some() && certificate_store.ensure_pki_path().is_err() {
             error!("Folder for storing certificates cannot be examined so server has no application instance certificate or private key.");
             (None, None)
         } else {
@@ -219,58 +224,21 @@ impl CertificateStore {
         self.validate_application_instance_cert(cert, security_policy, hostname, application_uri)
     }
 
-    /// Ensures that the cert provided is the same as the one specified by a path. This is a
-    /// security check to stop someone from renaming a cert on disk to match another cert and
-    /// somehow bypassing or subverting a check. The disk cert must exactly match the memory cert
-    /// or the test is assumed to fail.
-    fn ensure_cert_and_file_are_the_same(cert: &X509, cert_path: &Path) -> bool {
-        if !cert_path.exists() {
-            trace!("Cannot find cert on disk");
-            false
-        } else {
-            match CertificateStore::read_cert(cert_path) {
-                Ok(file_der) => {
-                    // Compare the buffers
-                    trace!("Comparing cert on disk to memory");
-                    let der;
-                    {
-                        let r = cert.to_der();
-                        match r {
-                            Err(_) => return false,
-                            Ok(val) => der = val,
-                        }
-                    }
-
-                    let target_der;
-                    {
-                        let r = file_der.to_der();
-                        match r {
-                            Err(_) => return false,
-                            Ok(val) => target_der = val,
-                        }
-                    }
-
-                    der == target_der
-                }
-                Err(err) => {
-                    trace!("Cannot read cert from disk {:?} - {}", cert_path, err);
-                    // No cert2 to compare to
-                    false
-                }
-            }
-        }
-    }
-
     /// Validates the certificate according to the strictness set in the CertificateStore itself.
-    /// Validation might include checking the issue time, expiration time, revocation, trust chain
-    /// etc. In the first instance this function will only check if the cert is recognized
-    /// and is already contained in the trusted or rejected folder.
     ///
-    /// # Errors
+    /// tedge-dot patch: the trust decision reads the PKI directory on every call (pinned
+    /// certificates, CA chains through `trusted/` and `issuers/`, CRLs) through
+    /// [`TrustList`]; an untrusted certificate is copied to `rejected/certs`. With
+    /// `trust_unknown_certs` every certificate is accepted and nothing is written (upstream
+    /// copies unknown certificates into the trusted folder).
     ///
     /// A non `Good` status code indicates a failure in the cert or in some action required in
-    /// order to validate it.
-    ///
+    /// order to validate it:
+    /// `BadCertificateUntrusted`, `BadCertificateRevoked`, `BadCertificateIssuerRevoked`,
+    /// `BadCertificateRevocationUnknown`, `BadCertificateIssuerRevocationUnknown`,
+    /// `BadCertificateIssuerTimeInvalid`, `BadCertificatePolicyCheckFailed` (key length),
+    /// `BadCertificateTimeInvalid`, `BadCertificateHostNameInvalid`,
+    /// `BadCertificateUriInvalid`, `BadCertificateInvalid`.
     pub fn validate_application_instance_cert(
         &self,
         cert: &X509,
@@ -279,130 +247,90 @@ impl CertificateStore {
         application_uri: Option<&str>,
     ) -> Result<(), StatusCode> {
         let cert_file_name = CertificateStore::cert_file_name(cert);
-        debug!("Validating cert with name on disk {}", cert_file_name);
+        debug!("Validating cert {}", cert_file_name);
 
-        // Look for the cert in the rejected folder. If it's rejected there is no purpose going
-        // any further
-        {
-            let mut cert_path = self.rejected_certs_dir();
-            if !cert_path.exists() {
-                error!(
-                    "Path for rejected certificates {} does not exist",
-                    cert_path.display()
-                );
-                return Err(StatusCode::BadUnexpectedError);
+        if self.trust_unknown_certs {
+            warn!(
+                "Certificate {} is accepted without verification (all certificates are trusted)",
+                cert_file_name
+            );
+            return Ok(());
+        }
+
+        let der = cert.to_der().map_err(|_| StatusCode::BadCertificateInvalid)?;
+        let now = chrono::Utc::now();
+        let trust = TrustList::load(&self.pki_path);
+        if let Err(failure) = trust.verify(&der, &now) {
+            let status = failure.status_code();
+            if status == StatusCode::BadCertificateUntrusted && !trust.is_rejected(&der) {
+                match self.store_rejected_cert(cert) {
+                    Ok(path) => warn!(
+                        "Certificate {} is untrusted; stored in {}",
+                        cert_file_name,
+                        path.display()
+                    ),
+                    Err(e) => warn!("Certificate {} is untrusted; {}", cert_file_name, e),
+                }
+            } else {
+                warn!("Certificate {} failed validation: {}", cert_file_name, status);
             }
-            cert_path.push(&cert_file_name);
-            if cert_path.exists() {
-                warn!(
-                    "Certificate {} is untrusted because it resides in the rejected directory",
-                    cert_file_name
-                );
-                return Err(StatusCode::BadSecurityChecksFailed);
+            return Err(status);
+        }
+
+        // Check that the certificate is the right length for the security policy
+        match cert.key_length() {
+            Err(_) => {
+                error!("Cannot read key length from certificate {}", cert_file_name);
+                return Err(StatusCode::BadCertificateInvalid);
+            }
+            Ok(key_length) => {
+                if !security_policy.is_valid_keylength(key_length) {
+                    warn!(
+                        "Certificate {} has an invalid key length {} for the policy {}",
+                        cert_file_name, key_length, security_policy
+                    );
+                    return Err(StatusCode::BadCertificatePolicyCheckFailed);
+                }
             }
         }
 
-        // Check the trusted folder. These checks are more strict to ensure the cert is genuinely
-        // trusted
-        {
-            // Check the trusted folder
-            let mut cert_path = self.trusted_certs_dir();
-            if !cert_path.exists() {
-                error!(
-                    "Path for rejected certificates {} does not exist",
-                    cert_path.display()
-                );
-                return Err(StatusCode::BadUnexpectedError);
-            }
-            cert_path.push(&cert_file_name);
+        if self.skip_verify_certs {
+            debug!(
+                "Skipping additional verifications for certificate {}",
+                cert_file_name
+            );
+            return Ok(());
+        }
 
-            // Check if cert is in the trusted folder
-            if !cert_path.exists() {
-                // ... trust checks based on ca could be added here to add cert straight to trust folder
-                if self.trust_unknown_certs {
-                    // Put the unknown cert into the trusted folder
-                    warn!("Certificate {} is unknown but policy will store it into the trusted directory", cert_file_name);
-                    let _ = self.store_trusted_cert(cert);
-                // Note that we drop through and still check the cert for validity
-                } else {
-                    warn!("Certificate {} is unknown and untrusted so it will be stored in rejected directory", cert_file_name);
-                    let _ = self.store_rejected_cert(cert);
-                    return Err(StatusCode::BadCertificateUntrusted);
-                }
-            }
+        // Now inspect the cert not before / after values to ensure its validity
+        if self.check_time {
+            cert.is_time_valid(&now)?;
+        }
 
-            // Read the cert from the trusted folder to make sure it matches the one supplied
-            if !CertificateStore::ensure_cert_and_file_are_the_same(cert, &cert_path) {
-                error!("Certificate in memory does not match the one on disk {} so cert will automatically be treated as untrusted", cert_path.display());
-                return Err(StatusCode::BadUnexpectedError);
-            }
+        // Compare the hostname of the cert against the cert supplied
+        if let Some(hostname) = hostname {
+            cert.is_hostname_valid(hostname)?;
+        }
 
-            // Check that the certificate is the right length for the security policy
-            match cert.key_length() {
-                Err(_) => {
-                    error!("Cannot read key length from certificate {}", cert_file_name);
-                    return Err(StatusCode::BadSecurityChecksFailed);
-                }
-                Ok(key_length) => {
-                    if !security_policy.is_valid_keylength(key_length) {
-                        warn!(
-                            "Certificate {} has an invalid key length {} for the policy {}",
-                            cert_file_name, key_length, security_policy
-                        );
-                        return Err(StatusCode::BadSecurityChecksFailed);
-                    }
-                }
-            }
-
-            if self.skip_verify_certs {
-                debug!(
-                    "Skipping additional verifications for certificate {}",
-                    cert_file_name
-                );
-                return Ok(());
-            }
-
-            // Now inspect the cert not before / after values to ensure its validity
-            if self.check_time {
-                use chrono::Utc;
-                let now = Utc::now();
-                cert.is_time_valid(&now)?;
-            }
-
-            // Compare the hostname of the cert against the cert supplied
-            if let Some(hostname) = hostname {
-                cert.is_hostname_valid(hostname)?;
-            }
-
-            // Compare the application / product uri to the supplied application description
-            if let Some(application_uri) = application_uri {
-                cert.is_application_uri_valid(application_uri)?;
-            }
-
-            // Other tests that we might do with trust lists
-            // ... issuer
-            // ... trust (self-signed, ca etc.)
-            // ... revocation
+        // Compare the application / product uri to the supplied application description
+        if let Some(application_uri) = application_uri {
+            cert.is_application_uri_valid(application_uri)?;
         }
         Ok(())
     }
 
-    /// Returns a certificate file name from the cert's issuer and thumbprint fields.
-    /// File name is either "prefix - \[thumbprint\].der" or "thumbprint.der" depending on
-    /// the cert's common name being empty or not
+    /// Returns the file name a certificate is stored under: `<CN>_<thumbprint>.der`, with the
+    /// thumbprint in lower-case hex and every character of the common name other than ASCII
+    /// letters, digits, `-` and `.` replaced by `_` (tedge-dot patch; upstream uses
+    /// `<CN> [<THUMBPRINT>].der`).
     pub fn cert_file_name(cert: &X509) -> String {
-        let prefix = if let Ok(common_name) = cert.common_name() {
-            common_name.trim().to_string().replace('/', "")
-        } else {
-            String::new()
-        };
-        let thumbprint = cert.thumbprint().as_hex_string();
-
-        if !prefix.is_empty() {
-            format!("{prefix} [{thumbprint}].der")
-        } else {
-            format!("{thumbprint}.der")
-        }
+        let cn: String = cert
+            .common_name_value()
+            .unwrap_or_default()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+            .collect();
+        format!("{}_{}.der", cn, cert.thumbprint().as_hex_string().to_ascii_lowercase())
     }
 
     /// Creates the PKI directory structure
@@ -412,12 +340,17 @@ impl CertificateStore {
     /// A string description of any failure
     ///
     pub fn ensure_pki_path(&self) -> Result<(), String> {
-        let mut path = self.pki_path.clone();
-        let subdirs = [TRUSTED_CERTS_DIR, REJECTED_CERTS_DIR];
+        let subdirs = [
+            "own/certs",
+            "own/private",
+            TRUSTED_CERTS_DIR,
+            TRUSTED_CRL_DIR,
+            ISSUER_CERTS_DIR,
+            ISSUER_CRL_DIR,
+            REJECTED_CERTS_DIR,
+        ];
         for subdir in &subdirs {
-            path.push(subdir);
-            CertificateStore::ensure_dir(&path)?;
-            path.pop();
+            CertificateStore::ensure_dir(&self.pki_path.join(subdir))?;
         }
         Ok(())
     }
@@ -485,22 +418,6 @@ impl CertificateStore {
         Ok(cert_path)
     }
 
-    /// Writes a cert to the trusted directory. If the write succeeds, the function
-    /// returns a path to the written file.
-    ///
-    /// # Errors
-    ///
-    /// A string description of any failure
-    ///
-    fn store_trusted_cert(&self, cert: &X509) -> Result<PathBuf, String> {
-        // Store the cert in the trusted folder where trusted certs go
-        let cert_file_name = CertificateStore::cert_file_name(cert);
-        let mut cert_path = self.trusted_certs_dir();
-        cert_path.push(&cert_file_name);
-        let _ = CertificateStore::store_cert(cert, &cert_path, true)?;
-        Ok(cert_path)
-    }
-
     /// Writes a cert to the specified directory
     ///
     /// # Errors
@@ -520,34 +437,13 @@ impl CertificateStore {
     /// A string description of any failure
     ///
     pub fn read_cert(path: &Path) -> Result<X509, String> {
-        let file = File::open(path);
-        if file.is_err() {
-            return Err(format!("Could not open cert file {}", path.display()));
-        }
-
-        let mut file: File = file.unwrap();
-        let mut cert = Vec::new();
-        let bytes_read = file.read_to_end(&mut cert);
-        if bytes_read.is_err() {
-            return Err(format!(
-                "Could not read bytes from cert file {}",
-                path.display()
-            ));
-        }
-
-        let cert = match path.extension() {
-            Some(v) if v == "der" => X509::from_der(&cert),
-            Some(v) if v == "pem" => X509::from_pem(&cert),
-            _ => return Err("Only .der and .pem certificates are supported".to_string()),
-        };
-
-        match cert {
-            Err(_) => Err(format!(
-                "Could not read cert from cert file {}",
-                path.display()
-            )),
-            Ok(val) => Ok(val),
-        }
+        // tedge-dot patch: recognised by content (DER or PEM), not by file extension.
+        let bytes = std::fs::read(path)
+            .map_err(|_| format!("Could not open cert file {}", path.display()))?;
+        crate::trust_list::parse_certificates(&bytes)
+            .first()
+            .and_then(|der| X509::from_der(der).ok())
+            .ok_or_else(|| format!("Could not read cert from cert file {}", path.display()))
     }
 
     /// Writes bytes to file and returns the size written, or an error reason for failure.

@@ -57,6 +57,93 @@ enum Command {
     /// Render the Cumulocity DTM property definitions for a configuration's parameter sets
     /// (no device or broker required).
     Describe(DescribeArgs),
+    /// Inspect and manage the OPC UA PKI directory: the application certificate and the
+    /// trusted, issuer and rejected server certificates (no device or broker required).
+    #[cfg(feature = "opcua")]
+    Pki(PkiArgs),
+}
+
+#[cfg(feature = "opcua")]
+#[derive(Args)]
+struct PkiArgs {
+    /// The PKI directory. Default: `pki_dir` of the configuration (or its default,
+    /// /var/lib/tedge-dot/opcua/pki).
+    #[arg(long, value_name = "DIR", global = true)]
+    pki_dir: Option<PathBuf>,
+    /// The OPC UA connector configuration whose `[connection]` settings apply
+    /// (`pki_dir`, `application_uri`, `certificate`, ...). Default:
+    /// /etc/tedge/plugins/ot/opcua.toml when it exists.
+    #[arg(short, long, value_name = "FILE", global = true)]
+    config: Option<PathBuf>,
+    /// Print machine-readable JSON.
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    action: PkiAction,
+}
+
+#[cfg(feature = "opcua")]
+#[derive(Subcommand)]
+enum PkiAction {
+    /// Show the application instance certificate.
+    Show,
+    /// Write the application certificate (never its key), e.g. for a server administrator.
+    Export {
+        /// PEM instead of DER.
+        #[arg(long)]
+        pem: bool,
+        /// Write to this file instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
+    /// Generate a self-signed application certificate.
+    Create {
+        /// The application URI (default: the configuration's `application_uri`).
+        #[arg(long, value_name = "URI")]
+        application_uri: Option<String>,
+        /// A DNS name or IP address for the certificate; repeat for several (default: this
+        /// machine's host name).
+        #[arg(long = "hostname", value_name = "NAME")]
+        hostnames: Vec<String>,
+        /// Validity in days (default: 1825).
+        #[arg(long)]
+        days: Option<u32>,
+        /// Replace an existing certificate (the old one is kept with a timestamp suffix).
+        #[arg(long)]
+        force: bool,
+    },
+    /// List trusted, issuer and rejected certificates.
+    List {
+        /// Only this group.
+        #[arg(value_parser = ["trusted", "issuers", "rejected"])]
+        group: Option<String>,
+    },
+    /// Trust a rejected certificate (by thumbprint), or import a certificate file as trusted.
+    Trust {
+        /// A thumbprint (at least 8 hex digits) of a certificate in rejected/, or a DER/PEM file.
+        target: String,
+    },
+    /// Move a trusted certificate to rejected/.
+    Reject {
+        /// Its thumbprint (at least 8 hex digits).
+        thumbprint: String,
+    },
+    /// Delete a certificate from trusted/, issuers/ or rejected/.
+    Remove {
+        /// Its thumbprint (at least 8 hex digits).
+        thumbprint: String,
+        /// Only look in this group.
+        #[arg(long, value_parser = ["trusted", "issuers", "rejected"])]
+        group: Option<String>,
+    },
+    /// Import an intermediate CA certificate into issuers/.
+    AddIssuer {
+        file: PathBuf,
+    },
+    /// Import a CRL next to the CA that issued it.
+    AddCrl {
+        file: PathBuf,
+    },
 }
 
 /// Output format of `describe`.
@@ -186,13 +273,48 @@ fn parse_cli_duration(s: &str) -> Result<Duration, String> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse_from(normalized_args());
+    let args = normalized_args();
+    let cli = match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        // `pki` reserves exit status 2 for "no such certificate" (spec §9); its usage errors
+        // are 1. Everything else keeps clap's conventions.
+        Err(e) if args.get(1).map(String::as_str) == Some("pki") && e.use_stderr() => {
+            let _ = e.print();
+            return ExitCode::from(1);
+        }
+        Err(e) => e.exit(),
+    };
     match cli.command {
         Command::Run(args) => run(args).await,
         Command::Read(args) => report(cmd_read(args).await),
         Command::Write(args) => report(cmd_write(args).await),
         Command::Describe(args) => report(cmd_describe(args)),
+        #[cfg(feature = "opcua")]
+        Command::Pki(args) => cmd_pki(args),
     }
+}
+
+#[cfg(feature = "opcua")]
+fn cmd_pki(args: PkiArgs) -> ExitCode {
+    use connector_opcua::pki::Group;
+    use connector_opcua::pki_cli::{self, Action, Options};
+    let group = |g: Option<String>| g.as_deref().and_then(Group::parse);
+    let action = match args.action {
+        PkiAction::Show => Action::Show,
+        PkiAction::Export { pem, output } => Action::Export { pem, output },
+        PkiAction::Create { application_uri, hostnames, days, force } => {
+            Action::Create { application_uri, hostnames, days, force }
+        }
+        PkiAction::List { group: g } => Action::List { group: group(g) },
+        PkiAction::Trust { target } => Action::Trust { target },
+        PkiAction::Reject { thumbprint } => Action::Reject { thumbprint },
+        PkiAction::Remove { thumbprint, group: g } => Action::Remove { thumbprint, group: group(g) },
+        PkiAction::AddIssuer { file } => Action::AddIssuer { file },
+        PkiAction::AddCrl { file } => Action::AddCrl { file },
+    };
+    let opts = Options { pki_dir: args.pki_dir, config: args.config, json: args.json };
+    let code = pki_cli::run(&opts, &action, &mut std::io::stdout(), &mut std::io::stderr());
+    ExitCode::from(code)
 }
 
 /// Turn a command `Result` into a process exit code, printing any error to stderr.
@@ -211,7 +333,7 @@ fn report(result: Result<(), String>) -> ExitCode {
 /// flag (`-h`/`--help`/`-V`/`--version`).
 fn normalized_args() -> Vec<String> {
     let mut args: Vec<String> = std::env::args().collect();
-    const SUBCOMMANDS: &[&str] = &["run", "read", "write", "describe", "help"];
+    const SUBCOMMANDS: &[&str] = &["run", "read", "write", "describe", "pki", "help"];
     let needs_run = match args.get(1) {
         None => true,
         Some(a) => !(SUBCOMMANDS.contains(&a.as_str()) || a.starts_with('-')),

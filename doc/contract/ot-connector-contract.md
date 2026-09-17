@@ -383,6 +383,14 @@ valid, so a configuration that legitimately uses the path form still accepts eve
 verb. A connector MUST therefore compare the patched document against the one it held, not
 scan the result as a whole.
 
+The same boundary applies to **local-only settings**: protocol settings that name files on the
+gateway (a password file, a PKI directory, a client certificate) or relax security (accepting
+any server certificate, allowing plaintext passwords). A module declares them by key; a
+management command that *adds or changes* one, anywhere in `[connection]` or in a device's
+`protocol_address`, MUST be refused before anything is written, with a reason naming the key but
+not its value. As above, values the configuration already has stay valid and removing one is
+allowed. The OPC UA and SNMP connectors declare theirs in their specifications.
+
 ## 4. Datatypes (typed mode)
 
 In `typed` mode the driver applies **only** primitive decoding. The contract defines this

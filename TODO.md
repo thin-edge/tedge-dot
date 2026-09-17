@@ -13,8 +13,6 @@
       name already wired into the test tagging (`C_MISSING_CAPABILITIES` in the justfile), so
       implementing one means removing it from that list and adding the test that was waiting
       for it:
-      - `opcua-security` — open62541 supports `Basic256Sha256` and friends; needs config +
-        certificate plumbing, and a secured endpoint in the e2e stack to test against.
       - `canbus-fd` — classic frames only today; the Rust build has a `canbus-fd` feature.
       - `profibus-serial` — the C module speaks `tcp://` only (no serial PHY, no FDL token
         timing), so it cannot yet drive a multi-master RS-485 bus.

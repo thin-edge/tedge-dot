@@ -22,6 +22,9 @@
 #include "tedge_dot/decode.h"
 #include "tedge_dot/descriptor.h"
 #include "tedge_dot/runtime.h"
+#ifdef TDOT_FEATURE_OPCUA
+#include "../connectors/opcua/pki_cli.h"
+#endif
 
 static void usage(void) {
     fputs(
@@ -36,6 +39,10 @@ static void usage(void) {
         "  tedge-dot describe [-c <config-or-dir>]... [-d <device>] "
         "[--set <name>] [--format c8y-dtm] [--compact]\n"
         "      (default: every config in /etc/tedge/plugins/ot)\n"
+#ifdef TDOT_FEATURE_OPCUA
+        "  tedge-dot pki <action> [--pki-dir <dir>] [-c <config>] [--json]\n"
+        "      (OPC UA certificates; `tedge-dot pki --help` for the actions)\n"
+#endif
         "  tedge-dot <config-or-dir> [run options]      (same as run)\n"
         "  tedge-dot --version\n",
         stderr);
@@ -698,7 +705,7 @@ out:
 
 static bool is_subcommand(const char *s) {
     return !strcmp(s, "read") || !strcmp(s, "write") || !strcmp(s, "run") ||
-           !strcmp(s, "describe");
+           !strcmp(s, "describe") || !strcmp(s, "pki");
 }
 
 int main(int argc, char **argv) {
@@ -712,6 +719,11 @@ int main(int argc, char **argv) {
         printf("tedge-dot %s\n", TDOT_BUILD_VERSION);
         return 0;
     }
+#ifdef TDOT_FEATURE_OPCUA
+    /* `pki` has its own options (and exit codes: 2 means "no such certificate"). */
+    if (!strcmp(argv[1], "pki"))
+        return tdot_opcua_pki_main(argc - 1, argv + 1);
+#endif
     /* Like the Rust binary: invoked with just config paths/options and no
      * subcommand (`tedge-dot /etc/connector.toml`, the systemd unit and the e2e
      * entrypoints do this), behave as `run`. */
