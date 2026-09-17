@@ -838,7 +838,7 @@ mod tests {
         let s = device_security(&OpcuaConnection::default(), &ep, Some(&dir)).unwrap();
         match s.identity {
             Identity::UserName { password, .. } => assert_eq!(password.expose(), "line-one"),
-            other => panic!("{other:?}"),
+            other => panic!("expected a username identity, got {}", other.kind()),
         }
     }
 

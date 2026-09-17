@@ -91,6 +91,7 @@ if [ "$(id -u)" = 0 ]; then
     [ "$(uid "$(ls "$d"/trusted/certs/*.der)")" = 4321 ] || fail "imported certificate not the owner's"
     [ "$(uid "$work/root-file")" = 0 ] || fail "root-file changed owner"
     # issuers/certs swapped for a symlink into a root-owned directory
+    rm -rf "$d/issuers"
     ln -s "$work/rootdir" "$d/issuers" && chown -h 4321:4321 "$d/issuers"
     expect 1 owned-symlinked-dir -- add-issuer "$v/ca/root.der" --pki-dir "$d"
     [ -z "$(ls -A "$work/rootdir")" ] || fail "root wrote through a symlinked directory"

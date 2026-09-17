@@ -397,10 +397,13 @@ static int configure_security(ua_state_t *st, const ua_defaults_t *def,
     char prefix[300];
     snprintf(prefix, sizeof prefix, "device '%s': ", dev->name);
     char e[400] = "";
+/* Formats into its own buffer: the arguments are often `e` itself, and an
+ * snprintf whose output overlaps an argument is undefined (glibc empties it). */
 #define FAIL(...)                                                              \
     do {                                                                       \
-        snprintf(e, sizeof e, __VA_ARGS__);                                    \
-        snprintf(err, errlen, "%s%s", prefix, e);                              \
+        char fail_msg[sizeof e];                                               \
+        snprintf(fail_msg, sizeof fail_msg, __VA_ARGS__);                      \
+        snprintf(err, errlen, "%s%s", prefix, fail_msg);                       \
         return -1;                                                             \
     } while (0)
 

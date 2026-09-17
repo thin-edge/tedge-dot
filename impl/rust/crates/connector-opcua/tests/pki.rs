@@ -126,7 +126,8 @@ fn listing_skips_corrupt_files_and_reports_crls() {
     let vectors = common::genpki(&[]);
     let pki = Pki::new(vectors.join("scenarios/corrupt_file/pki"));
     let trusted = pki.list(Group::Trusted);
-    assert_eq!(trusted.len(), 1, "{trusted:?}");
+    let files: Vec<_> = trusted.iter().map(|e| e.path.display().to_string()).collect();
+    assert_eq!(trusted.len(), 1, "{files:?}");
     assert!(!trusted[0].is_ca);
 
     let pki = Pki::new(vectors.join("scenarios/intermediate/pki"));
@@ -189,7 +190,8 @@ fn removing_one_certificate_of_a_bundle_keeps_the_others() {
     // Moving the duplicated certificate out leaves the other one in the file.
     pki.relocate(&pinned, Group::Rejected).unwrap();
     let left = pki.list(Group::Trusted);
-    assert_eq!(left.len(), 1, "{left:?}");
+    let files: Vec<_> = left.iter().map(|e| e.thumbprint.clone()).collect();
+    assert_eq!(left.len(), 1, "{files:?}");
     assert_eq!(left[0].der, other.der);
     assert_eq!(left[0].path, file);
     let text = std::fs::read_to_string(&file).unwrap();
