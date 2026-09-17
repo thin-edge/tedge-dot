@@ -77,13 +77,92 @@ if(TDOT_OPCUA)
   if(NOT TDOT_OPCUA_VENDORED)
     find_package(open62541 QUIET)
   endif()
+  # Secured sessions (policies other than None, certificates, X.509 user identities) need an
+  # open62541 built with mbedTLS: the connector's own PKI code (connectors/opcua/ua_pki.c)
+  # uses mbedTLS directly, and one crypto library is enough. Distro and Homebrew packages are
+  # often built without encryption (or with OpenSSL), so an installed library is checked and,
+  # unless it uses mbedTLS and the mbedTLS development files are there, ignored in favour of
+  # the source build.
+  set(_tdot_ua_lib open62541::open62541)
+  if(open62541_FOUND)
+    get_target_property(_tdot_ua_inc open62541::open62541 INTERFACE_INCLUDE_DIRECTORIES)
+    set(_tdot_ua_crypto "")
+    foreach(_dir ${_tdot_ua_inc})
+      if(EXISTS "${_dir}/open62541/config.h")
+        file(STRINGS "${_dir}/open62541/config.h" _tdot_ua_crypto
+             REGEX "^#define UA_ENABLE_ENCRYPTION_MBEDTLS")
+        break()
+      endif()
+    endforeach()
+    if(_tdot_ua_crypto)
+      find_path(TDOT_MBEDTLS_INCLUDE mbedtls/x509_crt.h)
+      find_library(TDOT_MBEDX509 mbedx509)
+      find_library(TDOT_MBEDCRYPTO mbedcrypto)
+    endif()
+    if(NOT _tdot_ua_crypto OR NOT TDOT_MBEDTLS_INCLUDE OR NOT TDOT_MBEDX509
+       OR NOT TDOT_MBEDCRYPTO)
+      message(STATUS "The installed open62541 (${open62541_DIR}) is not built with mbedTLS "
+                     "encryption (or the mbedTLS development files are missing), which secured "
+                     "OPC UA sessions need: building v1.5.5 from source.")
+      set(open62541_FOUND FALSE)
+    else()
+      set(_tdot_mbedtls_link ${TDOT_MBEDX509} ${TDOT_MBEDCRYPTO})
+      set(_tdot_mbedtls_inc ${TDOT_MBEDTLS_INCLUDE})
+    endif()
+  endif()
   if(NOT open62541_FOUND)
+    # The rejected package already defined the imported open62541::open62541, which shadows
+    # the source build's alias of the same name: link the source build's own target.
+    set(_tdot_ua_lib open62541)
     include(FetchContent)
+    # mbedTLS 3.6 LTS (Apache-2.0), built from the release tarball and linked statically:
+    # no system crypto library, so the binary keeps its libc-only dependency and the glibc
+    # floor of the cross build. The release tarball (not the git tag) is used because it
+    # carries the generated files and needs no submodules.
+    set(TDOT_MBEDTLS_URL
+        "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2"
+        CACHE STRING "mbedTLS 3.6.7 release tarball (a URL or a local path)")
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+    set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(mbedtls
+      URL ${TDOT_MBEDTLS_URL}
+      URL_HASH SHA256=a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(mbedtls)
+    # open62541 locates mbedTLS with find_path/find_library (tools/cmake/FindMbedTLS.cmake),
+    # which cannot see libraries that are only built later. Its result variables are
+    # pre-seeded with the paths the in-tree libraries WILL have, and the build order is
+    # enforced below. Paths, not target names: open62541 exports its targets, and an export
+    # may not reference a target outside any export set (turning mbedTLS's own export on
+    # instead would also write to the user's CMake package registry).
+    FetchContent_GetProperties(mbedtls SOURCE_DIR _tdot_mbedtls_src)
+    set(_tdot_mbedtls_lib "${CMAKE_BINARY_DIR}/_deps/mbedtls-lib")
+    set_target_properties(mbedtls mbedx509 mbedcrypto PROPERTIES
+                          ARCHIVE_OUTPUT_DIRECTORY "${_tdot_mbedtls_lib}")
+    set(MBEDTLS_INCLUDE_DIRS "${_tdot_mbedtls_src}/include" CACHE PATH "" FORCE)
+    set(_tdot_mbedtls_link mbedx509 mbedcrypto)
+    set(_tdot_mbedtls_inc "${_tdot_mbedtls_src}/include")
+    foreach(_lib mbedtls mbedx509 mbedcrypto)
+      string(TOUPPER "${_lib}" _var)
+      set(${_var}_LIBRARY
+          "${_tdot_mbedtls_lib}/${CMAKE_STATIC_LIBRARY_PREFIX}${_lib}${CMAKE_STATIC_LIBRARY_SUFFIX}"
+          CACHE FILEPATH "" FORCE)
+    endforeach()
+
     set(UA_ENABLE_SUBSCRIPTIONS ON CACHE BOOL "" FORCE)
     set(UA_ENABLE_METHODCALLS OFF CACHE BOOL "" FORCE)
+    # PubSub (on by default) needs method calls; its server code only links in optimised
+    # builds, where nothing pulls it in. The connector is a client and needs neither.
+    set(UA_ENABLE_PUBSUB OFF CACHE BOOL "" FORCE)
     set(UA_ENABLE_NODEMANAGEMENT OFF CACHE BOOL "" FORCE)
     set(UA_ENABLE_AMALGAMATION OFF CACHE BOOL "" FORCE)
-    set(UA_ENABLE_ENCRYPTION OFF CACHE BOOL "" FORCE)
+    set(UA_ENABLE_ENCRYPTION MBEDTLS CACHE STRING "" FORCE)
+    # open62541 compiles itself with ASan/UBSan in Debug builds, which our targets (built
+    # without the sanitizer runtime) then fail to link against.
+    set(UA_ENABLE_DEBUG_SANITIZER OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(open62541
       GIT_REPOSITORY https://github.com/open62541/open62541.git
@@ -101,11 +180,16 @@ if(TDOT_OPCUA)
     foreach(_tdot_ua_target open62541 open62541-object open62541-plugins)
       if(TARGET ${_tdot_ua_target})
         target_compile_options(${_tdot_ua_target} PRIVATE -Wno-date-time)
+        add_dependencies(${_tdot_ua_target} mbedtls mbedx509 mbedcrypto)
       endif()
     endforeach()
   endif()
-  target_sources(tedge_dot_sdk PRIVATE connectors/opcua/connector_opcua.c)
-  target_link_libraries(tedge_dot_sdk PUBLIC open62541::open62541)
+  target_sources(tedge_dot_sdk PRIVATE connectors/opcua/connector_opcua.c
+                                       connectors/opcua/ua_pki.c
+                                       connectors/opcua/pki_cli.c)
+  target_include_directories(tedge_dot_sdk PRIVATE ${_tdot_mbedtls_inc})
+  # open62541 first: it needs mbedTLS itself, and static archives resolve left to right.
+  target_link_libraries(tedge_dot_sdk PUBLIC ${_tdot_ua_lib} ${_tdot_mbedtls_link})
   target_compile_definitions(tedge_dot_sdk PUBLIC TDOT_FEATURE_OPCUA)
 endif()
 
@@ -221,6 +305,21 @@ add_test(NAME describe COMMAND tedge-dot-describe)
 add_executable(tedge-dot-config tests/config.c)
 target_link_libraries(tedge-dot-config PRIVATE tedge_dot_sdk)
 add_test(NAME config COMMAND tedge-dot-config)
+
+# OPC UA: the PKI directory and certificate trust over the PKI vectors the Rust build
+# validates too (connectors/opcua/conformance/tools/genpki.py; needs Python + cryptography).
+if(TDOT_OPCUA)
+  add_executable(tedge-dot-opcua-pki tests/opcua_pki.c)
+  target_include_directories(tedge-dot-opcua-pki PRIVATE connectors/opcua)
+  target_link_libraries(tedge-dot-opcua-pki PRIVATE tedge_dot_sdk)
+  add_test(NAME opcua-pki-vectors
+           COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/opcua_pki.sh
+                   $<TARGET_FILE:tedge-dot-opcua-pki> ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+  # `tedge-dot pki`, the scenarios of impl/rust/tests/pki_cli.rs.
+  add_test(NAME opcua-pki-cli
+           COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/opcua_pki_cli.sh
+                   $<TARGET_FILE:tedge-dot> ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+endif()
 
 # SNMP: the decoder and conversions over the shared golden vectors (the Rust crate reads
 # the same file), the configuration rules of spec §3, and an in-process loopback receive.

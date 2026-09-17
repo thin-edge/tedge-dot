@@ -14,7 +14,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/stat.h>
+
+#include "cjson/cJSON.h"
 #include "tedge_dot/config.h"
+#include "tedge_dot/connector.h"
 #include "tedge_dot/runtime.h"
 
 static int failures = 0;
@@ -1568,7 +1572,217 @@ static void check_valid_field_values(void) {
     scratch_free(&s);
 }
 
+#ifdef TDOT_FEATURE_OPCUA
+/* OPC UA security configuration (doc/connectors/opcua-connector-spec.md §3):
+ * the same rules as impl/rust/crates/connector-opcua/src/config.rs. Every
+ * config lives in its own directory `dir`, with `connection` spliced into
+ * [connection] and `address` into the device's protocol_address. Returns the
+ * configure() result; `err` holds its message. */
+static int opcua_configure(const char *dir, const char *connection,
+                           const char *address, char *err, size_t errlen) {
+    char path[512];
+    snprintf(path, sizeof path, "%s/opcua.toml", dir);
+    FILE *fp = fopen(path, "w");
+    fprintf(fp,
+            "[connector]\nprotocol = \"opcua\"\n\n[connection]\n%s\n\n"
+            "[[device]]\nname = \"plc\"\n"
+            "protocol_address = { endpoint = \"opc.tcp://127.0.0.1:4840\"%s%s }\n"
+            "  [[device.point]]\n  id = \"t\"\n  datatype = \"float64\"\n"
+            "  address = { node_id = \"ns=2;s=T\" }\n",
+            connection, *address ? ", " : "", address);
+    fclose(fp);
+    err[0] = '\0';
+    tdot_config_t *cfg = tdot_config_load(path, err, errlen);
+    if (!cfg)
+        return -2;
+    tdot_connector_t *c = tdot_connector_factory("opcua");
+    int rc = c->configure(c, cfg, err, errlen);
+    for (size_t i = 0; i < cfg->ndevices; i++)
+        c->disconnect_device(c, &cfg->devices[i]);
+    tdot_config_free(cfg);
+    c->destroy(c);
+    return rc;
+}
+
+static char *scratch_dir(void) {
+    char template[] = "/tmp/tdot-opcua-config-XXXXXX";
+    char *dir = mkdtemp(template);
+    return dir ? strdup(dir) : NULL;
+}
+
+static void check_opcua_security_config(void) {
+    char *dir = scratch_dir();
+    char err[512];
+    const char *pki = "pki_dir = \"pki\"\n";
+
+    /* defaults: unsecured, no PKI directory */
+    CHECK(opcua_configure(dir, pki, "", err, sizeof err) == 0, "defaults: %s", err);
+    char pki_path[600];
+    snprintf(pki_path, sizeof pki_path, "%s/pki", dir);
+    struct stat st;
+    CHECK(stat(pki_path, &st) != 0, "an unsecured config created %s", pki_path);
+
+    /* unknown policy / mode, inconsistent pairs */
+    CHECK(opcua_configure(dir, pki, "security_policy = \"Basic999\"", err, sizeof err) != 0 &&
+              strstr(err, "device 'plc': security_policy 'Basic999'"),
+          "unknown policy: %s", err);
+    CHECK(opcua_configure(dir, pki, "security_policy = \"Basic256Sha256\", security_mode = \"encrypt\"",
+                          err, sizeof err) != 0 && strstr(err, "security_mode 'encrypt'"),
+          "unknown mode: %s", err);
+    CHECK(opcua_configure(dir, pki, "security_policy = \"Basic256Sha256\", security_mode = \"none\"",
+                          err, sizeof err) != 0 && strstr(err, "security_mode"),
+          "secure policy + none: %s", err);
+    CHECK(opcua_configure(dir, pki, "security_policy = \"None\", security_mode = \"sign\"", err,
+                          sizeof err) != 0 && strstr(err, "security_mode"),
+          "None + sign: %s", err);
+    CHECK(opcua_configure(dir, pki, "security_mode = \"sign_and_encrypt\"", err, sizeof err) != 0,
+          "mode without policy: %s", err);
+    CHECK(opcua_configure(dir, pki, "security_policy = \"ECC_nistP256\"", err, sizeof err) != 0,
+          "ECC is not supported: %s", err);
+
+    /* modes in any case: the packaged default config says "None" */
+    char legacy[256];
+    snprintf(legacy, sizeof legacy, "%ssecurity_policy = \"None\"\nsecurity_mode = \"None\"\n", pki);
+    CHECK(opcua_configure(dir, legacy, "", err, sizeof err) == 0, "mode \"None\": %s", err);
+
+    /* deprecated policies need the opt-in, from either scope */
+    CHECK(opcua_configure(dir, pki, "security_policy = \"Basic256\"", err, sizeof err) != 0 &&
+              strstr(err, "deprecated") && strstr(err, "allow_deprecated_security"),
+          "deprecated: %s", err);
+    char conn[256];
+    snprintf(conn, sizeof conn, "%sallow_deprecated_security = true\n", pki);
+    CHECK(opcua_configure(dir, conn, "security_policy = \"Basic128Rsa15\"", err, sizeof err) == 0,
+          "deprecated opt-in (connection): %s", err);
+    CHECK(opcua_configure(dir, pki, "security_policy = \"Basic256\", allow_deprecated_security = true",
+                          err, sizeof err) == 0,
+          "deprecated opt-in (device): %s", err);
+
+    /* a device's own policy does not inherit the connection's mode */
+    snprintf(conn, sizeof conn,
+             "%ssecurity_policy = \"Basic256Sha256\"\nsecurity_mode = \"sign\"\n", pki);
+    CHECK(opcua_configure(dir, conn, "security_policy = \"None\"", err, sizeof err) == 0,
+          "device None under a secured connection: %s", err);
+    /* ... and the full URI works too */
+    CHECK(opcua_configure(dir, conn,
+                          "security_policy = \"http://opcfoundation.org/UA/SecurityPolicy#None\"",
+                          err, sizeof err) == 0,
+          "policy URI: %s", err);
+    /* a secured config creates the PKI directory and a certificate */
+    CHECK(opcua_configure(dir, conn, "", err, sizeof err) == 0, "secured: %s", err);
+    char cert[700];
+    snprintf(cert, sizeof cert, "%s/pki/own/certs/cert.der", dir);
+    CHECK(stat(cert, &st) == 0, "no certificate at %s", cert);
+
+    /* identities */
+    CHECK(opcua_configure(dir, pki, "user = \"u\", password = \"a\", password_file = \"b\"", err,
+                          sizeof err) != 0 && strstr(err, "password_file"),
+          "both passwords: %s", err);
+    CHECK(opcua_configure(dir, pki, "password = \"hunter2-secret\"", err, sizeof err) != 0 &&
+              strstr(err, "needs user") && !strstr(err, "hunter2-secret"),
+          "password without user: %s", err);
+    CHECK(opcua_configure(dir, pki, "user = \"u\", user_certificate = \"c\", user_private_key = \"k\"",
+                          err, sizeof err) != 0 && strstr(err, "user_certificate"),
+          "username + certificate: %s", err);
+    CHECK(opcua_configure(dir, pki, "user_certificate = \"c\"", err, sizeof err) != 0 &&
+              strstr(err, "user_private_key"),
+          "certificate without key: %s", err);
+    CHECK(opcua_configure(dir, pki, "user = \"u\", password = 987654", err, sizeof err) != 0 &&
+              !strstr(err, "987654"),
+          "non-string password is not echoed: %s", err);
+    CHECK(opcua_configure(dir, pki, "user = \"u\"", err, sizeof err) == 0,
+          "user without password: %s", err);
+    CHECK(opcua_configure(dir, pki, "user = \"u\", password_file = \"/nonexistent/pw\"", err,
+                          sizeof err) != 0 && strstr(err, "password_file '/nonexistent/pw'"),
+          "unreadable password file: %s", err);
+    char pw[600];
+    snprintf(pw, sizeof pw, "%s/pw", dir);
+    FILE *fp = fopen(pw, "w");
+    fputs("s3cret-line\r\nsecond\n", fp);
+    fclose(fp);
+    CHECK(opcua_configure(dir, pki, "user = \"u\", password_file = \"pw\"", err, sizeof err) == 0,
+          "relative password file: %s", err);
+    /* a readable user key is refused */
+    char key[600];
+    snprintf(key, sizeof key, "%s/u.pem", dir);
+    fp = fopen(key, "w");
+    fputs("key", fp);
+    fclose(fp);
+    chmod(key, 0640);
+    CHECK(opcua_configure(dir, pki, "user_certificate = \"u.der\", user_private_key = \"u.pem\"",
+                          err, sizeof err) != 0 && strstr(err, "user_private_key") &&
+              strstr(err, "0640"),
+          "key mode: %s", err);
+    /* wrong types */
+    CHECK(opcua_configure(dir, "create_certificate = \"yes\"\n", "", err, sizeof err) != 0 &&
+              strstr(err, "[connection]"),
+          "bad [connection] type: %s", err);
+
+    char cmd[700];
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+    if (system(cmd) != 0)
+        printf("warn: could not remove %s\n", dir);
+    free(dir);
+}
+#endif
+
+/* Management commands may not add or change a connector's local-only settings
+ * (Rust: local_only_settings_cannot_be_introduced_by_a_command). */
+static void check_local_only_settings(void) {
+    static const char *const keys[] = {"password_file", "pki_dir",
+                                       "trust_any_server_certificate", NULL};
+    const char *base =
+        "{\"connection\":{\"pki_dir\":\"/var/lib/pki\"},\"device\":[{\"name\":\"a\","
+        "\"protocol_address\":{\"endpoint\":\"x\",\"password_file\":\"/etc/pw\"}}]}";
+    cJSON *before = cJSON_Parse(base);
+    char reason[512] = "";
+    CHECK(tdot_reject_local_only_settings(before, before, keys, reason, sizeof reason) == 0, "local-only: %s", reason);
+
+    cJSON *after = cJSON_Duplicate(before, 1);
+    cJSON *dev = cJSON_CreateObject();
+    cJSON_AddStringToObject(dev, "name", "b");
+    cJSON *pa = cJSON_AddObjectToObject(dev, "protocol_address");
+    cJSON_AddStringToObject(pa, "password_file", "/etc/shadow");
+    cJSON_AddItemToArray(cJSON_GetObjectItem(after, "device"), dev);
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0, "local-only: %s", reason);
+    CHECK(strstr(reason, "device 'b': protocol_address.password_file") != NULL, "local-only: %s", reason);
+    CHECK(strstr(reason, "/etc/shadow") == NULL, "local-only: %s", reason);
+    cJSON_Delete(after);
+
+    after = cJSON_Duplicate(before, 1);
+    cJSON_ReplaceItemInObject(cJSON_GetObjectItem(after, "connection"), "pki_dir",
+                              cJSON_CreateString("/tmp"));
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0, "local-only: %s", reason);
+    CHECK(strncmp(reason, "[connection] pki_dir", 20) == 0, "local-only: %s", reason);
+    cJSON_Delete(after);
+
+    /* nested, as SNMPv3's v3 table */
+    after = cJSON_Duplicate(before, 1);
+    pa = cJSON_GetObjectItem(cJSON_GetArrayItem(cJSON_GetObjectItem(after, "device"), 0),
+                             "protocol_address");
+    cJSON_AddBoolToObject(cJSON_AddObjectToObject(pa, "v3"), "trust_any_server_certificate", 1);
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0, "local-only: %s", reason);
+    CHECK(strstr(reason, "protocol_address.v3.trust_any_server_certificate") != NULL, "local-only: %s", reason);
+    /* removing one is a change too; removing the device is not; no keys means no check */
+    cJSON_DeleteItemFromObject(pa, "v3");
+    cJSON_DeleteItemFromObject(pa, "password_file");
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0 &&
+              strstr(reason, "device 'a': protocol_address.password_file") != NULL,
+          "local-only removal: %s", reason);
+    cJSON_DeleteItemFromObject(cJSON_GetObjectItem(after, "connection"), "pki_dir");
+    cJSON_DeleteItemFromArray(cJSON_GetObjectItem(after, "device"), 0);
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0 &&
+              strncmp(reason, "[connection] pki_dir", 20) == 0,
+          "local-only connection removal: %s", reason);
+    cJSON_AddStringToObject(cJSON_GetObjectItem(after, "connection"), "pki_dir", "/var/lib/pki");
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) == 0,
+          "removing a device: %s", reason);
+    cJSON_Delete(after);
+    CHECK(tdot_reject_local_only_settings(before, before, NULL, reason, sizeof reason) == 0, "local-only: %s", reason);
+    cJSON_Delete(before);
+}
+
 int main(void) {
+    check_local_only_settings();
     check_duration_grammar();
     check_invalid_point_field_values();
     check_invalid_device_field_values();
@@ -1605,6 +1819,9 @@ int main(void) {
     check_library_with_empty_point_list_is_rejected();
     check_stall_decision();
     check_watchdog_period();
+#ifdef TDOT_FEATURE_OPCUA
+    check_opcua_security_config();
+#endif
 
     if (failures) {
         printf("%d check(s) failed\n", failures);

@@ -2,9 +2,9 @@
 # (opcua-sim in ../docker-compose.yaml, or `just sim opcua`), which advertises
 # its endpoint as opc.tcp://127.0.0.1:4840/.
 #
-# NOTE: the connector follows the server's ADVERTISED endpoint URL, so the sim
-# must advertise 127.0.0.1 (not a docker service name) to be reachable from the
-# host.
+# The connector always dials the configured endpoint address, whatever URL the
+# server advertises (servers behind NAT or in containers advertise names the
+# client cannot reach).
 #
 # Two ways to use it:
 #
@@ -33,6 +33,15 @@
 # With security_policy = "None" no client certificate is needed. The connector
 # silences async-opcua's spurious "missing application instance certificate"
 # logs by default; set RUST_LOG (e.g. RUST_LOG=info) to see the full client logs.
+#
+# A SECURED server: `docker compose -f demo/docker-compose.yaml --profile secure up -d
+# opcua-secure-sim` starts one on 127.0.0.1:4841 (Basic256Sha256, user
+# operator/demo-password). Uncomment the `opc-secure` device below; its first connect
+# quarantines the server certificate (link status "certificate untrusted: ...").
+# Trust it and the device connects on its next attempt:
+#
+#   tedge-dot pki list rejected
+#   tedge-dot pki trust <first 8 digits of the thumbprint>
 
 [connector]
 protocol      = "opcua"
@@ -70,3 +79,12 @@ points_from      = ["demo-sim"]
   #   [[device.point]]
   #   id   = "temperature"
   #   name = "A label of my own"
+
+# The secured simulator (see the header). The connector generates its own certificate in
+# /var/lib/tedge-dot/opcua/pki on first start.
+#
+# [[device]]
+# name             = "opc-secure"
+# protocol_address = { endpoint = "opc.tcp://127.0.0.1:4841/", security_policy = "Basic256Sha256", security_mode = "sign_and_encrypt", user = "operator", password = "demo-password" }
+# default_mode     = "typed"
+# points_from      = ["demo-sim"]

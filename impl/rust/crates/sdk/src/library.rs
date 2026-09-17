@@ -335,6 +335,22 @@ pub fn load(path: &Path) -> Result<ConnectorConfig, String> {
         .map_err(|e| format!("failed to load config '{}': {e}", path.display()))
 }
 
+/// A TOML syntax error as `line L, column C: message`, without the excerpt of the offending
+/// line the `Display` of [`toml::de::Error`] includes: that line may hold a credential (a
+/// device's `protocol_address` with a password), and the error ends up in logs and command
+/// results.
+pub fn toml_error(text: &str, e: &toml::de::Error) -> String {
+    match e.span() {
+        Some(span) => {
+            let before = &text[..span.start.min(text.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = before.len() - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+            format!("line {line}, column {column}: {}", e.message())
+        }
+        None => e.message().to_string(),
+    }
+}
+
 /// The directory relative library references in `config_path` resolve against.
 pub fn config_base_dir(config_path: &Path) -> &Path {
     match config_path.parent() {
@@ -348,15 +364,20 @@ pub fn config_base_dir(config_path: &Path) -> &Path {
 /// `base_dir` is what relative library paths resolve against (the configuration file's
 /// directory; see [`config_base_dir`]).
 pub fn resolve(text: &str, base_dir: &Path) -> Result<ConnectorConfig, String> {
-    let mut doc: Value = toml::from_str(text).map_err(|e| format!("failed to parse config: {e}"))?;
+    let mut doc: Value =
+        toml::from_str(text).map_err(|e| format!("failed to parse config: {}", toml_error(text, &e)))?;
     check_document(&doc)?;
     // Before the devices, as the C loader reads it; the typed parse would only catch a non-string.
     if let Some(connector) = doc.get("connector") {
         check_duration(connector, "poll_interval").map_err(|e| format!("[connector] {e}"))?;
     }
     expand(&mut doc, base_dir)?;
-    doc.try_into()
-        .map_err(|e: toml::de::Error| format!("failed to parse config: {e}"))
+    let mut config: ConnectorConfig = doc
+        .try_into()
+        .map_err(|e: toml::de::Error| format!("failed to parse config: {e}"))?;
+    // Absolute, so a later change of working directory cannot move what it points at.
+    config.base_dir = Some(std::path::absolute(base_dir).unwrap_or_else(|_| base_dir.to_path_buf()));
+    Ok(config)
 }
 
 /// Expand every device's `points_from` references in place, leaving a document whose devices
@@ -618,7 +639,7 @@ pub fn is_path_reference(reference: &str) -> bool {
 /// path form still works.
 pub fn reject_path_references(before: &str, after: &str) -> Result<(), String> {
     let parse = |text: &str| -> Result<Value, String> {
-        toml::from_str(text).map_err(|e| format!("failed to parse config: {e}"))
+        toml::from_str(text).map_err(|e| format!("failed to parse config: {}", toml_error(text, &e)))
     };
     let existing = path_references(&parse(before)?);
     for (device, reference) in path_references(&parse(after)?) {
@@ -630,6 +651,96 @@ pub fn reject_path_references(before: &str, after: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Reject local-only settings that a management command (§6.3) *added or changed*.
+///
+/// Some protocol settings name files on the gateway or relax security — an OPC UA
+/// `password_file` or `pki_dir`, `trust_any_server_certificate`, an SNMPv3
+/// `auth_password_file`. In a configuration file only root or `tedge` can set them; from a
+/// command, anything that can publish on the broker could make the connector read a local file
+/// and send it to a server of its choosing, or stop authenticating servers. The connector names
+/// these keys ([`crate::Connector::local_only_settings`]); they are matched at any depth of
+/// `[connection]` and of every device's `protocol_address`.
+///
+/// As for path references, only what the command changed is judged: a value the configuration
+/// already has (same device, same key, same value) stays legal, so an unrelated command on a
+/// configuration that uses these settings still works. Removing one is a change too (a
+/// device-level `false` can be what overrides a `[connection]` opt-in); removing a whole device
+/// is not.
+pub fn reject_local_only_settings(before: &str, after: &str, keys: &[&str]) -> Result<(), String> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let parse = |text: &str| -> Result<Value, String> {
+        toml::from_str(text).map_err(|e| format!("failed to parse config: {}", toml_error(text, &e)))
+    };
+    let (before, after) = (parse(before)?, parse(after)?);
+    let refuse = |place: String, path: &[String]| {
+        format!(
+            "{place}{} may only be set in the configuration file, not by a management command",
+            path.join(".")
+        )
+    };
+
+    if let Some(path) = changed_key(before.get("connection"), after.get("connection"), keys) {
+        return Err(refuse("[connection] ".into(), &path));
+    }
+
+    let devices = |doc: &Value| -> Vec<Value> {
+        doc.get("device")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let old = devices(&before);
+    for device in devices(&after) {
+        let name = device.get("name").and_then(Value::as_str).unwrap_or("<unnamed>");
+        let previous = old
+            .iter()
+            .find(|d| d.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|d| d.get("protocol_address"));
+        if let Some(path) = changed_key(previous, device.get("protocol_address"), keys) {
+            return Err(refuse(format!("device '{name}': protocol_address."), &path));
+        }
+    }
+    Ok(())
+}
+
+/// The path of the first restricted key added, changed or removed between `before` and `after`.
+fn changed_key(before: Option<&Value>, after: Option<&Value>, keys: &[&str]) -> Option<Vec<String>> {
+    let (mut old, mut new) = (Vec::new(), Vec::new());
+    collect_keys(before, keys, &mut Vec::new(), &mut old);
+    collect_keys(after, keys, &mut Vec::new(), &mut new);
+    new.iter()
+        .find(|(path, value)| lookup(before, path) != Some(value))
+        .or_else(|| old.iter().find(|(path, value)| lookup(after, path) != Some(value)))
+        .map(|(path, _)| path.clone())
+}
+
+/// Every `(path, value)` under `value` whose last key is one of `keys`.
+fn collect_keys(
+    value: Option<&Value>,
+    keys: &[&str],
+    path: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, Value)>,
+) {
+    let Some(table) = value.and_then(Value::as_table) else {
+        return;
+    };
+    for (key, v) in table {
+        path.push(key.clone());
+        if keys.contains(&key.as_str()) {
+            out.push((path.clone(), v.clone()));
+        } else {
+            collect_keys(Some(v), keys, path, out);
+        }
+        path.pop();
+    }
+}
+
+fn lookup<'a>(value: Option<&'a Value>, path: &[String]) -> Option<&'a Value> {
+    path.iter().try_fold(value?, |v, key| v.get(key))
 }
 
 /// Every `(device, reference)` pair in `doc` whose reference is a path.
@@ -2221,5 +2332,60 @@ points_from      = ["acme-meter"]
                 }
             }
         }
+    }
+
+    #[test]
+    fn local_only_settings_cannot_be_introduced_by_a_command() {
+        let keys = ["password_file", "pki_dir", "trust_any_server_certificate"];
+        let before = r#"
+[connector]
+protocol = "opcua"
+[connection]
+pki_dir = "/var/lib/pki"
+[[device]]
+name = "a"
+protocol_address = { endpoint = "x", password_file = "/etc/pw" }
+"#;
+        // Unchanged: fine.
+        reject_local_only_settings(before, before, &keys).expect("nothing introduced");
+        // A new device with a password file.
+        let after = format!(
+            "{before}[[device]]\nname = \"b\"\nprotocol_address = {{ endpoint = \"y\", password_file = \"/etc/shadow\" }}\n"
+        );
+        let e = reject_local_only_settings(before, &after, &keys).unwrap_err();
+        assert!(e.contains("device 'b': protocol_address.password_file"), "{e}");
+        assert!(!e.contains("/etc/shadow"), "{e}");
+        // A changed value on an existing device, and in [connection].
+        let e = reject_local_only_settings(before, &before.replace("/etc/pw", "/etc/other"), &keys)
+            .unwrap_err();
+        assert!(e.contains("device 'a'"), "{e}");
+        let e = reject_local_only_settings(before, &before.replace("/var/lib/pki", "/tmp"), &keys)
+            .unwrap_err();
+        assert!(e.starts_with("[connection] pki_dir"), "{e}");
+        // Nested (SNMPv3 style), and a security switch.
+        let e = reject_local_only_settings(
+            before,
+            &before.replace(
+                "password_file = \"/etc/pw\"",
+                "password_file = \"/etc/pw\", v3 = { trust_any_server_certificate = true }",
+            ),
+            &keys,
+        )
+        .unwrap_err();
+        assert!(e.contains("protocol_address.v3.trust_any_server_certificate"), "{e}");
+        // Removing one is a change too; removing the device is not; no keys means no check.
+        let e = reject_local_only_settings(
+            before,
+            &before.replace(", password_file = \"/etc/pw\"", ""),
+            &keys,
+        )
+        .unwrap_err();
+        assert!(e.contains("device 'a': protocol_address.password_file"), "{e}");
+        let e = reject_local_only_settings(before, &before.replace("pki_dir = \"/var/lib/pki\"", ""), &keys)
+            .unwrap_err();
+        assert!(e.starts_with("[connection] pki_dir"), "{e}");
+        let without_device = before[..before.find("[[device]]").unwrap()].to_string();
+        reject_local_only_settings(before, &without_device, &keys).expect("removing a device is fine");
+        reject_local_only_settings(before, &after, &[]).expect("no restricted keys");
     }
 }

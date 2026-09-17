@@ -79,6 +79,31 @@ services:
       OPCUA_SIM_DYNAMIC: "1"
     restart: unless-stopped
 
+  # --- secured OPC-UA simulator (opt-in: --profile secure) -------------------
+  # The same simulator presenting a generated certificate on 127.0.0.1:4841
+  # (Basic256Sha256 / Aes256_Sha256_RsaPss, user operator/demo-password), for the
+  # `opc-secure` device in config/opcua.toml. Its certificate is not trusted
+  # until you run `tedge-dot pki trust` (see that file).
+  opcua-secure-sim:
+    image: ${SIM_IMAGE_REPO:-ghcr.io/thin-edge/tedge-dot}/opcua-sim:${SIM_IMAGE_TAG:-latest}
+    pull_policy: missing
+    build:
+      context: ..
+      dockerfile: connectors/opcua/sim/Dockerfile
+    profiles: ["secure"]
+    network_mode: host
+    environment:
+      OPCUA_ENDPOINT_HOST: "127.0.0.1"
+      OPCUA_SIM_DYNAMIC: "1"
+      OPCUA_PKI_VECTORS: /pki-vectors
+      OPCUA_CERT_HOSTNAMES: "127.0.0.1,localhost"
+      OPCUA_SECURE_SERVERS: "4841=untrusted"
+      OPCUA_SECURE_POLICIES: "Basic256Sha256_SignAndEncrypt,Aes256Sha256RsaPss_SignAndEncrypt"
+      OPCUA_USERS: "operator:demo-password"
+    volumes:
+      - opcua-secure-pki:/pki-vectors
+    restart: unless-stopped
+
   # --- CAN bus simulator (python-can) ----------------------------------------
   # Shares the host kernel network namespace so vcan0 is visible to the native
   # connector.  Creates vcan0 if it does not already exist, then broadcasts
@@ -165,3 +190,8 @@ services:
       TRAP_TARGET: "127.0.0.1:162"
       TRAP_INTERVAL: "10"
     restart: unless-stopped
+
+volumes:
+  # The secured OPC-UA simulator's generated certificates (kept across restarts, so a trusted
+  # certificate stays trusted).
+  opcua-secure-pki:

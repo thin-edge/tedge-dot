@@ -103,6 +103,11 @@ impl Connector for SnmpConnector {
         Ok(())
     }
 
+    /// SNMPv3 password files are read at configure: a command must not point them elsewhere.
+    fn local_only_settings(&self) -> &'static [&'static str] {
+        &["auth_password_file", "priv_password_file"]
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             protocol: PROTOCOL,

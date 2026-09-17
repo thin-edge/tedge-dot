@@ -233,3 +233,71 @@ is written to `MIGRATION_NOTES.md` for human review rather than guessed.
 
 Because the cloud-facing topics are unchanged, the cut-over is observable and reversible at the
 service level.
+
+## 7. Upgrading tedge-dot: OPC UA secured connections (BREAKING)
+
+From this release both builds connect to secured OPC UA servers as a supported feature
+([OPC UA connector spec](../connectors/opcua-connector-spec.md)). Configurations that use
+`security_policy = "None"` (the default) are **not affected**: they behave as before, need no
+certificate and create no PKI directory.
+
+**What breaks.** The Rust build used to accept *every* server certificate. It no longer does:
+a server certificate is trusted only when it is pinned (its exact copy is in
+`trusted/certs/`) or when it was issued by a CA in `trusted/certs/` whose CRL is present. (A
+secured policy did not actually work before this release — the Rust build never had an
+application certificate, and the C build refused anything but `None` — so the practical
+impact is on configurations written in anticipation.)
+
+**First contact with a secured server:**
+
+1. On its first start with a secured device, the connector generates its application
+   certificate in `/var/lib/tedge-dot/opcua/pki/own/` (or uses `certificate`/`private_key`
+   from `[connection]`).
+2. The server's certificate is unknown, so the device stays `disconnected` with the link-status
+   reason `certificate untrusted: … thumbprint <hex> …`, and the certificate is copied to
+   `rejected/certs/`.
+3. Check it and trust it — no restart needed:
+
+   ```sh
+   tedge-dot pki list rejected
+   tedge-dot pki trust <first 8 digits of the thumbprint>
+   ```
+
+4. Most servers also have to trust the connector. Give the server administrator its
+   certificate:
+
+   ```sh
+   tedge-dot pki export --pem --output tedge-dot.pem
+   ```
+
+   Until they do, the reason reads `certificate untrusted: the server rejected the connection …`.
+
+**Trusting a site CA instead of each server.** Import the CA certificate and its CRL; every
+server certificate it issues is then trusted:
+
+```sh
+tedge-dot pki trust site-root-ca.pem          # a CA certificate becomes a trust anchor
+tedge-dot pki add-issuer site-issuing-ca.pem  # intermediates, if any
+tedge-dot pki add-crl site-root-ca.crl        # one per CA: without it, certificates are refused
+tedge-dot pki add-crl site-issuing-ca.crl
+```
+
+A CA **without a CRL** makes every certificate it issued fail with `certificate revoked: …
+revocation unknown`. If the CA has never revoked anything, publish (or ask for) an empty CRL.
+`tedge-dot pki list` shows `NO CRL` for such a CA.
+
+**Other changes to check:**
+
+- A password on a channel without message security is refused, even when the server offers
+  token encryption (no server certificate is authenticated on such a channel), as is one sent
+  on a signed-only channel whose token policy is `None` (`plaintext password refused:`). Use
+  `sign_and_encrypt`, or set `allow_plaintext_password = true` only if the server offers
+  nothing better.
+- `Basic128Rsa15` and `Basic256` need `allow_deprecated_security = true`.
+- `security_mode = "none"` with a secured policy (and a secured mode with `None`) is now a
+  configuration error instead of being silently ignored. An unknown policy or mode is an
+  error too.
+- Keep passwords out of the configuration with `password_file`.
+- As a temporary escape hatch, `trust_any_server_certificate = true` restores the old
+  behaviour for a device or the whole connection (messages are still signed/encrypted; a
+  warning is logged on every connect). Do not leave it on.

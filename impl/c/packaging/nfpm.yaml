@@ -120,6 +120,27 @@ contents:
     type: config|noreplace
     file_info: { owner: tedge, group: tedge, mode: 0644 }
 
+  # OPC UA PKI directory (doc/connectors/opcua-connector-spec.md §4): the application
+  # certificate and the server-certificate trust lists. The service (running as tedge)
+  # generates its certificate and quarantines unknown server certificates here, so it
+  # belongs to tedge; own/private holds the private key. Nothing is generated at install
+  # time, and an upgrade leaves the contents alone.
+  - dst: /var/lib/tedge-dot
+    type: dir
+    file_info: { owner: tedge, group: tedge, mode: 0755 }
+  - dst: /var/lib/tedge-dot/opcua
+    type: dir
+    file_info: { owner: tedge, group: tedge, mode: 0750 }
+  - dst: /var/lib/tedge-dot/opcua/pki
+    type: dir
+    file_info: { owner: tedge, group: tedge, mode: 0750 }
+  - dst: /var/lib/tedge-dot/opcua/pki/own
+    type: dir
+    file_info: { owner: tedge, group: tedge, mode: 0750 }
+  - dst: /var/lib/tedge-dot/opcua/pki/own/private
+    type: dir
+    file_info: { owner: tedge, group: tedge, mode: 0700 }
+
   # Site-local point libraries (contract §3.4): the data point lists of the
   # device types this gateway talks to, referenced by `points_from` in a
   # connector config. Ships empty; a library dropped in here shadows a packaged

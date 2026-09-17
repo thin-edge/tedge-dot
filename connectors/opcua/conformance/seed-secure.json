@@ -1,0 +1,87 @@
+{
+  "$comment": "The variables of seed.json, served by a SECURED simulator: the harness generates the server certificate, trusts it in the connector's PKI directory ([connection] pki_dir), and fills in the \"@...\" credentials of the device addresses. See conformance-secure.toml.",
+  "variables": [
+    {
+      "identifier": "Temperature",
+      "datatype": "float64",
+      "value": 21.5
+    },
+    {
+      "identifier": "Counter",
+      "datatype": "uint16",
+      "value": 17001
+    },
+    {
+      "identifier": "BigCounter",
+      "datatype": "uint64",
+      "value": 18446744073709551615
+    },
+    {
+      "identifier": "NegativeOffset",
+      "datatype": "int32",
+      "value": -42
+    },
+    {
+      "identifier": "Running",
+      "datatype": "bool",
+      "value": true
+    },
+    {
+      "identifier": "Label",
+      "datatype": "string",
+      "value": "boiler-7"
+    },
+    {
+      "identifier": "RawPressure",
+      "datatype": "uint16",
+      "value": 250
+    },
+    {
+      "identifier": "Broken",
+      "datatype": "uint16",
+      "value": 0,
+      "bad_status": true
+    },
+    {
+      "identifier": "Setpoint",
+      "datatype": "uint16",
+      "value": 100,
+      "writable": true
+    },
+    {
+      "identifier": "TargetTemp",
+      "datatype": "float64",
+      "value": 0.0,
+      "writable": true
+    },
+    {
+      "identifier": "Enable",
+      "datatype": "bool",
+      "value": false,
+      "writable": true
+    },
+    {
+      "identifier": "Recipe",
+      "datatype": "string",
+      "value": "initial",
+      "writable": true
+    }
+  ],
+  "security": {
+    "endpoints": [
+      [
+        "Basic256Sha256",
+        "sign_and_encrypt"
+      ],
+      [
+        "Aes256_Sha256_RsaPss",
+        "sign_and_encrypt"
+      ],
+      [
+        "Basic256Sha256",
+        "sign"
+      ]
+    ],
+    "user": "operator"
+  }
+}

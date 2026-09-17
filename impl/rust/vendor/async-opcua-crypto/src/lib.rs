@@ -15,7 +15,7 @@ use tracing::{error, trace};
 
 pub use crate::aes::{AesKey, KeySize, PKey, PrivateKey, PublicKey};
 pub use crate::x509::{X509Data, X509Error, X509};
-pub use certificate_store::CertificateStore;
+pub use certificate_store::{CertificateStore, OWN_CERTIFICATE_PATH, OWN_PRIVATE_KEY_PATH};
 pub use policy::{AesDerivedKeys, PaddingInfo};
 pub use security_policy::SecurityPolicy;
 pub use thumbprint::Thumbprint;
@@ -32,6 +32,7 @@ mod hash;
 pub mod random;
 mod security_policy;
 mod thumbprint;
+pub mod trust_list;
 mod user_identity;
 mod x509;
 

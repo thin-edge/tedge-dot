@@ -1,2 +1,4 @@
 # OPC-UA-specific test dependencies (extends connectors/_shared/requirements.txt).
 asyncua~=1.1
+# Generates the PKI test vectors (conformance/tools/genpki.py) for the security suites.
+cryptography>=42

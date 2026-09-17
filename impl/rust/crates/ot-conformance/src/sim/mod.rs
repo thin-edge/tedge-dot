@@ -63,6 +63,12 @@ pub trait Simulator: Send + Sync {
 
     /// Rewrite a device's `protocol_address` (TOML) to point at this simulator.
     fn rewrite_protocol_address(&self, address: &mut toml::Value) -> Result<(), String>;
+
+    /// Settings the simulator needs in the connector's `[connection]` table (for example the
+    /// PKI directory that trusts a secured simulator's certificate). Default: none.
+    fn connection_overrides(&self) -> Vec<(String, toml::Value)> {
+        Vec::new()
+    }
 }
 
 /// Simulator kinds this harness build can run.

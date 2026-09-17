@@ -252,3 +252,16 @@ class MqttClient:
         """Forget all recorded messages."""
         with self._lock:
             self._messages.clear()
+
+    @keyword
+    def no_message_contains(self, *substrings):
+        """Assert that no message recorded so far, on any topic, contains any of the
+        substrings (for example a password that must never be published)."""
+        with self._lock:
+            recorded = [(t, p) for t, entries in self._messages.items() for _r, p in entries]
+        offending = sorted({t for t, p in recorded for s in substrings if s in p})
+        if offending:
+            raise AssertionError(
+                f"a secret was published on: {', '.join(offending)}"
+            )
+        return len(recorded)

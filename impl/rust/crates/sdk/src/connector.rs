@@ -185,6 +185,13 @@ pub trait Connector: Send {
     /// Declare what this connector supports. Must be cheap and pure.
     fn capabilities(&self) -> Capabilities;
 
+    /// Keys of `[connection]` and `device.protocol_address` (matched at any depth) that a
+    /// management command may not add or change, because they name local files or relax
+    /// security. Such a command is refused; see [`crate::library::reject_local_only_settings`].
+    fn local_only_settings(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Establish protocol connections to all configured devices.
     async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError>;
 

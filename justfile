@@ -25,7 +25,7 @@ MANIFEST := "--manifest-path impl/rust/Cargo.toml"
 # Every capability name a `requires:<capability>` tag may use. Declaring the vocabulary in one
 # place is what turns a mistyped tag into an error instead of a test that quietly runs against
 # a build that cannot pass it (see `just check-capability-tags`).
-KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial snmpv3-sha2"
+KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2"
 
 # This list is the single source of truth for what the C build still lacks. Keep it in sync
 # with the parity table in impl/c/README.md. Adding a capability here is a deliberate act:
@@ -33,7 +33,7 @@ KNOWN_CAPABILITIES := "subscribe opcua-security canbus-fd profibus-serial snmpv3
 #
 # NOTE: a capability listed here only becomes ENFORCED once a test is tagged with it;
 # `just check-capability-tags` reports the ones that are still inert.
-C_MISSING_CAPABILITIES := "opcua-security canbus-fd profibus-serial snmpv3-sha2"
+C_MISSING_CAPABILITIES := "canbus-fd profibus-serial snmpv3-sha2"
 
 # Create/refresh the single Python virtualenv used by every system test (and by the editor,
 # see .vscode/settings.json).
@@ -76,14 +76,25 @@ test-properties:
 # Run the OT connector conformance suite (layers 1-3; built-in broker + simulator, no
 # hardware). Usage: just conformance modbus [extra ot-conformance flags]
 conformance protocol="modbus" *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo run {{MANIFEST}} -p ot-conformance -- check --spec connectors/{{protocol}}/conformance.toml {{args}}
+    # Protocols with secured channels have a second manifest (a secured simulator).
+    if [ -f connectors/{{protocol}}/conformance-secure.toml ]; then
+        cargo run {{MANIFEST}} -p ot-conformance -- check --spec connectors/{{protocol}}/conformance-secure.toml {{args}}
+    fi
 
 # The same conformance suite against the C build (impl/c/), launched as an external connector
 # through the `[harness] command` of connectors/<proto>/conformance-c.toml. Build the C binary
 # first: cmake -S impl/c -B impl/c/build && cmake --build impl/c/build
 # Usage: just conformance-c modbus
 conformance-c protocol="modbus" *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo run {{MANIFEST}} -p ot-conformance -- check --spec connectors/{{protocol}}/conformance-c.toml {{args}}
+    if [ -f connectors/{{protocol}}/conformance-secure-c.toml ]; then
+        cargo run {{MANIFEST}} -p ot-conformance -- check --spec connectors/{{protocol}}/conformance-secure-c.toml {{args}}
+    fi
 
 # Compile-check the Linux-only code paths (SocketCAN connectors are cfg-gated and silently
 # skipped by a macOS `cargo build`). profibus is excluded: its serial dependency has a native
@@ -409,6 +420,11 @@ c-test *args="":
 # Usage: just c-describe-parity [config.toml ...]
 c-describe-parity *configs="":
     ./impl/c/ci/describe-parity.sh {{configs}}
+
+# `tedge-dot pki` must answer the same commands with the same JSON and exit codes in both
+# builds (OPC UA PKI directory). Needs impl/c/build and Python with `cryptography`.
+c-pki-parity:
+    ./impl/c/ci/pki-parity.sh
 
 # Debian architectures the C implementation is built and packaged for.
 C_ARCHS := "amd64 arm64 armhf"

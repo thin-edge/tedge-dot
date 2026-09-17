@@ -19,4 +19,8 @@ cloud/*/.venv/
 cloud/*/output/
 cloud/*/output-c/
 __pycache__/
-*.pycpki/
+*.pyc
+# async-opcua's default PKI directory (./pki), created by anything that builds a client
+# without an explicit pki_dir
+pki/
+

@@ -28,6 +28,11 @@ struct tdot_connector {
     const char *protocol;
     /* JSON capability descriptor published retained on startup. */
     const char *capabilities_json;
+    /* Optional NULL-terminated list of [connection] / device.protocol_address
+     * keys (any depth) a management command may not add or change, because
+     * they name local files or relax security. See
+     * tdot_reject_local_only_settings(). */
+    const char *const *local_only_settings;
     void *state;
 
     /* Parse protocol-specific config ([connection], device.protocol_address,

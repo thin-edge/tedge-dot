@@ -81,6 +81,18 @@ pub fn rewrite_config(
     mqtt.insert("port".into(), toml::Value::Integer(broker_port as i64));
     root.insert("mqtt".into(), toml::Value::Table(mqtt));
 
+    let overrides = sim.connection_overrides();
+    if !overrides.is_empty() {
+        let connection = root
+            .entry("connection")
+            .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+            .as_table_mut()
+            .ok_or("[connection] is not a table")?;
+        for (key, value) in overrides {
+            connection.insert(key, value);
+        }
+    }
+
     if let Some(devices) = root.get_mut("device").and_then(|d| d.as_array_mut()) {
         for device in devices {
             let address = device

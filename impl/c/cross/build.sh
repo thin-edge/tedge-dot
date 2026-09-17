@@ -55,3 +55,13 @@ cmake --build "$OUT"
 
 echo "==> built:"
 ls -l "$OUT/tedge-dot" "$OUT/tedge-dot-golden"
+
+# The glibc floor is the reason this build exists: fail if anything statically linked in
+# (open62541, mbedTLS, net-snmp) pulled in a newer symbol version than GLIBC_MIN.
+max_glibc=$("${DEB_MULTIARCH}-objdump" -T "$OUT/tedge-dot" \
+  | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+echo "==> highest glibc symbol version: $max_glibc (floor $GLIBC_MIN)"
+if [ "$(printf '%s\n%s\n' "$max_glibc" "$GLIBC_MIN" | sort -V | tail -1)" != "$GLIBC_MIN" ]; then
+  echo "build.sh: tedge-dot needs glibc $max_glibc, above the $GLIBC_MIN floor" >&2
+  exit 1
+fi

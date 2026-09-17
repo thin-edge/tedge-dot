@@ -95,6 +95,9 @@ const char *tdot_quality_str(tdot_quality_t q);
 
 #define TDOT_RAW_MAX 256
 #define TDOT_ERR_MAX 160
+/* A connect failure, which the link status carries as its reason: long enough for
+ * a certificate's thumbprint, subject and the command that trusts it. */
+#define TDOT_REASON_MAX 512
 
 /* One read result for one point, filled by the connector. The runtime turns
  * it into the JSON sample envelope. */

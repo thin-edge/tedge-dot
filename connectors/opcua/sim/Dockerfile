@@ -10,5 +10,7 @@ WORKDIR /app
 COPY connectors/opcua/sim/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY connectors/opcua/sim/server.py .
+# The secured mode generates its certificates with the shared PKI vector generator.
+COPY connectors/opcua/conformance/tools/genpki.py .
 EXPOSE 4840
 CMD ["python", "server.py"]

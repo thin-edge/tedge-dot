@@ -211,6 +211,9 @@ seed future spec PRs. Each will graduate to its own file using the template abov
 
 ## OPC-UA (`opcua`)
 
+> Implemented: see [opcua-connector-spec.md](opcua-connector-spec.md) for the normative spec
+> (security, certificates, `tedge-dot pki`). The sketch below is the original outline.
+
 | Aspect | Sketch |
 | --- | --- |
 | Library | `opcua` crate (client) |

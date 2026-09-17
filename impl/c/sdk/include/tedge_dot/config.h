@@ -108,6 +108,9 @@ typedef struct tdot_device {
 
     /* Runtime state: */
     tdot_link_t link;
+    /* Why the last connect failed (contract §8 `reason`), published with a
+     * disconnected link status and cleared on connect. */
+    char link_reason[TDOT_REASON_MAX];
     double backoff_s;     /* current reconnect backoff */
     double reconnect_at;  /* monotonic deadline for next reconnect attempt */
 } tdot_device_t;
@@ -176,6 +179,18 @@ double tdot_duration_parse(const char *s);
  * through a management command, which is a different trust boundary from a
  * config file: see tdot_runtime's handling of set-config/define-device. */
 bool tdot_is_path_reference(const char *ref);
+
+/* Refuse local-only settings that a management command (contract §6.3) added
+ * or changed: keys (NULL-terminated list, matched at any depth of [connection]
+ * and every device's protocol_address) that name files on the gateway or relax
+ * security. `before`/`after` are the JSON forms of the configuration document.
+ * A value the configuration already has (same device, key and value) stays
+ * legal; removing one is a change too, removing a whole device is not.
+ * Returns 0, or -1 with `reason` filled (the
+ * key's path, never its value). Mirrors reject_local_only_settings (Rust). */
+struct cJSON;
+int tdot_reject_local_only_settings(const struct cJSON *before, const struct cJSON *after,
+                                    const char *const *keys, char *reason, size_t rlen);
 
 tdot_device_t *tdot_config_device(tdot_config_t *cfg, const char *name);
 tdot_point_t *tdot_device_point(tdot_device_t *dev, const char *id);

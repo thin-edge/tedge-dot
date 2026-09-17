@@ -46,6 +46,11 @@
 #define SNMPC_SOURCE_LOG_LEN 64
 #define SNMPC_BATCH_FRESH_S 1.0   /* how long a fetched batch serves read_point */
 
+/* SNMPv3 password files are read at configure: a management command must not
+ * point them elsewhere. Mirrors SnmpConnector::local_only_settings (Rust). */
+static const char *const LOCAL_ONLY_SETTINGS[] = {"auth_password_file", "priv_password_file",
+                                                  NULL};
+
 static const char CAPABILITIES[] =
     "{\"protocol\":\"snmp\",\"version\":\"" TDOT_VERSION "\","
     "\"modes\":[\"raw\",\"typed\"],"
@@ -2278,6 +2283,7 @@ tdot_connector_t *tdot_connector_snmp_new(void) {
     st->rx = rx;
     c->protocol = "snmp";
     c->capabilities_json = CAPABILITIES;
+    c->local_only_settings = LOCAL_ONLY_SETTINGS;
     c->state = st;
     c->configure = configure;
     c->connect_device = connect_device;

@@ -20,8 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # python3-cryptography: the OPC UA security tests generate their PKI vectors with
+      # connectors/opcua/conformance/tools/genpki.py.
       - name: Install system deps (libudev for the profibus serial transport)
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config python3-cryptography
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -104,7 +106,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config \
             libmodbus-dev libmosquitto-dev libcjson-dev \
-            mosquitto mosquitto-clients jq
+            mosquitto mosquitto-clients jq python3-cryptography
           # The SNMP smoke test sends its traps with net-snmp from the runner itself.
           if [ "${{ matrix.protocol }}" = snmp ]; then sudo apt-get install -y snmp; fi
           # open62541 is built from source by CMake (FetchContent) when no
@@ -146,6 +148,10 @@ jobs:
       - name: Describe parity (Rust vs C)
         if: matrix.protocol == 'modbus'
         run: just c-describe-parity
+      # `tedge-dot pki` must behave the same in both builds (OPC UA certificates).
+      - name: PKI CLI parity (Rust vs C)
+        if: matrix.protocol == 'opcua'
+        run: just c-pki-parity
       - name: Connector log + simulator log on failure
         if: failure()
         run: docker compose -p tedge-dot-sim-${{ matrix.protocol }} -f connectors/${{ matrix.protocol }}/docker-compose.yaml logs simulator || true
