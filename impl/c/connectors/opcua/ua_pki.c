@@ -109,6 +109,9 @@ static bool cert_der_ok(const unsigned char *der, size_t len) {
 static bool crl_der_ok(const unsigned char *der, size_t len) {
     mbedtls_x509_crl c;
     mbedtls_x509_crl_init(&c);
+    /* mbedTLS already refuses trailing data here (unlike certificates, where
+     * it stops after the first one); the length check keeps the two parsers
+     * alike should that change. */
     int rc = mbedtls_x509_crl_parse_der(&c, der, len);
     bool whole = rc == 0 && c.raw.len == len;
     mbedtls_x509_crl_free(&c);
@@ -765,7 +768,10 @@ int ua_pki_write_atomic(const char *path, const unsigned char *data,
             break;
     }
     if (fd < 0 || fchmod(fd, (mode_t)mode) != 0) {
-        snprintf(err, errlen, "cannot write %s: %s", path, strerror(errno));
+        if (fd < 0 && errno == EEXIST) /* every candidate name was taken */
+            snprintf(err, errlen, "cannot write %s: no free temporary name", path);
+        else
+            snprintf(err, errlen, "cannot write %s: %s", path, strerror(errno));
         if (fd >= 0) {
             close(fd);
             unlink(tmp);

@@ -97,18 +97,35 @@ mod imp {
         std::process::exit(1);
     }
 
+    /// Whose identity the PKI work runs with: `None` to stay as we are (nothing to switch to),
+    /// or the owner of `root`. Testable without root, since it only looks at the directory.
+    pub fn owner_of(root: &Path) -> Result<Option<(libc::uid_t, libc::gid_t)>, String> {
+        let Ok(meta) = std::fs::symlink_metadata(root) else {
+            // Not there yet: root creates it, owned by root.
+            return Ok(None);
+        };
+        // A symbolic link here would decide the identity by its target: the packaged parent
+        // directory belongs to `tedge`, so that user could point the PKI directory at a
+        // root-owned one and have the whole action run as root inside it.
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "{} is a symbolic link; give the directory itself with --pki-dir",
+                root.display()
+            ));
+        }
+        Ok((meta.uid() != 0).then(|| (meta.uid(), meta.gid())))
+    }
+
     pub fn enter(root: &Path) -> Result<(), String> {
         // SAFETY: geteuid has no preconditions.
         if unsafe { libc::geteuid() } != 0 {
+            // Still reject a symlinked directory, so both builds agree on the message.
+            owner_of(root)?;
             return Ok(());
         }
-        let Ok(meta) = std::fs::metadata(root) else {
-            // Not there yet: root creates it, owned by root.
+        let Some((uid, gid)) = owner_of(root)? else {
             return Ok(());
         };
-        if meta.uid() == 0 {
-            return Ok(());
-        }
         // SAFETY: getgroups(0, NULL) returns the count; the buffer is sized to it.
         let saved_groups = unsafe {
             let n = libc::getgroups(0, std::ptr::null_mut());
@@ -124,8 +141,8 @@ mod imp {
             groups
         };
         let owner = Owner {
-            uid: meta.uid(),
-            gid: meta.gid(),
+            uid,
+            gid,
             // SAFETY: getegid has no preconditions.
             saved_egid: unsafe { libc::getegid() },
             saved_groups,
@@ -164,5 +181,24 @@ mod imp {
             fatal(e);
         }
         result
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn a_symlinked_pki_directory_is_refused() {
+        let dir = std::env::temp_dir().join(format!("tdot-priv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+
+        let e = super::imp::owner_of(&dir.join("link")).unwrap_err();
+        assert!(e.contains("symbolic link"), "{e}");
+        // A real directory: this one belongs to whoever runs the test.
+        assert!(super::imp::owner_of(&dir.join("real")).is_ok());
+        // Not there yet: nothing to switch to.
+        assert_eq!(super::imp::owner_of(&dir.join("absent")).unwrap(), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

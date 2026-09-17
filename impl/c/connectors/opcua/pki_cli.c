@@ -291,7 +291,16 @@ static void fatal_identity(void) {
 
 static int owner_enter(const char *root) {
     struct stat st;
-    if (geteuid() != 0 || stat(root, &st) != 0 || st.st_uid == 0)
+    if (lstat(root, &st) != 0) /* not there yet: root creates it, owned by root */
+        return EXIT_OK;
+    /* A symbolic link would decide the identity by its target: the packaged
+     * parent directory belongs to tedge, so that user could point the PKI
+     * directory at a root-owned one and have everything run as root in it.
+     * Refused whoever runs, so both builds answer alike (privilege.rs). */
+    if (S_ISLNK(st.st_mode))
+        return fail(EXIT_ERROR, "%s is a symbolic link; give the directory itself with --pki-dir",
+                    root);
+    if (geteuid() != 0 || st.st_uid == 0)
         return EXIT_OK;
     int n = getgroups(0, NULL);
     gid_t *groups = n > 0 ? malloc((size_t)n * sizeof *groups) : NULL;

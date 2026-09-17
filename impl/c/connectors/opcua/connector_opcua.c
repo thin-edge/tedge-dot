@@ -1012,8 +1012,6 @@ select_endpoint(const UA_EndpointDescription *eps, size_t n,
     return NULL;
 }
 
-/* Part 4 Table 193: a password is sent in plaintext only on a channel without
- * message security whose username token policy names no policy (or None). */
 /* Whether a password sent to `e` would be unprotected (security.rs
  * password_in_plaintext): any password on a channel without message security,
  * where no server certificate is authenticated, even with token encryption;

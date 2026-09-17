@@ -93,3 +93,4 @@
 - [x] 11.2 A password on a channel without message security is unprotected even with token encryption (no server certificate is authenticated there; async-opcua encrypts to the unvalidated CreateSession certificate), and so is one on a signed-only channel whose token policy is `None`; both need `allow_plaintext_password`.
 - [x] 11.3 Removing a local-only key from a device that remains, or from `[connection]`, is refused like adding or changing one.
 - [x] 11.4 C accepts a DER certificate or CRL only when it fills the whole buffer (as Rust does); `--days` is 1–100000 in both builds. Both in `pki-parity.sh`.
+- [x] 11.5 A PKI directory that is a symbolic link is refused by both builds (`privilege.rs` / `owner_enter`): the packaged parent belongs to `tedge`, so a link there would have decided the identity by its target and kept root inside an attacker-chosen directory. Covered by a Rust unit test, the root-only shell test and `pki-parity.sh`.

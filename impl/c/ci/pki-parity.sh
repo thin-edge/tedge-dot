@@ -97,6 +97,8 @@ run_sequence() {
     step create-again create --config "$dir/opcua.toml"
     step show show --config "$dir/opcua.toml" --json
     step export-json export --config "$dir/opcua.toml" --json
+    ln -s "$dir/empty" "$dir/linked"
+    step symlinked-root list --pki-dir "$dir/linked"
     step usage-days create --days 0 --pki-dir "$dir/days"
     cat "$work/vectors/scenarios/ca_issued/server/cert.der" "$work/vectors/ca/root.der" >"$dir/chain.der"
     step der-chain trust "$dir/chain.der" --pki-dir "$dir/chain"

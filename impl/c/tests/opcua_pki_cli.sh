@@ -90,6 +90,12 @@ if [ "$(id -u)" = 0 ]; then
     expect 0 owned-import -- trust "$v/scenarios/pinned/server/cert.pem" --pki-dir "$d"
     [ "$(uid "$(ls "$d"/trusted/certs/*.der)")" = 4321 ] || fail "imported certificate not the owner's"
     [ "$(uid "$work/root-file")" = 0 ] || fail "root-file changed owner"
+    # the PKI directory itself swapped for a symlink to a root-owned directory
+    ln -s "$work/rootdir" "$work/owned/linked" && chown -h 4321:4321 "$work/owned/linked"
+    expect 1 owned-symlinked-root -- list --pki-dir "$work/owned/linked"
+    grep -q "symbolic link" "$work/err" || fail "symlinked PKI root: $(cat "$work/err")"
+    [ -z "$(ls -A "$work/rootdir")" ] || fail "root worked inside a symlinked PKI root"
+
     # issuers/certs swapped for a symlink into a root-owned directory
     rm -rf "$d/issuers"
     ln -s "$work/rootdir" "$d/issuers" && chown -h 4321:4321 "$d/issuers"
