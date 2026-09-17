@@ -665,7 +665,9 @@ pub fn reject_path_references(before: &str, after: &str) -> Result<(), String> {
 ///
 /// As for path references, only what the command changed is judged: a value the configuration
 /// already has (same device, same key, same value) stays legal, so an unrelated command on a
-/// configuration that uses these settings still works. Removing one is allowed.
+/// configuration that uses these settings still works. Removing one is a change too (a
+/// device-level `false` can be what overrides a `[connection]` opt-in); removing a whole device
+/// is not.
 pub fn reject_local_only_settings(before: &str, after: &str, keys: &[&str]) -> Result<(), String> {
     if keys.is_empty() {
         return Ok(());
@@ -681,12 +683,8 @@ pub fn reject_local_only_settings(before: &str, after: &str, keys: &[&str]) -> R
         )
     };
 
-    let mut found = Vec::new();
-    collect_keys(after.get("connection"), keys, &mut Vec::new(), &mut found);
-    for (path, value) in found {
-        if lookup(before.get("connection"), &path) != Some(&value) {
-            return Err(refuse("[connection] ".into(), &path));
-        }
+    if let Some(path) = changed_key(before.get("connection"), after.get("connection"), keys) {
+        return Err(refuse("[connection] ".into(), &path));
     }
 
     let devices = |doc: &Value| -> Vec<Value> {
@@ -702,15 +700,22 @@ pub fn reject_local_only_settings(before: &str, after: &str, keys: &[&str]) -> R
             .iter()
             .find(|d| d.get("name").and_then(Value::as_str) == Some(name))
             .and_then(|d| d.get("protocol_address"));
-        let mut found = Vec::new();
-        collect_keys(device.get("protocol_address"), keys, &mut Vec::new(), &mut found);
-        for (path, value) in found {
-            if lookup(previous, &path) != Some(&value) {
-                return Err(refuse(format!("device '{name}': protocol_address."), &path));
-            }
+        if let Some(path) = changed_key(previous, device.get("protocol_address"), keys) {
+            return Err(refuse(format!("device '{name}': protocol_address."), &path));
         }
     }
     Ok(())
+}
+
+/// The path of the first restricted key added, changed or removed between `before` and `after`.
+fn changed_key(before: Option<&Value>, after: Option<&Value>, keys: &[&str]) -> Option<Vec<String>> {
+    let (mut old, mut new) = (Vec::new(), Vec::new());
+    collect_keys(before, keys, &mut Vec::new(), &mut old);
+    collect_keys(after, keys, &mut Vec::new(), &mut new);
+    new.iter()
+        .find(|(path, value)| lookup(before, path) != Some(value))
+        .or_else(|| old.iter().find(|(path, value)| lookup(after, path) != Some(value)))
+        .map(|(path, _)| path.clone())
 }
 
 /// Every `(path, value)` under `value` whose last key is one of `keys`.
@@ -2368,9 +2373,19 @@ protocol_address = { endpoint = "x", password_file = "/etc/pw" }
         )
         .unwrap_err();
         assert!(e.contains("protocol_address.v3.trust_any_server_certificate"), "{e}");
-        // Removing one is allowed; no keys means no check.
-        reject_local_only_settings(before, &before.replace(", password_file = \"/etc/pw\"", ""), &keys)
-            .expect("removal is fine");
+        // Removing one is a change too; removing the device is not; no keys means no check.
+        let e = reject_local_only_settings(
+            before,
+            &before.replace(", password_file = \"/etc/pw\"", ""),
+            &keys,
+        )
+        .unwrap_err();
+        assert!(e.contains("device 'a': protocol_address.password_file"), "{e}");
+        let e = reject_local_only_settings(before, &before.replace("pki_dir = \"/var/lib/pki\"", ""), &keys)
+            .unwrap_err();
+        assert!(e.starts_with("[connection] pki_dir"), "{e}");
+        let without_device = before[..before.find("[[device]]").unwrap()].to_string();
+        reject_local_only_settings(before, &without_device, &keys).expect("removing a device is fine");
         reject_local_only_settings(before, &after, &[]).expect("no restricted keys");
     }
 }

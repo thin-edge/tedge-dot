@@ -185,7 +185,8 @@ bool tdot_is_path_reference(const char *ref);
  * and every device's protocol_address) that name files on the gateway or relax
  * security. `before`/`after` are the JSON forms of the configuration document.
  * A value the configuration already has (same device, key and value) stays
- * legal; removing one is allowed. Returns 0, or -1 with `reason` filled (the
+ * legal; removing one is a change too, removing a whole device is not.
+ * Returns 0, or -1 with `reason` filled (the
  * key's path, never its value). Mirrors reject_local_only_settings (Rust). */
 struct cJSON;
 int tdot_reject_local_only_settings(const struct cJSON *before, const struct cJSON *after,

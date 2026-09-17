@@ -288,9 +288,11 @@ revocation unknown`. If the CA has never revoked anything, publish (or ask for) 
 
 **Other changes to check:**
 
-- A password sent without message security and without token encryption is refused
-  (`plaintext password refused:`); set `allow_plaintext_password = true` only if the server
-  offers nothing better.
+- A password on a channel without message security is refused, even when the server offers
+  token encryption (no server certificate is authenticated on such a channel), as is one sent
+  on a signed-only channel whose token policy is `None` (`plaintext password refused:`). Use
+  `sign_and_encrypt`, or set `allow_plaintext_password = true` only if the server offers
+  nothing better.
 - `Basic128Rsa15` and `Basic256` need `allow_deprecated_security = true`.
 - `security_mode = "none"` with a secured policy (and a secured mode with `None`) is now a
   configuration error instead of being silently ignored. An unknown policy or mode is an

@@ -250,7 +250,10 @@ the library's retries.
 - **File handling**:
   - Moves are `rename(2)` within the PKI directory.
   - Imports parse the file first and write it DER-normalised under the canonical name.
-  - When run as root, new files are `chown`ed to the PKI directory's owner.
+  - When run as root on a PKI directory another user owns, the PKI work runs with that user's
+    effective user and group (`seteuid`), so new files are the owner's and symlinks the owner
+    placed cannot redirect root's writes; only the file an action reads and the
+    `export --output` file are accessed as root. (Review follow-up; replaced a `chown` pass.)
 
 ### D10 — Link status and reasons
 The `LinkStatus.info` object (currently `None` for OPC UA) carries these fields:

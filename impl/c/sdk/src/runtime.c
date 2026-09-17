@@ -1058,14 +1058,53 @@ static int check_local_only(const cJSON *node, const cJSON *prev, const char *co
     return 0;
 }
 
+/* A restricted key under `prev` that `node` no longer has (at the same path):
+ * a removal, which is a change too (a device-level false can be what
+ * overrides a [connection] opt-in). */
+static int check_removed(const cJSON *prev, const cJSON *node, const char *const *keys,
+                         char *path, size_t plen, const char *place, char *reason,
+                         size_t rlen) {
+    if (!cJSON_IsObject(prev))
+        return 0;
+    size_t base = strlen(path);
+    const cJSON *item;
+    cJSON_ArrayForEach(item, prev) {
+        snprintf(path + base, plen - base, "%s%s", base ? "." : "", item->string);
+        const cJSON *now = cJSON_IsObject(node)
+                               ? cJSON_GetObjectItemCaseSensitive(node, item->string)
+                               : NULL;
+        int rc = 0;
+        if (listed(keys, item->string)) {
+            if (!now) {
+                snprintf(reason, rlen,
+                         "%s%s may only be set in the configuration file, not by a "
+                         "management command",
+                         place, path);
+                rc = -1;
+            }
+        } else {
+            rc = check_removed(item, now, keys, path, plen, place, reason, rlen);
+        }
+        if (rc != 0) {
+            path[base] = '\0';
+            return -1;
+        }
+    }
+    path[base] = '\0';
+    return 0;
+}
+
 int tdot_reject_local_only_settings(const cJSON *before, const cJSON *after,
                                     const char *const *keys, char *reason, size_t rlen) {
     if (!keys || !*keys)
         return 0;
     char path[512] = "";
-    if (check_local_only(cJSON_GetObjectItemCaseSensitive(after, "connection"),
-                         cJSON_GetObjectItemCaseSensitive(before, "connection"), keys, path,
-                         sizeof path, "[connection] ", reason, rlen) != 0)
+    const cJSON *conn_after = cJSON_GetObjectItemCaseSensitive(after, "connection");
+    const cJSON *conn_before = cJSON_GetObjectItemCaseSensitive(before, "connection");
+    if (check_local_only(conn_after, conn_before, keys, path, sizeof path, "[connection] ",
+                         reason, rlen) != 0 ||
+        check_removed(conn_before, conn_after, keys, path, sizeof path, "[connection] ",
+                      reason, rlen) != 0)
         return -1;
     const cJSON *devices = cJSON_GetObjectItemCaseSensitive(after, "device");
     const cJSON *old_devices = cJSON_GetObjectItemCaseSensitive(before, "device");
@@ -1086,8 +1125,9 @@ int tdot_reject_local_only_settings(const cJSON *before, const cJSON *after,
             }
         char place[300];
         snprintf(place, sizeof place, "device '%s': protocol_address.", device);
-        if (check_local_only(cJSON_GetObjectItemCaseSensitive(dev, "protocol_address"), prev,
-                             keys, path, sizeof path, place, reason, rlen) != 0)
+        const cJSON *now = cJSON_GetObjectItemCaseSensitive(dev, "protocol_address");
+        if (check_local_only(now, prev, keys, path, sizeof path, place, reason, rlen) != 0 ||
+            check_removed(prev, now, keys, path, sizeof path, place, reason, rlen) != 0)
             return -1;
     }
     return 0;

@@ -76,19 +76,30 @@ cmp -s "$d/trusted/certs/site.pem" "$v/scenarios/untrusted/server/cert.pem" ||
 expect 0 bundle-remove -- remove "$(tp untrusted)" --pki-dir "$d"
 [ ! -e "$d/trusted/certs/site.pem" ] || fail "remove kept an empty bundle"
 
-# run as root: new files go to the PKI directory's owner, symlink targets are left alone
+# run as root: the PKI work runs as the directory's owner, so new files are the owner's and
+# symlinks the owner placed lead nowhere root could write (Rust: privilege.rs)
 if [ "$(id -u)" = 0 ]; then
+    uid() { ls -lnd "$1" | awk '{print $3}'; }
     d="$work/owned/pki"
-    mkdir -p "$d/trusted/certs"
+    mkdir -p "$d/trusted/certs" "$work/rootdir"
+    chmod 755 "$work/rootdir"
     : >"$work/root-file"
     ln -s "$work/root-file" "$d/trusted/link"
-    chown -h 4321:4321 "$d" "$d/trusted" "$d/trusted/certs"
+    chown -R 4321:4321 "$d"
+    chmod 711 "$work"
     expect 0 owned-import -- trust "$v/scenarios/pinned/server/cert.pem" --pki-dir "$d"
-    uid() { ls -lnd "$1" | awk '{print $3}'; }
-    [ "$(uid "$(ls "$d"/trusted/certs/*.der)")" = 4321 ] || fail "imported certificate not handed to the owner"
-    [ "$(uid "$d/trusted/link")" = 4321 ] || fail "symlink not handed to the owner"
-    [ "$(uid "$work/root-file")" = 0 ] || fail "adopt_owner followed a symlink"
+    [ "$(uid "$(ls "$d"/trusted/certs/*.der)")" = 4321 ] || fail "imported certificate not the owner's"
+    [ "$(uid "$work/root-file")" = 0 ] || fail "root-file changed owner"
+    # issuers/certs swapped for a symlink into a root-owned directory
+    ln -s "$work/rootdir" "$d/issuers" && chown -h 4321:4321 "$d/issuers"
+    expect 1 owned-symlinked-dir -- add-issuer "$v/ca/root.der" --pki-dir "$d"
+    [ -z "$(ls -A "$work/rootdir")" ] || fail "root wrote through a symlinked directory"
 fi
+
+# a DER chain (two certificates concatenated) is no certificate file, as in Rust
+cat "$v/scenarios/ca_issued/server/cert.der" "$v/ca/root.der" >"$work/chain.der"
+expect 1 der-chain -- trust "$work/chain.der" --pki-dir "$work/chain/pki"
+grep -q "holds no certificate" "$work/err" || fail "DER chain: $(cat "$work/err")"
 
 # unknown and malformed thumbprints
 expect 2 unknown -- trust 0123abcd --pki-dir "$d"

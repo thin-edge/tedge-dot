@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::config::OpcuaConnection;
 use crate::pki::{self, CertEntry, CertificateRequest, FindError, Group, Pki};
+use crate::privilege::{self, as_invoker};
 
 /// The configuration read when neither `--pki-dir` nor `--config` is given.
 pub const DEFAULT_CONFIG: &str = "/etc/tedge/plugins/ot/opcua.toml";
@@ -143,7 +144,9 @@ fn context(opts: &Options) -> Result<Context, Failure> {
 fn execute(opts: &Options, action: &Action) -> Result<(Value, Printed), Failure> {
     let ctx = context(opts)?;
     let (conn, pki) = (&ctx.conn, &ctx.pki);
-    let result = match action {
+    // As root on a directory another user owns, work as that user (see `privilege`).
+    let _as_owner = privilege::enter(pki.root()).map_err(error)?;
+    match action {
         Action::Show => show(&ctx).map(text),
         Action::Export { pem, output } => export(&ctx, *pem, output.as_deref(), opts.json),
         Action::Create {
@@ -193,9 +196,13 @@ fn execute(opts: &Options, action: &Action) -> Result<(Value, Printed), Failure>
         }
         Action::AddIssuer { file } => add_issuer(pki, file).map(text),
         Action::AddCrl { file } => add_crl(pki, file).map(text),
-    };
-    adopt_owner(pki.root());
-    result
+    }
+}
+
+/// Read a file the administrator named, with the invoking identity.
+fn read_input(path: &Path) -> Result<Vec<u8>, Failure> {
+    as_invoker(|| std::fs::read(path))
+        .map_err(|e| error(format!("cannot read {}: {e}", path.display())))
 }
 
 fn text((value, text): (Value, String)) -> (Value, Printed) {
@@ -341,7 +348,7 @@ fn export(
             } else {
                 der
             };
-            pki::write_atomic(path, &bytes, 0o644).map_err(error)?;
+            as_invoker(|| pki::write_atomic(path, &bytes, 0o644)).map_err(error)?;
             let value = json!({"thumbprint": thumbprint, "format": format, "file": path.display().to_string()});
             (
                 value,
@@ -456,13 +463,12 @@ fn moved(
 
 fn trust(pki: &Pki, target: &str) -> Result<(Value, String), Failure> {
     let path = Path::new(target);
-    if !path.is_file() {
+    if !as_invoker(|| path.is_file()) {
         let entry = find(pki, target, &[Group::Rejected])?;
         return moved(pki, "trust", &[entry], Group::Trusted);
     }
     // Import a file: every certificate in it becomes trusted (and leaves rejected/).
-    let bytes =
-        std::fs::read(path).map_err(|e| error(format!("cannot read {}: {e}", path.display())))?;
+    let bytes = read_input(path)?;
     let ders = parse_certificates(&bytes);
     if ders.is_empty() {
         return Err(error(format!("{} holds no certificate", path.display())));
@@ -491,8 +497,7 @@ fn trust(pki: &Pki, target: &str) -> Result<(Value, String), Failure> {
 }
 
 fn add_issuer(pki: &Pki, file: &Path) -> Result<(Value, String), Failure> {
-    let bytes =
-        std::fs::read(file).map_err(|e| error(format!("cannot read {}: {e}", file.display())))?;
+    let bytes = read_input(file)?;
     let ders = parse_certificates(&bytes);
     if ders.is_empty() {
         return Err(error(format!("{} holds no certificate", file.display())));
@@ -527,8 +532,7 @@ fn add_issuer(pki: &Pki, file: &Path) -> Result<(Value, String), Failure> {
 }
 
 fn add_crl(pki: &Pki, file: &Path) -> Result<(Value, String), Failure> {
-    let bytes =
-        std::fs::read(file).map_err(|e| error(format!("cannot read {}: {e}", file.display())))?;
+    let bytes = read_input(file)?;
     let crls = parse_crls(&bytes);
     if crls.is_empty() {
         return Err(error(format!("{} holds no CRL", file.display())));
@@ -541,42 +545,4 @@ fn add_crl(pki: &Pki, file: &Path) -> Result<(Value, String), Failure> {
         out.push(json!({"file": path.display().to_string()}));
     }
     Ok((json!({"action": "add-crl", "crls": out}), text))
-}
-
-/// Run as root, hand everything under the PKI directory to the directory's owner, so the
-/// connector (running as that user) can read what an administrator added with `sudo`.
-fn adopt_owner(root: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // SAFETY: geteuid has no preconditions.
-        if unsafe { libc::geteuid() } != 0 {
-            return;
-        }
-        let Ok(meta) = std::fs::metadata(root) else {
-            return;
-        };
-        if meta.uid() == 0 {
-            return;
-        }
-        fn walk(dir: &Path, uid: u32, gid: u32) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Ok(m) = std::fs::symlink_metadata(&path) {
-                    if m.uid() == 0 {
-                        let _ = std::os::unix::fs::lchown(&path, Some(uid), Some(gid));
-                    }
-                    if m.is_dir() {
-                        walk(&path, uid, gid);
-                    }
-                }
-            }
-        }
-        walk(root, meta.uid(), meta.gid());
-    }
-    #[cfg(not(unix))]
-    let _ = root;
 }

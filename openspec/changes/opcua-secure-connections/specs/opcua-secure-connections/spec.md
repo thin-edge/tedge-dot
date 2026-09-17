@@ -215,13 +215,15 @@ the server offers no user token policy for the configured identity type, the dev
 - **THEN** configuration validation fails naming the device and both fields
 
 ### Requirement: No plaintext passwords by default
-The connector SHALL refuse to send a password when the password would travel unencrypted. Under
-OPC UA Part 4 Table 193 that is the case exactly when both of these hold:
-- The channel has no message security (mode `none`).
-- The selected username token policy names no security policy, or names `None`.
+The connector SHALL refuse to send a password that would be unprotected, which is the case when
+either of these holds:
+- The channel has no message security (mode `none`), whatever the username token policy names.
+  Table 193 of OPC UA Part 4 allows token encryption there, but nothing on such a channel
+  authenticates the server certificate the password would be encrypted to.
+- The channel is signed only (mode `sign`) and the username token policy names `None`.
 
-On a `sign` or `sign_and_encrypt` channel, a token policy without a security policy uses the
-channel's policy, so the password is encrypted.
+On `sign_and_encrypt`, or on `sign` with a token policy that is unnamed (the channel's policy)
+or names a real policy, the server certificate was validated and the password is protected.
 
 When the connector refuses, the device SHALL be `disconnected` with a reason explaining this.
 The refusal SHALL NOT apply when `allow_plaintext_password = true` is set for the device or in
@@ -231,9 +233,9 @@ The refusal SHALL NOT apply when `allow_plaintext_password = true` is set for th
 - **WHEN** a device uses policy `None` and `user`/`password`, and the server's username token policy has no security policy
 - **THEN** no session activation is attempted and the reason states that the password would be sent in plaintext
 
-#### Scenario: Token-level encryption is sufficient
+#### Scenario: Token-level encryption on an unsecured channel is not enough
 - **WHEN** a device uses policy `None` with `user`/`password`, and the server's username token policy specifies `Basic256Sha256`
-- **THEN** the password is encrypted with the server certificate and the session is activated
+- **THEN** no session activation is attempted unless `allow_plaintext_password = true`, because no server certificate was authenticated
 
 ### Requirement: Secrets are never disclosed
 Passwords, password file contents and private key material SHALL NOT appear in any of these
@@ -258,8 +260,9 @@ A management command (`set-config`, `define-device`) SHALL be refused when it ad
 a setting that names a file on the gateway or relaxes security: `pki_dir`, `certificate`,
 `private_key`, `create_certificate`, `password_file`, `user_certificate`, `user_private_key`,
 `trust_any_server_certificate`, `allow_plaintext_password` and `allow_deprecated_security`, in
-`[connection]` or a device's `protocol_address`. Values the configuration already has SHALL
-stay accepted, and removing one SHALL be allowed.
+`[connection]` or a device's `protocol_address`, or removes one from a device that remains.
+Values the configuration already has SHALL stay accepted, and removing a whole device SHALL be
+allowed.
 
 #### Scenario: define-device with a password file
 - **WHEN** a `define-device` command gives a new device `password_file = "/etc/shadow"`

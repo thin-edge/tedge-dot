@@ -18,7 +18,7 @@
 #include <unistd.h>
 
 #include <arpa/inet.h>
-#include <dirent.h>
+#include <grp.h>
 
 #include "cjson/cJSON.h"
 #include "tedge_dot/config.h"
@@ -254,6 +254,97 @@ static int describe_own(const ctx_t *ctx, const unsigned char *der, size_t len,
     return EXIT_OK;
 }
 
+/* ---- acting as the PKI directory's owner --------------------------------
+ *
+ * Run as root on a PKI directory another user owns (the packaged one belongs
+ * to tedge), the PKI work runs with that user's effective IDs and only its
+ * group: root never touches files in a directory an unprivileged user could
+ * rearrange with symlinks. Only what the administrator named (the file an
+ * action reads, the file `export --output` writes) is accessed as root,
+ * between invoker_begin() and invoker_end(). Mirrors privilege.rs (Rust). */
+static struct {
+    bool active;
+    uid_t uid;
+    gid_t gid, saved_egid;
+    gid_t *saved_groups;
+    int nsaved;
+} owner;
+
+static int to_owner(void) {
+    if (setgroups(1, &owner.gid) != 0 || setegid(owner.gid) != 0 || seteuid(owner.uid) != 0)
+        return -1;
+    return 0;
+}
+
+static int to_root(void) {
+    if (seteuid(0) != 0 || setegid(owner.saved_egid) != 0 ||
+        setgroups(owner.nsaved, owner.saved_groups) != 0)
+        return -1;
+    return 0;
+}
+
+/* A half-switched identity is not safe to continue with. */
+static void fatal_identity(void) {
+    fprintf(stderr, "error: cannot switch identity: %s\n", strerror(errno));
+    exit(EXIT_ERROR);
+}
+
+static int owner_enter(const char *root) {
+    struct stat st;
+    if (geteuid() != 0 || stat(root, &st) != 0 || st.st_uid == 0)
+        return EXIT_OK;
+    int n = getgroups(0, NULL);
+    gid_t *groups = n > 0 ? malloc((size_t)n * sizeof *groups) : NULL;
+    if (n < 0 || (n > 0 && (!groups || (n = getgroups(n, groups)) < 0))) {
+        free(groups);
+        return fail(EXIT_ERROR, "cannot read supplementary groups: %s", strerror(errno));
+    }
+    owner.uid = st.st_uid;
+    owner.gid = st.st_gid;
+    owner.saved_egid = getegid();
+    owner.saved_groups = groups;
+    owner.nsaved = n;
+    if (to_owner() != 0) {
+        int e = errno;
+        if (to_root() != 0)
+            fatal_identity();
+        free(groups);
+        return fail(EXIT_ERROR, "cannot act as the owner of %s: %s", root, strerror(e));
+    }
+    owner.active = true;
+    return EXIT_OK;
+}
+
+static void owner_leave(void) {
+    if (!owner.active)
+        return;
+    if (to_root() != 0)
+        fatal_identity();
+    owner.active = false;
+    free(owner.saved_groups);
+    owner.saved_groups = NULL;
+}
+
+static void invoker_begin(void) {
+    if (owner.active && to_root() != 0)
+        fatal_identity();
+}
+
+static void invoker_end(void) {
+    if (owner.active && to_owner() != 0)
+        fatal_identity();
+}
+
+/* A file the administrator named, read as the invoker. */
+static unsigned char *read_input(const char *path, size_t *len) {
+    invoker_begin();
+    unsigned char *bytes = ua_pki_read_file(path, len);
+    int e = errno;
+    invoker_end();
+    errno = e;
+    return bytes;
+}
+
 static int read_own(const char *path, unsigned char **der, size_t *len) {
     size_t n = 0;
     unsigned char *bytes = ua_pki_read_file(path, &n);
@@ -332,7 +423,10 @@ static int cmd_export(const ctx_t *ctx, bool pem, const char *output, bool json)
         char err[512];
         const unsigned char *data = pem ? (const unsigned char *)pem_text : der;
         size_t n = pem ? strlen(pem_text) : len;
-        if (ua_pki_write_atomic(output, data, n, 0644, err, sizeof err) != 0)
+        invoker_begin();
+        int wrc = ua_pki_write_atomic(output, data, n, 0644, err, sizeof err);
+        invoker_end();
+        if (wrc != 0)
             rc = fail(EXIT_ERROR, "%s", err);
         else if (json) {
             cJSON *o = cJSON_CreateObject();
@@ -613,7 +707,7 @@ static int cmd_move(const ctx_t *ctx, const char *action, const char *thumbprint
 static int import(const ctx_t *ctx, const char *action, const char *file,
                   ua_pki_group_t group, bool require_ca, bool json) {
     size_t len = 0;
-    unsigned char *bytes = ua_pki_read_file(file, &len);
+    unsigned char *bytes = read_input(file, &len);
     if (!bytes)
         return fail(EXIT_ERROR, "cannot read %s: %s", file, strerror(errno));
     ua_blobs_t certs = {0};
@@ -673,7 +767,10 @@ static int import(const ctx_t *ctx, const char *action, const char *file,
 
 static int cmd_trust(const ctx_t *ctx, const char *target, bool json) {
     struct stat st;
-    if (stat(target, &st) == 0 && S_ISREG(st.st_mode))
+    invoker_begin();
+    bool is_file = stat(target, &st) == 0 && S_ISREG(st.st_mode);
+    invoker_end();
+    if (is_file)
         return import(ctx, "trust", target, UA_PKI_TRUSTED, false, json);
     return cmd_move(ctx, "trust", target, UA_PKI_REJECTED, UA_PKI_TRUSTED, json);
 }
@@ -707,7 +804,7 @@ static int cmd_remove(const ctx_t *ctx, const char *thumbprint, const char *grou
 
 static int cmd_add_crl(const ctx_t *ctx, const char *file, bool json) {
     size_t len = 0;
-    unsigned char *bytes = ua_pki_read_file(file, &len);
+    unsigned char *bytes = read_input(file, &len);
     if (!bytes)
         return fail(EXIT_ERROR, "cannot read %s: %s", file, strerror(errno));
     ua_blobs_t crls = {0};
@@ -747,44 +844,6 @@ static int cmd_add_crl(const ctx_t *ctx, const char *file, bool json) {
         fputs(text, stdout);
     }
     return EXIT_OK;
-}
-
-/* lchown every root-owned entry under `dir`, without following symlinks
- * (the adopt_owner walk of the Rust build). */
-static void adopt_walk(const char *dir, uid_t uid, gid_t gid, int depth) {
-    if (depth > 16)
-        return;
-    DIR *d = opendir(dir);
-    if (!d)
-        return;
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL) {
-        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
-            continue;
-        char path[UA_PKI_PATH_MAX];
-        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, de->d_name) >= sizeof path)
-            continue;
-        struct stat st;
-        if (lstat(path, &st) != 0)
-            continue;
-        if (st.st_uid == 0 && lchown(path, uid, gid) != 0)
-            fprintf(stderr, "warn: could not hand %s to its owner: %s\n", path, strerror(errno));
-        if (S_ISDIR(st.st_mode))
-            adopt_walk(path, uid, gid, depth + 1);
-    }
-    closedir(d);
-}
-
-/* Run as root, hand everything under the PKI directory to the directory's
- * owner, so the connector (running as that user) can read it. Only entries
- * still owned by root are touched: what this command just wrote. */
-static void adopt_owner(const char *root) {
-    if (geteuid() != 0)
-        return;
-    struct stat st;
-    if (stat(root, &st) != 0 || st.st_uid == 0)
-        return;
-    adopt_walk(root, st.st_uid, st.st_gid, 0);
 }
 
 int tdot_opcua_pki_main(int argc, char **argv) {
@@ -882,6 +941,9 @@ int tdot_opcua_pki_main(int argc, char **argv) {
     int rc = context(pki_dir, config, &ctx);
     if (rc != EXIT_OK)
         return rc;
+    rc = owner_enter(ctx.pki_root);
+    if (rc != EXIT_OK)
+        return rc;
 
     if (!strcmp(action, "show"))
         rc = cmd_show(&ctx, json);
@@ -901,6 +963,6 @@ int tdot_opcua_pki_main(int argc, char **argv) {
         rc = import(&ctx, "add-issuer", positional[0], UA_PKI_ISSUERS, true, json);
     else
         rc = cmd_add_crl(&ctx, positional[0], json);
-    adopt_owner(ctx.pki_root);
+    owner_leave();
     return rc;
 }

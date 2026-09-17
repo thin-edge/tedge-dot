@@ -388,8 +388,9 @@ gateway (a password file, a PKI directory, a client certificate) or relax securi
 any server certificate, allowing plaintext passwords). A module declares them by key; a
 management command that *adds or changes* one, anywhere in `[connection]` or in a device's
 `protocol_address`, MUST be refused before anything is written, with a reason naming the key but
-not its value. As above, values the configuration already has stay valid and removing one is
-allowed. The OPC UA and SNMP connectors declare theirs in their specifications.
+not its value. As above, values the configuration already has stay valid. Removing one is a
+change too (a device-level `false` may be what overrides a `[connection]` opt-in); removing a
+whole device is not. The OPC UA and SNMP connectors declare theirs in their specifications.
 
 ## 4. Datatypes (typed mode)
 

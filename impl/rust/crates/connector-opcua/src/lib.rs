@@ -14,6 +14,7 @@
 mod config;
 pub mod pki;
 pub mod pki_cli;
+mod privilege;
 pub mod security;
 
 pub use config::{
@@ -872,7 +873,7 @@ impl Attempt<'_> {
                 {
                     if !security.allow_plaintext_password {
                         return Err(format!(
-                            "{} the server's endpoint would receive the password unencrypted (no message security and no token encryption); use a secured policy or set allow_plaintext_password = true",
+                            "{} the password would be readable by the server's endpoint without an authenticated server certificate, or in clear (a channel without message security, or a signed-only channel whose token policy is None); use sign_and_encrypt or set allow_plaintext_password = true",
                             security::PLAINTEXT_PASSWORD_REFUSED
                         ));
                     }

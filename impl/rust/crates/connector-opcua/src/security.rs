@@ -168,19 +168,23 @@ pub fn select_endpoint(
     Ok(chosen)
 }
 
-/// Whether a password sent to `endpoint` would travel unencrypted: OPC UA Part 4, Table 193 —
-/// only on a channel without message security whose username token policy names no security
-/// policy (or `None`). On a signed or encrypted channel an unnamed policy means the channel's.
+/// Whether a password sent to `endpoint` would be unprotected: readable on the wire, or
+/// encrypted to a server certificate nobody authenticated.
+///
+/// - A channel without message security authenticates no server certificate: even when the
+///   username token policy names a security policy (OPC UA Part 4, Table 193), the password is
+///   encrypted to whatever certificate the server presents (async-opcua takes it from the
+///   CreateSession response, which it does not validate on such a channel), so any server
+///   the device is pointed at can read it.
+/// - On a signed-only channel a token policy that explicitly names `None` sends it in clear.
+///   An unnamed policy means the channel's, whose server certificate was validated.
 pub fn password_in_plaintext(endpoint: &EndpointDescription) -> bool {
-    if endpoint.security_mode != MessageSecurityMode::None {
-        return false;
-    }
-    match endpoint.find_policy(UserTokenType::UserName) {
-        None => false,
-        Some(policy) => {
-            let uri = policy.security_policy_uri.as_ref();
-            uri.is_empty() || Policy::from_uri(uri) == Some(Policy::None)
-        }
+    match endpoint.security_mode {
+        MessageSecurityMode::None => endpoint.find_policy(UserTokenType::UserName).is_some(),
+        MessageSecurityMode::Sign => endpoint
+            .find_policy(UserTokenType::UserName)
+            .is_some_and(|p| Policy::from_uri(p.security_policy_uri.as_ref()) == Some(Policy::None)),
+        _ => false,
     }
 }
 
@@ -387,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn plaintext_detection_follows_table_193() {
+    fn unprotected_passwords_are_detected() {
         let none_uri = Policy::None.uri();
         let pw =
             |mode, uri: &str| endpoint(Policy::None, mode, 0, &[(UserTokenType::UserName, uri)]);
@@ -396,11 +400,18 @@ mod tests {
             MessageSecurityMode::None,
             &none_uri
         )));
-        assert!(!password_in_plaintext(&pw(
+        // Token encryption on a None channel: to a certificate nobody validated.
+        assert!(password_in_plaintext(&pw(
             MessageSecurityMode::None,
             &Policy::Basic256Sha256.uri()
         )));
         assert!(!password_in_plaintext(&pw(MessageSecurityMode::Sign, "")));
+        assert!(!password_in_plaintext(&pw(
+            MessageSecurityMode::Sign,
+            &Policy::Basic256Sha256.uri()
+        )));
+        // Signed only, token policy None: in clear on the wire.
+        assert!(password_in_plaintext(&pw(MessageSecurityMode::Sign, &none_uri)));
         assert!(!password_in_plaintext(&pw(
             MessageSecurityMode::SignAndEncrypt,
             &none_uri

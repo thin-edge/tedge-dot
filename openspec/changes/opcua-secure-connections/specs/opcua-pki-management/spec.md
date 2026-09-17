@@ -105,8 +105,9 @@ default) or PEM to the file, or to standard output. It SHALL never write the pri
 connector's automatic generation. It SHALL accept `--application-uri`, `--hostname` (repeatable,
 DNS or IP) and `--days`. When a certificate already exists, the command SHALL refuse unless
 `--force` is given. With `--force`, the previous certificate and key SHALL be kept under
-`own/` with a timestamp suffix rather than deleted. Files created by a command running as root
-SHALL be owned by the owner of the PKI directory.
+`own/` with a timestamp suffix rather than deleted. A command run as root on a PKI directory
+another user owns SHALL do its PKI work as that user, so the files it creates are that user's
+and root never writes through links that user placed.
 
 #### Scenario: Create when none exists
 - **WHEN** `own/` is empty and the operator runs `tedge-dot pki create --hostname gw01.plant.local`

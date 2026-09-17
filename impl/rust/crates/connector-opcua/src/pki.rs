@@ -557,30 +557,51 @@ pub fn canonical_name(cert: &X509, der: &[u8]) -> String {
 pub fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let tmp = dir.join(format!(
-        ".{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        std::process::id()
-    ));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    // A fresh temporary file: never an existing file or a symlink someone placed at the name
+    // (O_EXCL | O_NOFOLLOW), and its mode set through the descriptor, not the path.
+    let (tmp, mut file) = (0..16)
+        .find_map(|attempt| {
+            let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), temp_suffix(attempt)));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(mode).custom_flags(libc::O_NOFOLLOW);
+            }
+            match options.open(&tmp) {
+                Ok(file) => Some(Ok((tmp, file))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(format!("cannot write {}: {e}", path.display()))),
+            }
+        })
+        .unwrap_or_else(|| Err(format!("cannot write {}: no free temporary name", path.display())))?;
     let result = (|| {
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(mode);
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(mode))?;
         }
-        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        // rename(2) replaces a symlink at `path` itself, never its target.
         fs::rename(&tmp, path)
     })();
     if let Err(e) = result {
         let _ = fs::remove_file(&tmp);
         return Err(format!("cannot write {}: {e}", path.display()));
     }
-    set_mode(path, mode)
+    Ok(())
+}
+
+fn temp_suffix(attempt: u32) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    (u64::from(nanos) << 8) | u64::from(attempt)
 }
 
 fn set_mode(path: &Path, mode: u32) -> Result<(), String> {

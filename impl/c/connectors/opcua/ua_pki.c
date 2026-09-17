@@ -98,17 +98,21 @@ void ua_blobs_free(ua_blobs_t *b) {
 static bool cert_der_ok(const unsigned char *der, size_t len) {
     mbedtls_x509_crt c;
     mbedtls_x509_crt_init(&c);
+    /* The whole buffer, as Rust's strict DER parser requires: mbedTLS ignores
+     * trailing bytes (such as a second certificate of a DER chain). */
     int rc = mbedtls_x509_crt_parse_der(&c, der, len);
+    bool whole = rc == 0 && c.raw.len == len;
     mbedtls_x509_crt_free(&c);
-    return rc == 0;
+    return whole;
 }
 
 static bool crl_der_ok(const unsigned char *der, size_t len) {
     mbedtls_x509_crl c;
     mbedtls_x509_crl_init(&c);
     int rc = mbedtls_x509_crl_parse_der(&c, der, len);
+    bool whole = rc == 0 && c.raw.len == len;
     mbedtls_x509_crl_free(&c);
-    return rc == 0;
+    return whole;
 }
 
 /* Every PEM block labelled `label`; -1 when the buffer is not PEM text. */
@@ -747,11 +751,25 @@ int ua_pki_write_atomic(const char *path, const unsigned char *data,
     } else {
         snprintf(dir, sizeof dir, ".");
     }
+    /* A fresh temporary file: never an existing file or a symlink someone
+     * placed at the name, and its mode set through the descriptor. */
     char tmp[UA_PKI_PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s/.%s.%ld.tmp", dir, base, (long)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, mode);
-    if (fd < 0) {
+    int fd = -1;
+    for (unsigned attempt = 0; fd < 0 && attempt < 16; attempt++) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        snprintf(tmp, sizeof tmp, "%s/.%s.%ld.%lx.tmp", dir, base, (long)getpid(),
+                 ((unsigned long)ts.tv_nsec << 8) | attempt);
+        fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode);
+        if (fd < 0 && errno != EEXIST)
+            break;
+    }
+    if (fd < 0 || fchmod(fd, (mode_t)mode) != 0) {
         snprintf(err, errlen, "cannot write %s: %s", path, strerror(errno));
+        if (fd >= 0) {
+            close(fd);
+            unlink(tmp);
+        }
         return -1;
     }
     size_t off = 0;
@@ -769,14 +787,10 @@ int ua_pki_write_atomic(const char *path, const unsigned char *data,
     }
     fsync(fd);
     close(fd);
+    /* rename(2) replaces a symlink at `path` itself, never its target. */
     if (rename(tmp, path) != 0) {
         snprintf(err, errlen, "cannot write %s: %s", path, strerror(errno));
         unlink(tmp);
-        return -1;
-    }
-    if (chmod(path, (mode_t)mode) != 0) {
-        snprintf(err, errlen, "cannot set permissions of %s: %s", path,
-                 strerror(errno));
         return -1;
     }
     return 0;

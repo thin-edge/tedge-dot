@@ -81,8 +81,15 @@
 - [x] 10.1 Refuse management commands that add or change local-only settings (`Connector::local_only_settings` / `tdot_connector.local_only_settings`, checked by the runtime next to the path-reference guard); OPC UA and SNMP declare theirs. Verified by `reject_local_only_settings` unit tests (Rust) and `check_local_only_settings` (C).
 - [x] 10.2 `rejected/certs` is a review list, not a deny list: trust (pinned or chained) wins over a copy there; `pki reject` warns when a CA still vouches for the certificate. Vectors `rejected_listed` (now trusted), `rejected_then_ca_trusted`, `rejected_only`.
 - [x] 10.3 `pki remove`/`reject`/`trust` take one certificate out of a PEM bundle instead of deleting the file (both builds; a duplicate within one file is handled once).
-- [x] 10.4 C `pki` CLI: an `lstat`/`lchown` walk instead of `system("find … chown")`.
+- [x] 10.4 C `pki` CLI: no `system("find … chown")` (superseded by 11.1).
 - [x] 10.5 Rust: a server certificate chain is accepted (the leaf is validated), via `X509::from_byte_string` in the vendored crypto crate, which also covers the secure channel and upstream's `create_session` check.
 - [x] 10.6 A private key without a certificate (interrupted generation) is set aside and a new certificate generated; a certificate without its key is an explicit error (both builds).
 - [x] 10.7 C: the password read for the type check is wiped and freed.
 - [x] 10.8 Endpoint selection requires a listed token policy for anonymous identities too (both builds agree; neither client library can activate without one).
+
+## 11. Second review follow-ups
+
+- [x] 11.1 `tedge-dot pki` run as root on a PKI directory another user owns acts as that owner (effective user and groups, both builds); the admin-named input and `export --output` files are accessed as root. The chown pass is gone. `write_atomic` creates its temporary file with `O_EXCL | O_NOFOLLOW` and sets the mode on the descriptor. Verified by the root-only part of `opcua_pki_cli.sh` in the Linux images.
+- [x] 11.2 A password on a channel without message security is unprotected even with token encryption (no server certificate is authenticated there; async-opcua encrypts to the unvalidated CreateSession certificate), and so is one on a signed-only channel whose token policy is `None`; both need `allow_plaintext_password`.
+- [x] 11.3 Removing a local-only key from a device that remains, or from `[connection]`, is refused like adding or changing one.
+- [x] 11.4 C accepts a DER certificate or CRL only when it fills the whole buffer (as Rust does); `--days` is 1–100000 in both builds. Both in `pki-parity.sh`.

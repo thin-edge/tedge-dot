@@ -47,7 +47,7 @@ connect_timeout_s = 10
 # create_certificate = true
 # trust_any_server_certificate = false     # INSECURE: accept any server certificate
 # allow_deprecated_security    = false     # allow Basic128Rsa15 / Basic256
-# allow_plaintext_password     = false     # allow a password without message or token encryption
+# allow_plaintext_password     = false     # allow a password on a channel without message security
 
 # Add devices below, for example:
 #

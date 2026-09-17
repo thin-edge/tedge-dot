@@ -51,8 +51,9 @@ configuration file — never against the process working directory.
 may not add or change `pki_dir`, `certificate`, `private_key`, `create_certificate`,
 `password_file`, `user_certificate`, `user_private_key`, `trust_any_server_certificate`,
 `allow_plaintext_password` or `allow_deprecated_security`; such a command fails with
-`<place>.<key> may only be set in the configuration file, not by a management command`. An
-inline `password` is allowed.
+`<place>.<key> may only be set in the configuration file, not by a management command`.
+Removing one of them is refused too (removing a whole device is not). An inline `password` is
+allowed.
 
 ### 3.1 `connection`
 
@@ -240,10 +241,18 @@ the user key using the policy's algorithm.
 
 ### 6.2 Plaintext passwords
 
-Following OPC UA Part 4 Table 193, a password is sent in plaintext only on a channel without
-message security (`none`) whose username token policy names no policy or `None`. The connector
-refuses to send it — `plaintext password refused: …` — unless `allow_plaintext_password` is
-true, in which case it logs a warning on every connect.
+A password is unprotected, and refused — `plaintext password refused: …` — unless
+`allow_plaintext_password` is true (then a warning is logged on every connect), when:
+
+- the channel has no message security (`none`), whatever the username token policy says. OPC UA
+  Part 4 Table 193 lets such a token be encrypted, but to a server certificate that nothing on
+  a `none` channel authenticates (neither client library validates it there), so any server
+  the device is pointed at could decrypt it;
+- the channel is signed only (`sign`) and the token policy explicitly names `None`: the password
+  is then in clear on the wire.
+
+On `sign_and_encrypt`, or with a token policy that names a real policy on `sign`, the server
+certificate was validated (§5.2) and the password is protected.
 
 ## 7. Status
 
@@ -279,8 +288,11 @@ Exit status: 0 success, 1 usage or input error, 2 the named certificate does not
 | `add-crl <file>` | Store each CRL next to the CA (trusted or issuers) that issued it; a CRL of an unknown CA is refused. |
 
 A thumbprint is matched case-insensitively and may be a prefix of at least 8 hex digits; a
-prefix matching several certificates is an error listing them. Run as root, the command hands
-what it wrote to the owner of the PKI directory.
+prefix matching several certificates is an error listing them. Run as root on a PKI directory
+another user owns (the packaged one belongs to `tedge`), the command works as that user
+(effective user and group): what it writes belongs to the owner, and a symlink placed in the
+directory cannot redirect a write to a file only root may change. The file an action reads
+and the `export --output` file are accessed as root.
 
 JSON field names (both builds; keys unordered):
 

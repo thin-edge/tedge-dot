@@ -105,8 +105,8 @@ enum PkiAction {
         /// machine's host name).
         #[arg(long = "hostname", value_name = "NAME")]
         hostnames: Vec<String>,
-        /// Validity in days (default: 1825).
-        #[arg(long)]
+        /// Validity in days, 1 to 100000 (default: 1825).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100_000))]
         days: Option<u32>,
         /// Replace an existing certificate (the old one is kept with a timestamp suffix).
         #[arg(long)]

@@ -1762,10 +1762,20 @@ static void check_local_only_settings(void) {
     cJSON_AddBoolToObject(cJSON_AddObjectToObject(pa, "v3"), "trust_any_server_certificate", 1);
     CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0, "local-only: %s", reason);
     CHECK(strstr(reason, "protocol_address.v3.trust_any_server_certificate") != NULL, "local-only: %s", reason);
-    /* removal is fine; no keys means no check */
+    /* removing one is a change too; removing the device is not; no keys means no check */
     cJSON_DeleteItemFromObject(pa, "v3");
     cJSON_DeleteItemFromObject(pa, "password_file");
-    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) == 0, "local-only: %s", reason);
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0 &&
+              strstr(reason, "device 'a': protocol_address.password_file") != NULL,
+          "local-only removal: %s", reason);
+    cJSON_DeleteItemFromObject(cJSON_GetObjectItem(after, "connection"), "pki_dir");
+    cJSON_DeleteItemFromArray(cJSON_GetObjectItem(after, "device"), 0);
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) != 0 &&
+              strncmp(reason, "[connection] pki_dir", 20) == 0,
+          "local-only connection removal: %s", reason);
+    cJSON_AddStringToObject(cJSON_GetObjectItem(after, "connection"), "pki_dir", "/var/lib/pki");
+    CHECK(tdot_reject_local_only_settings(before, after, keys, reason, sizeof reason) == 0,
+          "removing a device: %s", reason);
     cJSON_Delete(after);
     CHECK(tdot_reject_local_only_settings(before, before, NULL, reason, sizeof reason) == 0, "local-only: %s", reason);
     cJSON_Delete(before);

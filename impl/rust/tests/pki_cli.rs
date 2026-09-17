@@ -395,6 +395,10 @@ fn usage_errors_exit_1() {
     assert_eq!(code(&pki(&["list", "bogus-group"])), 1);
     assert_eq!(code(&pki(&["frobnicate"])), 1);
     assert_eq!(code(&pki(&["--help"])), 0);
+    // Out-of-range validity, before anything is touched.
+    for days in ["0", "100001", "-1"] {
+        assert_eq!(code(&pki(&["create", "--days", days, "--pki-dir", "/nonexistent"])), 1, "{days}");
+    }
     // A configuration of another protocol.
     let dir = common::tempdir("cli-proto");
     let config = dir.join("modbus.toml");

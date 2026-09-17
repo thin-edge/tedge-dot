@@ -1011,13 +1011,18 @@ select_endpoint(const UA_EndpointDescription *eps, size_t n,
 
 /* Part 4 Table 193: a password is sent in plaintext only on a channel without
  * message security whose username token policy names no policy (or None). */
+/* Whether a password sent to `e` would be unprotected (security.rs
+ * password_in_plaintext): any password on a channel without message security,
+ * where no server certificate is authenticated, even with token encryption;
+ * and a token policy that names None on a signed-only channel. */
 static bool password_in_plaintext(const UA_EndpointDescription *e) {
-    if (e->securityMode != UA_MESSAGESECURITYMODE_NONE)
-        return false;
     const UA_UserTokenPolicy *t = find_token(e, UA_USERTOKENTYPE_USERNAME);
     if (!t)
         return false;
-    return t->securityPolicyUri.length == 0 ||
+    if (e->securityMode == UA_MESSAGESECURITYMODE_NONE)
+        return true;
+    return e->securityMode == UA_MESSAGESECURITYMODE_SIGN &&
+           t->securityPolicyUri.length > 0 &&
            policy_from_uri(&t->securityPolicyUri) == &POLICIES[0];
 }
 
@@ -1112,10 +1117,11 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
         if (ua->identity == UA_ID_USERNAME && password_in_plaintext(&chosen)) {
             if (!ua->allow_plaintext) {
                 snprintf(err, errlen,
-                         R_PLAINTEXT " the server's endpoint would receive the "
-                         "password unencrypted (no message security and no token "
-                         "encryption); use a secured policy or set "
-                         "allow_plaintext_password = true");
+                         R_PLAINTEXT " the password would be readable by the server's "
+                         "endpoint without an authenticated server certificate, or in "
+                         "clear (a channel without message security, or a signed-only "
+                         "channel whose token policy is None); use sign_and_encrypt or "
+                         "set allow_plaintext_password = true");
                 UA_EndpointDescription_clear(&chosen);
                 return -1;
             }
