@@ -58,6 +58,8 @@ pub struct SnmpConnector {
     write_sessions: HashMap<usize, Session>,
     routes: Arc<Mutex<Routes>>,
     listener: Option<JoinHandle<()>>,
+    /// Set by [`Connector::disable_push`]: a CLI read or write never binds the listen port.
+    push_disabled: bool,
     /// This receiver's SNMP engine, authoritative for v3 informs. Kept across reconnects: its
     /// boots and time are what senders synchronise to.
     engine: Option<LocalEngine>,
@@ -150,6 +152,10 @@ impl Connector for SnmpConnector {
             .is_some_and(Point::is_pushed)
     }
 
+    fn disable_push(&mut self) {
+        self.push_disabled = true;
+    }
+
     async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError> {
         self.stop_listener().await;
         self.sessions.clear();
@@ -181,7 +187,7 @@ impl Connector for SnmpConnector {
 
         // No notification point, no socket: the packaged default configuration has no device,
         // and must not take port 162 from a host's own trap receiver just by being installed.
-        let listening = if self.devices.iter().any(Device::has_notifications) {
+        let listening = if self.wants_listener() {
             self.start_listener()
         } else {
             Ok(())
@@ -336,7 +342,7 @@ impl Connector for SnmpConnector {
         // starts from a fresh socket.
         self.sessions.remove(&index);
         self.write_sessions.remove(&index);
-        if self.devices.iter().any(Device::has_notifications)
+        if self.wants_listener()
             && self.listener.as_ref().is_none_or(|task| task.is_finished())
         {
             self.stop_listener().await;
@@ -437,6 +443,12 @@ impl SnmpConnector {
                 "version": device.version.as_str(),
             })),
         }
+    }
+
+    /// Whether the notification socket is needed: some device has a trap or varbind point, and
+    /// this is the service rather than a CLI read or write (which would steal the service's port).
+    fn wants_listener(&self) -> bool {
+        !self.push_disabled && self.devices.iter().any(Device::has_notifications)
     }
 
     fn start_listener(&mut self) -> Result<(), String> {

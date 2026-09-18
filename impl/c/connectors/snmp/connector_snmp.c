@@ -119,6 +119,7 @@ typedef struct {
     size_t naccept;   /* accepted communities in data[]; 0: the connection's */
 
     bool connected;
+    bool listening; /* holds a reference on the listener */
     snmpc_ip_t addr;
     void *sess;
     snmpc_queued_t *queue[SNMPC_QUEUE_LEN];
@@ -1115,8 +1116,9 @@ static void disconnect_device(tdot_connector_t *self, tdot_device_t *dev) {
     tsnmp_unlock();
     tsnmp_session_close(sd->sess);
     sd->sess = NULL;
-    if (sd->has_notify)
+    if (sd->listening)
         release_listener(st);
+    sd->listening = false;
     for (size_t j = 0; j < dev->npoints; j++) {
         snmpc_point_t *sp = dev->points[j].proto;
         if (sp)
@@ -1171,11 +1173,13 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
         st->capdevices = cap;
     }
 
-    /* The listening socket is bound only while a device has trap points. */
-    if (sd->has_notify) {
+    /* The listening socket is bound only while a device has trap points, and
+     * never for a CLI read or write: it would take the service's port. */
+    if (sd->has_notify && !self->no_push) {
         if (st->fd < 0 && open_listener(st, err, errlen) != 0)
             return -1;
         st->listeners++;
+        sd->listening = true;
     }
 
     if (sd->has_objects) {
@@ -1199,8 +1203,9 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
         sd->sess = tsnmp_session_open(&params, why, sizeof why);
         if (!sd->sess) {
             snprintf(err, errlen, "snmp session to %s: %s", peer, why);
-            if (sd->has_notify)
+            if (sd->listening)
                 release_listener(st);
+            sd->listening = false;
             return -1;
         }
         /* A v3 session discovered the agent's engine: that engine is also the

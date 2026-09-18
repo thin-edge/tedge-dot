@@ -248,6 +248,7 @@ static int cmd_read(const args_t *a) {
         fprintf(stderr, "error: %s\n", err);
         return 1;
     }
+    conn->no_push = true;
 
     /* A signal mid-call _exit()s, which skips stdio's flush: keep every sample
      * already printed even when stdout is a pipe. */
@@ -355,6 +356,7 @@ static int cmd_write(const args_t *a) {
         fprintf(stderr, "error: %s\n", err);
         return 1;
     }
+    conn->no_push = true;
     tdot_device_t *dev = tdot_config_device(cfg, a->device);
     if (!dev) {
         fprintf(stderr, "error: unknown device: %s\n", a->device);

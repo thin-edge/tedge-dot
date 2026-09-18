@@ -34,6 +34,12 @@ struct tdot_connector {
      * tdot_reject_local_only_settings(). */
     const char *const *local_only_settings;
     void *state;
+    /* Set by the caller before any connect_device() when nothing will
+     * subscribe: a one-shot CLI read or write. The module must then not open
+     * anything only push delivery needs -- above all a listening socket, which
+     * the running service on the same host already holds (SNMP's notification
+     * port). Zero (the calloc default) for the runtime. */
+    bool no_push;
 
     /* Parse protocol-specific config ([connection], device.protocol_address,
      * point.address). Must fill point->proto and point->addr_json.

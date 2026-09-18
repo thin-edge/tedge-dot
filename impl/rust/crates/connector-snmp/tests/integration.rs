@@ -1093,6 +1093,56 @@ default_mode     = "typed"
     assert!(err.to_string().contains("polled"), "{err}");
 }
 
+/// `tedge-dot read`/`write` run next to the service, which already holds the notification port:
+/// with push disabled the CLI connects and polls without binding it.
+#[tokio::test]
+async fn with_push_disabled_the_listen_port_is_left_to_the_service() {
+    let agent = spawn_agent(Agent::seeded()).await;
+    let service = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let text = format!(
+        r#"
+[connector]
+protocol = "snmp"
+[connection]
+listen = "127.0.0.1:{listen}"
+[[device]]
+name             = "mixed"
+protocol_address = {{ host = "127.0.0.1", port = {port} }}
+default_mode     = "typed"
+  [[device.point]]
+  id       = "sys_descr"
+  datatype = "string"
+  address  = {{ oid = "1.3.6.1.2.1.1.1.0" }}
+  [[device.point]]
+  id       = "link_down"
+  datatype = "string"
+  address  = {{ trap = "1.3.6.1.6.3.1.1.5.3" }}
+"#,
+        listen = service.local_addr().unwrap().port(),
+        port = agent.address.port(),
+    );
+
+    // The service's view: the port is taken, so the device cannot come up.
+    let mut conn = factory();
+    conn.configure(&config(&text)).unwrap();
+    let reports = conn.connect().await.unwrap();
+    assert_eq!(reports[0].status, LinkStatus::Disconnected);
+    assert!(reports[0].reason.as_deref().unwrap_or_default().contains("cannot listen"), "{reports:?}");
+
+    // The CLI's view: no socket is bound, and the object points are still read.
+    let mut conn = factory();
+    conn.configure(&config(&text)).unwrap();
+    conn.disable_push();
+    let reports = conn.connect().await.unwrap();
+    assert_eq!(reports[0].status, LinkStatus::Connected, "{reports:?}");
+    let samples = read(&mut conn, "mixed", &["sys_descr"]).await;
+    assert_eq!(samples[0].quality, Quality::Good);
+    let device = DeviceId::from("mixed");
+    let reconnected = conn.reconnect(&device).await.unwrap();
+    assert_eq!(reconnected.status, LinkStatus::Connected, "a reconnect does not bind it either");
+    conn.disconnect().await.unwrap();
+}
+
 #[test]
 fn invalid_configurations_are_rejected_naming_the_problem() {
     let base = |connection: &str, address: &str, point: &str| {
