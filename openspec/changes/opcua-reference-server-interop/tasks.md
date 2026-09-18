@@ -172,11 +172,15 @@
       with no implementation-specific skips, EXCEPT the one genuine parity gap
       `requires:opcua-basic128rsa15`, which is skipped under C and runs under Rust. DONE:
       RUST 13/13 locally and on CI; C 13 passed / 0 failed / 1 skipped locally
-- [ ] 5.2 Run the existing suites — `just test`, `just conformance opcua`,
+- [x] 5.2 Run the existing suites — `just test`, `just conformance opcua`,
       `just conformance-c opcua`, `just test-e2e opcua`, `just test-e2e-c opcua` — and verify
       the connector fixes in section 1 broke nothing. DONE so far: `cargo test --workspace`
       (all green), `just conformance opcua` (147 passed, 0 failed), the `opcua-*` ctest
       targets and `just c-pki-parity`. `just conformance-c opcua`, `just test-e2e opcua` and
-      `just test-e2e-c opcua` are covered by the CI jobs on PR #54, which pass
-- [ ] 5.3 Run `openspec validate opcua-reference-server-interop --strict` and verify every
-      scenario in both spec deltas maps to a test that exists
+      `just test-e2e-c opcua` are covered by the CI jobs on PR #54. All 45 checks pass on
+      f27826a, so the connector changes broke nothing
+- [x] 5.3 Run `openspec validate opcua-reference-server-interop --strict` and verify every
+      scenario in both spec deltas maps to a test that exists. Valid. The delta gained a
+      MODIFIED `Explicit opt-out of server certificate validation` once the work showed the
+      old wording ("any server certificate is accepted") was not achievable: a key outside the
+      policy's range is refused whatever the trust settings say
