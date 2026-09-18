@@ -192,6 +192,12 @@ pub trait Connector: Send {
         &[]
     }
 
+    /// OPTIONAL: tell the module, before [`Connector::connect`], that nothing will subscribe:
+    /// a one-shot `read` or `write` from the CLI. The module must then not open anything that
+    /// only push delivery needs — above all a listening socket, which the `run` service on the
+    /// same host already holds (SNMP's notification port). The default does nothing.
+    fn disable_push(&mut self) {}
+
     /// Establish protocol connections to all configured devices.
     async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError>;
 

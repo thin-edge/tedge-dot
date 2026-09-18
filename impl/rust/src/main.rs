@@ -1089,6 +1089,7 @@ async fn cmd_read(args: ReadArgs) -> Result<(), String> {
     connector
         .configure(&config)
         .map_err(|e| format!("invalid configuration: {e}"))?;
+    connector.disable_push();
     let (targets, failed_devices) = connect_targets(&mut connector, targets).await?;
 
     let now = Instant::now();
@@ -1204,6 +1205,7 @@ async fn cmd_write(args: WriteArgs) -> Result<(), String> {
     connector
         .configure(&config)
         .map_err(|e| format!("invalid configuration: {e}"))?;
+    connector.disable_push();
     let (targets, failed_devices) = connect_targets(&mut connector, targets).await?;
 
     let mut failures = failed_devices;
