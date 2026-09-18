@@ -439,10 +439,7 @@ fn remove_from_file(path: &Path, der: &[u8]) -> Result<(), String> {
         }
     }
     out.push_str(rest);
-    let mode = fs::metadata(path)
-        .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o7777)
-        .unwrap_or(0o644);
-    write_atomic(path, out.as_bytes(), mode)
+    write_atomic(path, out.as_bytes(), file_mode(path).unwrap_or(0o644))
 }
 
 /// Why [`Pki::find`] found nothing usable.
@@ -583,6 +580,8 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> 
             use std::os::unix::fs::PermissionsExt;
             file.set_permissions(fs::Permissions::from_mode(mode))?;
         }
+        #[cfg(not(unix))]
+        let _ = mode;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -602,6 +601,20 @@ fn temp_suffix(attempt: u32) -> u64 {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     (u64::from(nanos) << 8) | u64::from(attempt)
+}
+
+/// The permission bits of `path`; `None` where there are none (not unix) or it is unreadable.
+fn file_mode(path: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
