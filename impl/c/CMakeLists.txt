@@ -234,8 +234,11 @@ if(TDOT_SNMP)
 
   set(_tdot_ns_dir ${CMAKE_BINARY_DIR}/_deps/net-snmp)
   string(TOUPPER "${CMAKE_BUILD_TYPE}" _tdot_bt)
+  # OPENSSL_NO_ASM: the internal MD5/SHA-1 copy's x86 inline-asm ROTATE feeds a 64-bit
+  # operand (from `L`-suffixed constants) to a 32-bit register, which gcc accepts but
+  # clang (zig cc) rejects; the portable C rotate compiles to the same `rol` anyway.
   set(_tdot_ns_env CC=${CMAKE_C_COMPILER}
-                   "CFLAGS=${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${_tdot_bt}}")
+                   "CFLAGS=${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${_tdot_bt}} -DOPENSSL_NO_ASM")
   set(_tdot_ns_args
       --with-defaults --disable-agent --disable-applications --disable-manuals
       --disable-scripts --disable-mibs --disable-mib-loading --with-mib-modules=
