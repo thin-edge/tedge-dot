@@ -15,7 +15,13 @@ use crate::model::{hex_grouped, Quality, Sample, Value};
 use std::time::Duration;
 
 /// The keys a `report` table may carry.
-pub const REPORT_KEYS: &[&str] = &["on_change", "deadband", "min_interval", "max_interval", "debounce"];
+pub const REPORT_KEYS: &[&str] = &[
+    "on_change",
+    "deadband",
+    "min_interval",
+    "max_interval",
+    "debounce",
+];
 
 /// Differences up to this are not a change for `on_change` without a deadband.
 const EPSILON: f64 = 1e-9;
@@ -50,12 +56,19 @@ impl ReportPolicy {
                 .filter(|d| !d.is_zero())
         };
         let deadband = match table.get("deadband") {
-            Some(serde_json::Value::Number(n)) => n.as_f64().filter(|d| *d > 0.0).map(Deadband::Absolute),
-            Some(serde_json::Value::String(s)) => parse_percent(s).filter(|p| *p > 0.0).map(Deadband::Percent),
+            Some(serde_json::Value::Number(n)) => {
+                n.as_f64().filter(|d| *d > 0.0).map(Deadband::Absolute)
+            }
+            Some(serde_json::Value::String(s)) => {
+                parse_percent(s).filter(|p| *p > 0.0).map(Deadband::Percent)
+            }
             _ => None,
         };
         ReportPolicy {
-            on_change: table.get("on_change").and_then(|v| v.as_bool()).unwrap_or(false),
+            on_change: table
+                .get("on_change")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             deadband,
             min_interval: duration("min_interval"),
             max_interval: duration("max_interval"),
@@ -126,14 +139,18 @@ pub fn check_values(table: &toml::Value) -> Result<(), String> {
             _ => false,
         };
         if !ok {
-            return Err("report.deadband must be a number >= 0 or a percentage such as \"2%\"".to_string());
+            return Err(
+                "report.deadband must be a number >= 0 or a percentage such as \"2%\"".to_string(),
+            );
         }
     }
-    let duration = |key: &str| match map.get(key) {
+    let duration = |key: &str| {
+        match map.get(key) {
         None => Ok(None),
         Some(v) => v.as_str().and_then(parse_duration).map(Some).ok_or_else(|| {
             format!("report.{key} must be a duration such as \"500ms\", \"2s\" or \"5m\" (\"0\" switches it off)")
         }),
+    }
     };
     let min = duration("min_interval")?;
     let max = duration("max_interval")?;
@@ -149,7 +166,9 @@ pub fn check_values(table: &toml::Value) -> Result<(), String> {
 /// The effective policy of a point whose merged table is `table`, and — when inheritance put a
 /// heartbeat at or under the rate limit, which no single table may do — the warning to log. The
 /// heartbeat is then raised to twice the rate limit, keeping it strictly longer.
-pub fn effective(table: &serde_json::Map<String, serde_json::Value>) -> (ReportPolicy, Option<String>) {
+pub fn effective(
+    table: &serde_json::Map<String, serde_json::Value>,
+) -> (ReportPolicy, Option<String>) {
     let mut policy = ReportPolicy::from_table(table);
     let mut warning = None;
     if let (Some(min), Some(max)) = (policy.min_interval, policy.max_interval) {
@@ -165,7 +184,10 @@ pub fn effective(table: &serde_json::Map<String, serde_json::Value>) -> (ReportP
 }
 
 /// Merge `over` into `base` key by key.
-pub fn merge_into(base: &mut serde_json::Map<String, serde_json::Value>, over: Option<&serde_json::Value>) {
+pub fn merge_into(
+    base: &mut serde_json::Map<String, serde_json::Value>,
+    over: Option<&serde_json::Value>,
+) {
     if let Some(serde_json::Value::Object(over)) = over {
         for (k, v) in over {
             base.insert(k.clone(), v.clone());
@@ -271,7 +293,11 @@ impl<T> ReportState<T> {
         if *last_quality != quality {
             return self.publish(item, obs, quality, now);
         }
-        if self.policy.max_interval.is_some_and(|max| self.since_published(now) >= max) {
+        if self
+            .policy
+            .max_interval
+            .is_some_and(|max| self.since_published(now) >= max)
+        {
             return self.publish(item, obs, quality, now);
         }
         let changed_from_last = self.policy.changed(&obs, last_obs);
@@ -294,20 +320,31 @@ impl<T> ReportState<T> {
                         (c.latest, c.latest_obs)
                     }
                     _ => {
-                        self.candidate = Some(Candidate { first: obs.clone(), since: now, latest: item, latest_obs: obs });
+                        self.candidate = Some(Candidate {
+                            first: obs.clone(),
+                            since: now,
+                            latest: item,
+                            latest_obs: obs,
+                        });
                         return None;
                     }
                 }
             }
         };
 
-        if self.policy.min_interval.is_some_and(|min| self.since_published(now) < min) {
+        if self
+            .policy
+            .min_interval
+            .is_some_and(|min| self.since_published(now) < min)
+        {
             self.pending = Some((item, obs));
             return None;
         }
         // A newer reading supersedes anything held, whether or not it is published itself.
         self.pending = None;
-        if self.policy.filters_changes() && !self.policy.changed(&obs, &self.last.as_ref().unwrap().0) {
+        if self.policy.filters_changes()
+            && !self.policy.changed(&obs, &self.last.as_ref().unwrap().0)
+        {
             return None;
         }
         self.publish(item, obs, quality, now)
@@ -327,7 +364,11 @@ impl<T> ReportState<T> {
             if let (Some(debounce), Some(c)) = (self.policy.debounce, &self.candidate) {
                 if now.saturating_sub(c.since) >= debounce {
                     let c = self.candidate.take().unwrap();
-                    if self.policy.min_interval.is_some_and(|min| self.since_published(now) < min) {
+                    if self
+                        .policy
+                        .min_interval
+                        .is_some_and(|min| self.since_published(now) < min)
+                    {
                         self.pending = Some((c.latest, c.latest_obs));
                     } else {
                         out = self.publish_if_changed(c.latest, c.latest_obs, now);
@@ -364,7 +405,8 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    const VECTORS: &str = include_str!("../../../../../doc/contract/test-vectors/report/vectors.json");
+    const VECTORS: &str =
+        include_str!("../../../../../doc/contract/test-vectors/report/vectors.json");
 
     fn obs_of(sample: &serde_json::Value) -> Obs {
         if let Some(n) = sample.get("num").and_then(|v| v.as_f64()) {
@@ -376,12 +418,19 @@ mod tests {
         } else if let Some(s) = sample.get("str").and_then(|v| v.as_str()) {
             Obs::Other(format!("s:{s}"))
         } else {
-            Obs::Other(format!("r:{}", sample.get("raw").and_then(|v| v.as_str()).unwrap_or("")))
+            Obs::Other(format!(
+                "r:{}",
+                sample.get("raw").and_then(|v| v.as_str()).unwrap_or("")
+            ))
         }
     }
 
     fn quality_of(sample: &serde_json::Value) -> Quality {
-        match sample.get("quality").and_then(|v| v.as_str()).unwrap_or("good") {
+        match sample
+            .get("quality")
+            .and_then(|v| v.as_str())
+            .unwrap_or("good")
+        {
             "bad" => Quality::Bad,
             "stale" => Quality::Stale,
             _ => Quality::Good,
@@ -398,14 +447,22 @@ mod tests {
             let table = vector["policy"].as_object().unwrap();
             let toml_table: toml::Value = toml::Value::try_from(table).unwrap();
             check_values(&toml_table).unwrap_or_else(|e| panic!("{name}: invalid policy: {e}"));
-            let pushed = vector.get("pushed").and_then(|v| v.as_bool()).unwrap_or(false);
-            let mut state: ReportState<String> = ReportState::new(ReportPolicy::from_table(table), Duration::ZERO);
+            let pushed = vector
+                .get("pushed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let mut state: ReportState<String> =
+                ReportState::new(ReportPolicy::from_table(table), Duration::ZERO);
             for (index, step) in vector["steps"].as_array().unwrap().iter().enumerate() {
                 let now = Duration::from_millis(step["at"].as_u64().unwrap());
                 let expected: Vec<String> = step
                     .get("publish")
                     .and_then(|p| p.as_array())
-                    .map(|p| p.iter().map(|id| id.as_str().unwrap().to_string()).collect())
+                    .map(|p| {
+                        p.iter()
+                            .map(|id| id.as_str().unwrap().to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let mut published = Vec::new();
                 let mut read = false;
@@ -423,9 +480,15 @@ mod tests {
                 } else {
                     panic!("{name}: step {index} has no kind");
                 }
-                assert_eq!(published, expected, "{name}: step {index} (at {now:?}) published");
+                assert_eq!(
+                    published, expected,
+                    "{name}: step {index} (at {now:?}) published"
+                );
                 let expected_read = step.get("read").and_then(|r| r.as_bool()).unwrap_or(false);
-                assert_eq!(read, expected_read, "{name}: step {index} (at {now:?}) read");
+                assert_eq!(
+                    read, expected_read,
+                    "{name}: step {index} (at {now:?}) read"
+                );
             }
         }
     }
@@ -433,7 +496,10 @@ mod tests {
     #[test]
     fn table_validation() {
         let check = |text: &str| check_values(&toml::from_str::<toml::Value>(text).unwrap());
-        assert!(check("on_change = true\ndeadband = 0.5\nmin_interval = \"10s\"\nmax_interval = \"1m\"").is_ok());
+        assert!(check(
+            "on_change = true\ndeadband = 0.5\nmin_interval = \"10s\"\nmax_interval = \"1m\""
+        )
+        .is_ok());
         assert!(check("deadband = \"2%\"").is_ok());
         assert!(check("deadband = \"2.5%\"").is_ok());
         assert!(check("max_interval = \"0\"\nmin_interval = \"1h\"").is_ok());
@@ -441,11 +507,21 @@ mod tests {
             check("min_interval = \"10s\"\nmax_interval = \"5s\"").unwrap_err(),
             "report.max_interval must be longer than report.min_interval"
         );
-        assert!(check("deadband = \"-1%\"").unwrap_err().contains("report.deadband"));
-        assert!(check("deadband = -1").unwrap_err().contains("report.deadband"));
-        assert!(check("deadband = \"2\"").unwrap_err().contains("report.deadband"));
-        assert!(check("debounce = \"soon\"").unwrap_err().contains("report.debounce"));
-        assert!(check("on_change = \"yes\"").unwrap_err().contains("report.on_change"));
+        assert!(check("deadband = \"-1%\"")
+            .unwrap_err()
+            .contains("report.deadband"));
+        assert!(check("deadband = -1")
+            .unwrap_err()
+            .contains("report.deadband"));
+        assert!(check("deadband = \"2\"")
+            .unwrap_err()
+            .contains("report.deadband"));
+        assert!(check("debounce = \"soon\"")
+            .unwrap_err()
+            .contains("report.debounce"));
+        assert!(check("on_change = \"yes\"")
+            .unwrap_err()
+            .contains("report.on_change"));
         assert!(check("debounce = \"0\"").is_ok());
     }
 
