@@ -109,7 +109,8 @@
     },
     "seq": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Monotonic per-point counter of published samples. Readings withheld by the reporting policy (§5.3) do not consume a number, so a gap means a published sample was lost."
     },
     "error": {
       "type": "string",
@@ -117,7 +118,7 @@
     },
     "meta": {
       "type": "object",
-      "description": "The point's free-form 'meta' table from the connector configuration, echoed verbatim by the runtime. Flows use it for per-signal behaviour (e.g. on_change, deadband, min_interval, debounce); absent when the point declares no meta."
+      "description": "The point's free-form 'meta' table from the connector configuration, echoed verbatim by the runtime. Flows use it for per-signal behaviour (measurement naming, alarms, events, parameters); absent when the point declares no meta."
     }
   },
   "allOf": [

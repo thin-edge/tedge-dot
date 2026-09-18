@@ -11,6 +11,7 @@ pub mod decode;
 pub mod descriptor;
 pub mod library;
 pub mod model;
+pub mod report;
 pub mod runtime;
 
 pub use config::{parse_duration, ConnectorConfig, DeviceConfig, PointConfig};

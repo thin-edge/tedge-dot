@@ -67,6 +67,9 @@ pub struct ConnectorSection {
     /// file's own directory.
     #[serde(default)]
     pub point_library_path: Option<Vec<String>>,
+    /// Default reporting policy for every point (§5.3), as written.
+    #[serde(default)]
+    pub report: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -116,6 +119,9 @@ pub struct DeviceConfig {
     pub points_from: Vec<String>,
     #[serde(rename = "point", default)]
     pub points: Vec<PointConfig>,
+    /// Default reporting policy for this device's points (§5.3), as written.
+    #[serde(default)]
+    pub report: Option<serde_json::Value>,
 }
 
 // The opaque protocol tables may hold credentials (an SNMP USM password, an OPC UA user
@@ -143,6 +149,7 @@ impl fmt::Debug for DeviceConfig {
             .field("default_mode", &self.default_mode)
             .field("points_from", &self.points_from)
             .field("points", &self.points)
+            .field("report", &self.report)
             .finish()
     }
 }
@@ -211,12 +218,27 @@ pub struct PointConfig {
     /// supports push delivery (`subscribe`). Defaults to push when available.
     #[serde(default)]
     pub subscribe: Option<bool>,
+    /// This point's reporting policy (§5.3), as written (merged with a library's).
+    #[serde(default)]
+    pub report: Option<serde_json::Value>,
 }
 
 impl PointConfig {
     /// Resolve the effective output mode, given the device default.
     pub fn resolved_mode(&self, device_default: Option<Mode>) -> Mode {
         self.mode.or(device_default).unwrap_or(Mode::Typed)
+    }
+}
+
+impl ConnectorConfig {
+    /// The merged `report` table of one point: `[connector]`, then its device, then the point
+    /// (already merged with any point library by the loader).
+    pub fn report_table(&self, device: &DeviceConfig, point: &PointConfig) -> serde_json::Map<String, serde_json::Value> {
+        let mut table = serde_json::Map::new();
+        crate::report::merge_into(&mut table, self.connector.report.as_ref());
+        crate::report::merge_into(&mut table, device.report.as_ref());
+        crate::report::merge_into(&mut table, point.report.as_ref());
+        table
     }
 }
 

@@ -1,0 +1,359 @@
+{
+  "vectors": [
+    {
+      "name": "no policy publishes every reading",
+      "policy": {},
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 }, "publish": ["b"] },
+        { "at": 2000, "tick": true }
+      ]
+    },
+    {
+      "name": "on_change = false and deadband = 0 disable filtering",
+      "policy": { "on_change": false, "deadband": 0, "debounce": "0", "min_interval": "0", "max_interval": "0" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 }, "publish": ["b"] },
+        { "at": 9999999, "tick": true, "read": false }
+      ]
+    },
+    {
+      "name": "absolute deadband",
+      "policy": { "deadband": 0.5 },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 100.0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 100.4 } },
+        { "at": 2000, "sample": { "id": "c", "num": 100.6 }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "slow drift is measured from the last published value",
+      "policy": { "deadband": 0.5 },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 100.0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 100.3 } },
+        { "at": 2000, "sample": { "id": "c", "num": 100.4 } },
+        { "at": 3000, "sample": { "id": "d", "num": 100.5 }, "publish": ["d"] }
+      ]
+    },
+    {
+      "name": "negative values and decreasing changes",
+      "policy": { "deadband": 1 },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": -5 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": -5.5 } },
+        { "at": 2000, "sample": { "id": "c", "num": -6 }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "percent deadband",
+      "policy": { "deadband": "2%" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 200 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 203 } },
+        { "at": 2000, "sample": { "id": "c", "num": 204 }, "publish": ["c"] },
+        { "at": 3000, "sample": { "id": "d", "num": 200 } },
+        { "at": 4000, "sample": { "id": "e", "num": 199.9 }, "publish": ["e"] }
+      ]
+    },
+    {
+      "name": "percent deadband from zero passes any change",
+      "policy": { "deadband": "2%" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 0 } },
+        { "at": 2000, "sample": { "id": "c", "num": 0.001 }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "on_change alone ignores differences up to 1e-9",
+      "policy": { "on_change": true },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1.0000000001 } },
+        { "at": 2000, "sample": { "id": "c", "num": 1.000001 }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "boolean on change",
+      "policy": { "on_change": true },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "bool": true }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "bool": true } },
+        { "at": 2000, "sample": { "id": "c", "bool": false }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "deadband does not apply to booleans",
+      "policy": { "deadband": 5 },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "bool": false }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "bool": true }, "publish": ["b"] }
+      ]
+    },
+    {
+      "name": "NaN equals only NaN",
+      "policy": { "on_change": true },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "nan": true }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "nan": true } },
+        { "at": 2000, "sample": { "id": "c", "num": 5 }, "publish": ["c"] },
+        { "at": 3000, "sample": { "id": "d", "num": 5 } },
+        { "at": 4000, "sample": { "id": "e", "nan": true }, "publish": ["e"] }
+      ]
+    },
+    {
+      "name": "64-bit integers as strings compare exactly, ignoring the deadband",
+      "policy": { "on_change": true, "deadband": 1000 },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "str": "9007199254740993" }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "str": "9007199254740993" } },
+        { "at": 2000, "sample": { "id": "c", "str": "9007199254740994" }, "publish": ["c"] },
+        { "at": 3000, "sample": { "id": "d", "num": 5 }, "publish": ["d"] }
+      ]
+    },
+    {
+      "name": "a number and the same text are different",
+      "policy": { "on_change": true },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 5 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "str": "5" }, "publish": ["b"] }
+      ]
+    },
+    {
+      "name": "raw points compare their bytes",
+      "policy": { "on_change": true },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "raw": "002a" }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "raw": "002a" } },
+        { "at": 2000, "sample": { "id": "c", "raw": "002b" }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "quality change bypasses min_interval and on_change",
+      "policy": { "on_change": true, "min_interval": "1m" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 5 }, "publish": ["a"] },
+        { "at": 2000, "sample": { "id": "b", "quality": "bad", "raw": "" }, "publish": ["b"] },
+        { "at": 3000, "sample": { "id": "c", "quality": "bad", "raw": "" } },
+        { "at": 4000, "sample": { "id": "d", "num": 5 }, "publish": ["d"] },
+        { "at": 5000, "sample": { "id": "e", "quality": "stale", "num": 5 }, "publish": ["e"] }
+      ]
+    },
+    {
+      "name": "a quality change drops the held reading",
+      "policy": { "min_interval": "10s" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 2000, "sample": { "id": "b", "num": 2 } },
+        { "at": 3000, "sample": { "id": "c", "quality": "bad", "raw": "" }, "publish": ["c"] },
+        { "at": 10000, "tick": true },
+        { "at": 14000, "tick": true }
+      ]
+    },
+    {
+      "name": "the last change of a burst is published when the window ends",
+      "policy": { "on_change": true, "min_interval": "10s" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 2000, "sample": { "id": "b", "num": 2 } },
+        { "at": 4000, "sample": { "id": "c", "num": 3 } },
+        { "at": 9800, "tick": true },
+        { "at": 10000, "tick": true, "publish": ["c"] },
+        { "at": 10200, "tick": true },
+        { "at": 12000, "sample": { "id": "d", "num": 4 } },
+        { "at": 20000, "tick": true, "publish": ["d"] }
+      ]
+    },
+    {
+      "name": "a held reading superseded back to the published value is not published",
+      "policy": { "on_change": true, "min_interval": "10s" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 2000, "sample": { "id": "b", "num": 2 } },
+        { "at": 4000, "sample": { "id": "c", "num": 1 } },
+        { "at": 10000, "tick": true },
+        { "at": 11000, "sample": { "id": "d", "num": 1 } },
+        { "at": 12000, "sample": { "id": "e", "num": 2 }, "publish": ["e"] }
+      ]
+    },
+    {
+      "name": "min_interval without a change filter publishes the held reading",
+      "policy": { "min_interval": "10s" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 5000, "sample": { "id": "b", "num": 1 } },
+        { "at": 10000, "tick": true, "publish": ["b"] },
+        { "at": 15000, "sample": { "id": "c", "num": 1 } },
+        { "at": 20000, "sample": { "id": "d", "num": 1 }, "publish": ["d"] },
+        { "at": 20000, "tick": true }
+      ]
+    },
+    {
+      "name": "polled heartbeat publishes the first reading after max_interval",
+      "policy": { "on_change": true, "max_interval": "1m" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 42 }, "publish": ["a"] },
+        { "at": 10000, "sample": { "id": "b", "num": 42 } },
+        { "at": 50000, "sample": { "id": "c", "num": 42 } },
+        { "at": 60000, "tick": true, "read": false },
+        { "at": 60000, "sample": { "id": "d", "num": 42 }, "publish": ["d"] },
+        { "at": 70000, "sample": { "id": "e", "num": 42 } },
+        { "at": 125000, "tick": true, "read": false },
+        { "at": 130000, "sample": { "id": "f", "num": 42 }, "publish": ["f"] }
+      ]
+    },
+    {
+      "name": "pushed heartbeat asks for one read per max_interval",
+      "policy": { "on_change": true, "max_interval": "1m" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 42 }, "publish": ["a"] },
+        { "at": 59000, "tick": true, "read": false },
+        { "at": 60000, "tick": true, "read": true },
+        { "at": 61000, "tick": true, "read": false },
+        { "at": 61500, "sample": { "id": "b", "num": 42 }, "publish": ["b"] },
+        { "at": 121000, "tick": true, "read": false },
+        { "at": 121500, "tick": true, "read": true }
+      ]
+    },
+    {
+      "name": "a pushed point that never sampled is read after max_interval",
+      "policy": { "max_interval": "1m" },
+      "pushed": true,
+      "steps": [
+        { "at": 59999, "tick": true, "read": false },
+        { "at": 60000, "tick": true, "read": true },
+        { "at": 60100, "sample": { "id": "a", "num": 1 }, "publish": ["a"] }
+      ]
+    },
+    {
+      "name": "a failed heartbeat read publishes bad quality",
+      "policy": { "on_change": true, "max_interval": "1m" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 42 }, "publish": ["a"] },
+        { "at": 60000, "tick": true, "read": true },
+        { "at": 60100, "sample": { "id": "b", "quality": "bad", "raw": "" }, "publish": ["b"] },
+        { "at": 120100, "tick": true, "read": true },
+        { "at": 120200, "sample": { "id": "c", "quality": "bad", "raw": "" }, "publish": ["c"] }
+      ]
+    },
+    {
+      "name": "a point with nothing to read gets no heartbeat until reset",
+      "policy": { "max_interval": "1m" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 60000, "tick": true, "read": true },
+        { "at": 60100, "no_data": true },
+        { "at": 120000, "tick": true, "read": false },
+        { "at": 500000, "tick": true, "read": false },
+        { "at": 500000, "sample": { "id": "b", "num": 1 }, "publish": ["b"] },
+        { "at": 600000, "tick": true, "read": false },
+        { "at": 700000, "reset": true },
+        { "at": 759999, "tick": true, "read": false },
+        { "at": 760000, "tick": true, "read": true }
+      ]
+    },
+    {
+      "name": "a heartbeat reading bypasses the change filter but not the first rules",
+      "policy": { "deadband": 10, "max_interval": "1m" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 1 }, "publish": ["a"] },
+        { "at": 60000, "sample": { "id": "b", "num": 2 }, "publish": ["b"] },
+        { "at": 61000, "sample": { "id": "c", "num": 3 } }
+      ]
+    },
+    {
+      "name": "debounce suppresses a flapping value",
+      "policy": { "debounce": "2s" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 } },
+        { "at": 2000, "sample": { "id": "c", "num": 0 } },
+        { "at": 2500, "sample": { "id": "d", "num": 1 } },
+        { "at": 4000, "tick": true },
+        { "at": 4499, "tick": true },
+        { "at": 4500, "tick": true, "publish": ["d"] },
+        { "at": 5000, "tick": true }
+      ]
+    },
+    {
+      "name": "debounce accepts a settled value when it is read again",
+      "policy": { "debounce": "2s" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 } },
+        { "at": 2000, "sample": { "id": "c", "num": 1 } },
+        { "at": 3000, "sample": { "id": "d", "num": 1 }, "publish": ["d"] },
+        { "at": 4000, "sample": { "id": "e", "num": 1 } }
+      ]
+    },
+    {
+      "name": "debounce settles within the deadband and publishes the latest reading",
+      "policy": { "debounce": "2s", "deadband": 0.5 },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 10.0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 12.0 } },
+        { "at": 1500, "sample": { "id": "c", "num": 12.1 } },
+        { "at": 2000, "sample": { "id": "d", "num": 11.9 } },
+        { "at": 2500, "sample": { "id": "e", "num": 12.05 } },
+        { "at": 2900, "tick": true },
+        { "at": 3000, "tick": true, "publish": ["e"] }
+      ]
+    },
+    {
+      "name": "a settled reading back within the deadband of the last published value is dropped",
+      "policy": { "debounce": "2s", "deadband": 0.5 },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 10.0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 10.6 } },
+        { "at": 1500, "sample": { "id": "c", "num": 10.2 } },
+        { "at": 3000, "tick": true }
+      ]
+    },
+    {
+      "name": "a quality change clears the debounce candidate",
+      "policy": { "debounce": "2s" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 } },
+        { "at": 1500, "sample": { "id": "c", "quality": "bad", "raw": "" }, "publish": ["c"] },
+        { "at": 3500, "tick": true }
+      ]
+    },
+    {
+      "name": "a debounced value is still rate limited",
+      "policy": { "debounce": "1s", "min_interval": "10s" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 } },
+        { "at": 2000, "tick": true },
+        { "at": 9999, "tick": true },
+        { "at": 10000, "tick": true, "publish": ["b"] }
+      ]
+    },
+    {
+      "name": "reset publishes the next reading",
+      "policy": { "on_change": true, "min_interval": "1m" },
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 5 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 5 } },
+        { "at": 2000, "sample": { "id": "c", "num": 6 } },
+        { "at": 3000, "reset": true },
+        { "at": 3500, "tick": true },
+        { "at": 4000, "sample": { "id": "d", "num": 5 }, "publish": ["d"] },
+        { "at": 5000, "sample": { "id": "e", "num": 5 } }
+      ]
+    }
+  ]
+}

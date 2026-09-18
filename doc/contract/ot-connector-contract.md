@@ -95,6 +95,7 @@ operation_timeout = "30s"       # optional: upper bound on one protocol-module c
 stall_timeout     = "120s"      # optional: restart the connector if its loop stops moving (§8.1)
 # optional: where bare point-library names are looked up (§3.4); shown with its default
 point_library_path = ["/etc/tedge/plugins/ot/points.d", "/usr/share/tedge-dot/points.d"]
+report        = { max_interval = "30m" }  # optional: default reporting policy for every point (§5.3)
 
 [mqtt]
 host = "127.0.0.1"
@@ -112,6 +113,7 @@ poll_interval = "2s"            # optional per-device override
 default_mode  = "typed"         # optional; default output mode for this device's points
 points_from   = []              # optional; point libraries to inherit points from, in order (§3.4)
 enabled       = true            # optional; false keeps the definition but leaves the device out (§3.3)
+report        = { on_change = true }  # optional: default reporting policy for this device's points (§5.3)
 
   [[device.point]]
   id       = "<point-id>"       # unique within the device; appears in topics
@@ -126,6 +128,7 @@ enabled       = true            # optional; false keeps the definition but leave
   name     = "<short label>"    # optional human-readable label (§3.1); the id stays an identifier
   description = "<what this signal is>"  # optional longer explanation (§3.1)
   transform = { multiplier = 1, divisor = 1, decimal_shift = 0, offset = 0 } # optional linear scale
+  report   = { deadband = 0.5, min_interval = "10s" }  # optional reporting policy (§5.3)
   enabled  = true               # optional; false keeps the definition but leaves the point out (§3.3)
 ```
 
@@ -175,7 +178,8 @@ enabled       = true            # optional; false keeps the definition but leave
 | `name` | string | no | Short human-readable label, for wherever a name is displayed instead of the `id` — which is a topic segment and a parameter-set key, so it stays a plain identifier. Feeds a parameter's DTM title (§5.2) and the capability descriptor's `point_labels` (§7). |
 | `description` | string | no | Longer human-readable explanation of the signal. Feeds a parameter's DTM description and `point_labels` (§7). |
 | `transform` | object | no | Per-point linear scale `(value*multiplier*10^decimal_shift/divisor)+offset`; see §4.2. |
-| `meta` | object | no | Free-form signal metadata echoed verbatim as `meta` in every sample envelope. Never interpreted by the connector; flows and tooling read it for per-signal behaviour (e.g. `on_change`, `deadband`, `min_interval`, `debounce`), for naming the point's measurement or, with `meta.measurement = false`, keeping it out of the measurements, for declaring the signal's alarms and events (`meta.alarm`, `meta.event`, read by the `ot-alarm` / `ot-event` flows), and for exposing the point as an operator-editable *parameter* (`meta.parameter`, see §5.2). |
+| `report` | object | no | The point's **reporting policy** (report by exception): publish only on change or beyond a deadband, rate-limit, debounce, and a heartbeat. Applied by the SDK runtime, not the module; merged key by key over the device's and `[connector]`'s `report`. See §5.3. |
+| `meta` | object | no | Free-form signal metadata echoed verbatim as `meta` in every sample envelope. Never interpreted by the connector; flows and tooling read it for per-signal behaviour, for naming the point's measurement or, with `meta.measurement = false`, keeping it out of the measurements, for declaring the signal's alarms and events (`meta.alarm`, `meta.event`, read by the `ot-alarm` / `ot-event` flows), and for exposing the point as an operator-editable *parameter* (`meta.parameter`, see §5.2). |
 | `subscribe` | boolean | no | Default `true`. `false` keeps the point on the polling schedule even when the connector supports push delivery. |
 | `enabled` | boolean | no | Default `true`. `false` keeps the definition but leaves the point out of the device (§3.3) — how a site switches off one point of a library it does not own (§3.4). |
 | `address` | object | yes | **Protocol-specific**; shape defined by the connector spec. |
@@ -416,7 +420,9 @@ Decoding semantics:
   than one of the protocol's native words (for example, two Modbus 16-bit registers forming a
   32-bit value). Protocols whose values are not word-addressed simply ignore this field.
 - The driver MUST NOT apply renaming, unit conversion, thresholding, or thin-edge JSON
-  shaping. Those are flow responsibilities. The one numeric transform the driver MAY apply is
+  shaping. Those are flow responsibilities. (The declared reporting policy, §5.3, is not
+  driver thresholding: like `transform`, it is a contract-level point field the **SDK
+  runtime** applies to every connector alike. A module MUST NOT filter samples itself.) The one numeric transform the driver MAY apply is
   the **declared per-point linear transform** (`point.transform`, §4.2): because scaling is an
   intrinsic property of a signal rather than flow logic, it is a contract-level point field whose
   math is owned by the SDK. The driver only invokes the SDK helper; it MUST NOT invent any other
@@ -529,7 +535,7 @@ native address so flows can route or debug). The example below uses Modbus to ma
 | `unit` | string | no | Echo of the point's `unit` hint. |
 | `access` | `"read"` \| `"write"` \| `"read_write"` | no | Echo of the point's declared `access` (SDK runtimes always set it). Lets consumers tell writable points apart without the configuration file (§5.2). |
 | `addr` | object | yes | Protocol-specific address echo (for flow routing/debug). |
-| `seq` | integer | no | Monotonic per-point counter; helps detect drops. |
+| `seq` | integer | no | Monotonic per-point counter of **published** samples; helps detect drops. Readings withheld by the reporting policy (§5.3) do not consume a number, so a gap always means a published sample was lost. |
 | `error` | string | when `quality = bad` | Human-readable failure reason. |
 | `meta` | object | no | The point's `meta` table echoed verbatim by the runtime (§3.1); carries per-signal hints for flows. |
 
@@ -611,6 +617,79 @@ case it cannot see, and is cleared by hand (see RFC 0005).
 
 See [RFC 0003](../rfc/0003-parameter-writes.md) and
 [RFC 0005](../rfc/0005-device-types-and-parameter-sets.md).
+
+### 5.3 Reporting policy (report by exception)
+
+By default every reading is published. A point MAY declare a **reporting policy** that
+publishes it only when it matters — on a change, on a change beyond a deadband, at most so
+often, once a new value has settled — and a **heartbeat** that still publishes it now and then
+when nothing changes. The policy is applied by the **SDK runtime** in front of the sample topic,
+so every consumer (flows, alarms, the parameter twin, third-party tools) and the broker itself
+see the reduced stream, and every connector behaves identically. It is configured, not coded:
+
+```toml
+[connector]
+report = { max_interval = "30m" }                  # heartbeat for every point
+
+[[device]]
+name   = "plc-1"
+report = { on_change = true }                      # this device's points: only on change
+
+  [[device.point]]
+  id     = "boiler_temp"
+  report = { deadband = 0.5, min_interval = "10s" } # ...and this one beyond 0.5, at most every 10 s
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `on_change` | boolean | Publish only when the value differs from the **last published** one. |
+| `deadband` | number, or string `"<p>%"` | Publish only when the value moved at least this much from the last published one: an absolute amount in the point's (transformed) units, or `p` percent of the last published value's magnitude. Implies `on_change`. Numeric values only. |
+| `min_interval` | duration | Publish at most once per interval. A change arriving sooner is **held and published when the interval ends** (with its own `ts`), never dropped. |
+| `max_interval` | duration | Heartbeat: publish the point's next **fresh reading** once this long has passed since its last publish, even if unchanged. |
+| `debounce` | duration | Publish a changed value only once it has stayed the same (within the deadband, if one is set) for this long. Implies `on_change`. |
+
+A duration of `"0"`, `on_change = false` and `deadband = 0` switch a setting off, which is how a
+more specific level turns off one it inherits.
+
+**Inheritance.** The effective policy of a point merges, key by key and each winning over the
+ones before it: `[connector] report`, the device's `report`, the point's `report` in a point
+library (§3.4), and the point's `report` in the configuration. A single `report` table that
+sets `max_interval` not greater than `min_interval` is refused; when that only arises through
+inheritance, the effective heartbeat is raised to twice `min_interval` and a warning names the
+point.
+
+**Rules** (per device and point):
+
+1. **Always published**, whatever the policy: the first reading after the connector starts, after
+   an applied reload or management command (§6.3), after the device reconnects, and after the
+   connection to the broker is restored; and any reading whose `quality` differs from the last
+   published one. Publishing a quality change discards a held reading, so an older good value
+   never follows a newer bad one.
+2. **Change.** Numbers (`value_repr = "number"`) compare numerically after `transform`: any
+   difference above 1e-9 with `on_change` alone, at least the deadband when one is set (with a
+   percent deadband and a last value of 0, any change). `NaN` equals only `NaN`. Everything
+   else — booleans, strings, 64-bit integers carried as strings (§4.1), raw points — compares by
+   exact equality of `value_repr` and `value` (or `raw` when there is no value); the deadband
+   does not apply to them.
+3. **Deadband drift.** Differences are measured from the last *published* value, so a slow
+   drift is reported once it adds up to the deadband.
+4. **Heartbeat.** A heartbeat never re-publishes an old reading. A polled point's next poll is
+   published; a pushed (subscribed) point is **read on demand**, at most once per
+   `max_interval`. A failed or timed-out read publishes a `bad` sample (and affects the link
+   status like a failed poll), so a dead source is reported rather than hidden. A point the
+   module cannot read on demand — an SNMP trap, a CAN frame — gets no heartbeat.
+5. **Timing.** Held and debounced readings are published on the first pass of the runtime's
+   loop after their interval ends, keeping the `ts` of the reading.
+6. **`seq`** counts published samples only (§5).
+
+The one-shot CLI `read` is not subject to the policy. The runtime publishes the effective
+policies in the capability descriptor (`reports`, §7), so a consumer can tell why a point is
+quiet. Because every consumer sees the reduced stream, keep a deadband smaller than the
+hysteresis of any alarm threshold on the same signal, and do not give a change filter to a point
+whose every reading is an occurrence (`meta.event.every`); the runtime logs a warning for the
+latter.
+
+Test vectors both SDKs run are in [test-vectors/report/](test-vectors/report/).
 
 ## 6. Command protocol
 
@@ -877,7 +956,15 @@ same fields with its own values (and typically `"subscribe": true`):
   ],
   "parameter_keys": [
     { "device": "plc-1", "point": "boiler_setpoint", "key": "setpoint", "group": "control" }
-  ]
+  ],
+  "reports": {
+    "default": { "max_interval": "30m" },
+    "devices": [ { "device": "plc-1", "report": { "on_change": true } } ],
+    "points": [
+      { "device": "plc-1", "point": "boiler_temp",
+        "report": { "on_change": true, "deadband": 0.5, "min_interval": "10s", "max_interval": "30m" } }
+    ]
+  }
 }
 ```
 
@@ -891,12 +978,13 @@ same fields with its own values (and typically `"subscribe": true`):
 | `subscribe` | Whether the connector supports event-driven (push) reads in addition to polling. |
 | `point_labels` | The human-readable `name`/`description` of the configured points (§3.1), so a consumer can show something friendlier than the point id. Only points declaring one of them appear, and each entry carries only the fields it declares — **no entry means the id is the label**, so a configuration that labels nothing adds nothing here. Unlike the fields above, this describes the *configuration* rather than the connector's abilities; it lives here because it is static per point, which makes one retained message the right place for it and a per-sample echo the wrong one (§5 samples are a time series). |
 | `parameter_keys` | The configured points that name their own key inside their parameter sets (`meta.parameter.key`, §5.2), with the key and any `set` / `group` exactly as configured — so a key of the form `<set>.<key>` names its set too. A consumer learns from it which point a key belongs to before the point samples — after a restart, since samples are not retained, and for a write-only point, which never samples. Only points naming a key appear, so a configuration naming none adds nothing here. Like `point_labels`, this describes the configuration. |
+| `reports` | The reporting policies (§5.3): `default` is `[connector] report`, `devices` lists each device declaring a `report`, and `points` lists the **effective** (merged) policy of each point whose policy differs from its device's. A point's policy is its `points` entry if it has one, otherwise its device's entry merged over `default`. Absent when no `report` is configured. Like `point_labels`, this describes the configuration. |
 
 Tooling and the conformance suite use the descriptor to decide which tests apply.
 
 The descriptor is retained, so it MUST be republished whenever something it reports changes.
-Everything except `point_labels` and `parameter_keys` is a property of the connector build and so
-is published once at startup; those two follow the configuration, and a connector MUST therefore republish
+Everything except `point_labels`, `parameter_keys` and `reports` is a property of the connector build and so
+is published once at startup; those three follow the configuration, and a connector MUST therefore republish
 the descriptor after a management command (§6.3) changes it — a retained message describing the
 configuration as it was at startup is worse than none. Note also that labelling every point of
 a large list has a size: two hundred fully labelled points add on the order of ten kilobytes to
