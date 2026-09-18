@@ -132,6 +132,20 @@ tdot_connector_t *tdot_connector_snmp_new(void);
 /* Returns NULL when the protocol is unknown or compiled out. */
 tdot_connector_t *tdot_connector_factory(const char *protocol);
 
+/* Write a requested value to a point through conn->write_point: the one path
+ * every write takes (the `write` and `write-batch` verbs, the CLI `write`).
+ *
+ * A request carries engineering units -- the units of the sample value
+ * (contract §4.2, §6.2) -- so for a typed point a numeric value is mapped back
+ * through the inverse of the point's transform, and rounded to the nearest
+ * integer (ties away from zero) when the datatype is an integer. bool/string
+ * values and raw-mode points pass through unchanged, and connectors never see
+ * the transform on write. Returns 0, or -1 with err filled -- including when
+ * the transform has no inverse, in which case nothing is written. */
+int tdot_connector_write(tdot_connector_t *conn, tdot_device_t *dev,
+                         tdot_point_t *pt, const tdot_value_t *value, char *err,
+                         size_t errlen);
+
 #ifdef __cplusplus
 }
 #endif

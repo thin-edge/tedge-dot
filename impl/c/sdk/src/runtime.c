@@ -298,7 +298,8 @@ static void publish_retained(rt_t *rt, const char *topic, cJSON *obj) {
     free(payload);
 }
 
-/* Execute one point write; returns 0 on success, else fills `reason`. */
+/* Execute one point write; returns 0 on success, else fills `reason`. The
+ * requested value is in engineering units; the connector gets the raw one. */
 static int do_write(rt_t *rt, tdot_device_t *dev, const char *dev_name,
                     const char *point_id, const cJSON *jvalue, char *reason,
                     size_t reason_len) {
@@ -313,8 +314,8 @@ static int do_write(rt_t *rt, tdot_device_t *dev, const char *dev_name,
         snprintf(reason, reason_len, "point %s is not writable", pt->id);
     } else if (json_to_value(jvalue, &value) != 0) {
         snprintf(reason, reason_len, "missing or invalid value");
-    } else if (rt->conn->write_point(rt->conn, dev, pt, &value, reason,
-                                     reason_len) == 0) {
+    } else if (tdot_connector_write(rt->conn, dev, pt, &value, reason,
+                                    reason_len) == 0) {
         return 0;
     }
     return -1;

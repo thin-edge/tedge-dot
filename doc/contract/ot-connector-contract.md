@@ -458,6 +458,31 @@ Rules:
 - The math is owned by the SDK so every connector scales identically. Connectors invoke the SDK
   helper rather than re-implementing it.
 
+**Writes** run the transform in reverse. A write request carries the value in the same
+engineering units as the sample's `value` (§6.2), so before the connector encodes it the SDK maps
+it back to the raw value:
+
+```
+raw = (value - offset) * divisor / (multiplier * 10^decimal_shift)
+```
+
+- The same `0` divisor rule applies. Only `number` values of `typed` points are inverted; `bool`
+  and `string` values, and `raw` writes, are passed to the connector unchanged.
+- For an integer `datatype` (`int8` … `uint64`, including bit-field points) the result is rounded
+  to the nearest integer, ties away from zero, so `21.5` with `multiplier = 0.1` writes `215`
+  rather than a truncated `214`. Float datatypes keep the unrounded value, so a writable point
+  with a transform whose device value is an integer must declare that integer `datatype` (the
+  raw type), not a float — e.g. an SNMP `integer`/`timeticks` object scaled by `divisor = 100`
+  is `datatype = "int32"`/`"uint32"`, otherwise `2.3` inverts to `229.99999999999997` and the
+  connector rejects the fractional value.
+- The raw value must fit the `datatype`: one outside its range (e.g. `-45` with `offset = -40`
+  on a `uint16`, which inverts to `-5`) fails the write rather than wrapping.
+- A transform whose scale `multiplier * 10^decimal_shift` is `0` has no inverse, and a value
+  whose raw result is not finite cannot be written: the write is `failed` with a reason and
+  nothing is sent to the device.
+- The SDK applies the inverse once, on every write path (`write`, each entry of `write-batch`,
+  and the CLI `write`); connectors never apply the transform on write.
+
 ## 5. The sample envelope
 
 Every successful or failed read produces exactly one **sample** message on
@@ -625,8 +650,10 @@ Request (`status: "init"`):
 }
 ```
 
-- For a `typed`-writable point, `value` is the logical value and the connector encodes it per
-  the point's `datatype`/`endianness`/`word_order`.
+- For a `typed`-writable point, `value` is the logical value in **engineering units** — the same
+  units as the sample's `value`, i.e. after the point's `transform`. The SDK maps it back to the
+  raw value (§4.2) and the connector encodes that per the point's
+  `datatype`/`endianness`/`word_order`.
 - For a `raw`-writable point, the request MUST instead provide `raw` (hex) and the connector
   writes those bytes verbatim.
 - The connector MUST reject (`failed`) a write to a point whose `access` does not permit it.
@@ -636,6 +663,8 @@ Result (`status: "successful"`):
 ```json
 { "status": "successful", "point": "setpoint", "value": 21.5 }
 ```
+
+The result echoes `value` as requested (engineering units), not the raw value written.
 
 Result (`status: "failed"`) — `reason` is free text; the Modbus wording here is illustrative:
 

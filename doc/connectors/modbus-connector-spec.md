@@ -188,8 +188,9 @@ For `cmd/write/<id>` with `status: "init"`:
 
 1. Resolve the target point by `request.point` within the device.
 2. Reject (`failed`) if the point's `access` is `read`.
-3. **Typed write:** encode `request.value` using `encode_primitive(value, datatype, endianness,
-   word_order)`, then:
+3. **Typed write:** `request.value` is in engineering units; the SDK first maps it back through
+   the point's `transform` (contract §4.2), then the connector encodes that raw value using
+   `encode_primitive(value, datatype, endianness, word_order)`, then:
    - holding register, 1 register → `write_single_register`;
    - holding register, >1 register → `write_multiple_registers`;
    - coil → `write_single_coil` (value must be `bool`/0|1).

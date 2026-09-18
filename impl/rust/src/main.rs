@@ -1227,7 +1227,15 @@ async fn cmd_write(args: WriteArgs) -> Result<(), String> {
                     raw: None,
                 }
             };
-            match connector.execute(&target.device.name, "write", &request).await {
+            // Engineering units in, raw units to the device (the point's transform inverted).
+            let write = runtime::execute_write(
+                connector.as_mut(),
+                &config,
+                &target.device.name,
+                "write",
+                &request,
+            );
+            match write.await {
                 Ok(result) => print_write_result(&target.device.name, &result, args.json),
                 Err(e) => {
                     failures += 1;

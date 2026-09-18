@@ -1,5 +1,7 @@
 #include "tedge_dot/connector.h"
 
+#include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 tdot_connector_t *tdot_connector_factory(const char *protocol) {
@@ -28,4 +30,39 @@ tdot_connector_t *tdot_connector_factory(const char *protocol) {
         return tdot_connector_snmp_new();
 #endif
     return NULL;
+}
+
+/* The value write_point receives for a requested one (contract §4.2): see
+ * tdot_connector_write. */
+static int write_value(const tdot_point_t *pt, const tdot_value_t *in,
+                       tdot_value_t *out, char *err, size_t errlen) {
+    *out = *in;
+    if (pt->mode == TDOT_MODE_RAW || in->kind != TDOT_VAL_NUM ||
+        !pt->has_transform || tdot_transform_is_identity(&pt->transform))
+        return 0;
+    double raw;
+    switch (tdot_transform_invert(&pt->transform, in->num, &raw)) {
+    case 0:
+        break;
+    case TDOT_TRANSFORM_NOT_INVERTIBLE:
+        snprintf(err, errlen, "point %s transform is not invertible (%s)", pt->id,
+                 pt->transform.multiplier == 0.0 ? "multiplier 0"
+                                                 : "decimal_shift out of range");
+        return -1;
+    default:
+        snprintf(err, errlen, "point %s: value has no finite raw value under its transform",
+                 pt->id);
+        return -1;
+    }
+    out->num = tdot_datatype_is_integer(pt->datatype) ? round(raw) : raw;
+    return 0;
+}
+
+int tdot_connector_write(tdot_connector_t *conn, tdot_device_t *dev,
+                         tdot_point_t *pt, const tdot_value_t *value, char *err,
+                         size_t errlen) {
+    tdot_value_t raw;
+    if (write_value(pt, value, &raw, err, errlen) != 0)
+        return -1;
+    return conn->write_point(conn, dev, pt, &raw, err, errlen);
 }

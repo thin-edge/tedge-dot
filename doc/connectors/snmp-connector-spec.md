@@ -121,6 +121,9 @@ are reported at connect (the later device `disconnected`).
   `"oid"`. Default from the datatype: `bool`/signed integers → `integer`, `uint8`–`uint32` →
   `unsigned32`, `uint64` → `counter64`, `string` → `octet_string`; floats have no default and
   require `type`. A writable point whose type cannot be derived is a configuration error.
+  A writable point with a `transform` on an integer SNMP type declares the integer datatype
+  (e.g. `uint32` for `timeticks` with `divisor = 100`): the SDK rounds the inverted write value
+  only for integer datatypes (contract §4.2), and a fractional value is rejected on SET.
 - OID syntax: dotted decimal, optional leading `.`, 2–128 arcs, first arc 0–2, second < 40 unless
   the first is 2, 32-bit arcs.
 - Rules: `subscribe = false` is rejected on trap/varbind points and ignored on objects (they are

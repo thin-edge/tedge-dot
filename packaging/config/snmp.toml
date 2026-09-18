@@ -64,7 +64,7 @@ community = "public"
 #   # a polled scalar (the full instance OID)
 #   [[device.point]]
 #   id       = "uptime"
-#   datatype = "float64"
+#   datatype = "uint32"                               # the raw (timeticks) type; the sample is scaled
 #   unit     = "s"
 #   transform = { divisor = 100 }                     # sysUpTime is in hundredths of a second
 #   address  = { oid = "1.3.6.1.2.1.1.3.0" }

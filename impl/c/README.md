@@ -153,6 +153,8 @@ The C build is held to the same coverage as the Rust one:
   config-loader rules the runtime depends on (the liveness bounds and the per-point sampling
   hint, `tests/config.c`); and the SNMP decoder and conversions over the trap vectors shared with
   the Rust crate, its configuration rules and an in-process loopback receive (`tests/snmp.c`);
+  and the write direction of the per-point transform: the inverse math, integer rounding and
+  the one write path the `write`/`write-batch` verbs and the CLI share (`tests/write.c`);
 - **describe parity** — [`ci/describe-parity.sh`](ci/describe-parity.sh) (`just
   c-describe-parity`) renders the Cumulocity DTM definitions of every connector config in the
   repo with both binaries and compares them parsed, so the tenant-side declaration cannot drift
@@ -248,6 +250,7 @@ worker thread per file), matching the Rust single-service model.
 | `src/main.c` | `read` / `write` / `run` / `describe` CLI | `src/main.rs` |
 | `tests/golden.c` | conformance runner for `impl/rust/crates/sdk/conformance/vectors.json` | `tests/golden_vectors.rs` |
 | `tests/describe.c` | device-parameter derivation + DTM rendering checks | `impl/rust/crates/sdk/src/descriptor.rs` tests |
+| `tests/write.c` | inverse transform on write (`tdot_transform_invert`, `tdot_connector_write`) | `sdk/src/model.rs` / `sdk/src/connector.rs` tests |
 | `tests/snmp.c` | SNMP golden vectors (`connectors/snmp/conformance/trap-vectors.json`), config rules, loopback receive | `connector-snmp` unit tests |
 | `ci/describe-parity.sh` | `tedge-dot describe` output compared between the Rust and C binaries | — |
 | `ci/smoke.sh` | e2e smoke: connector ⇄ simulator ⇄ broker, per protocol (used by the `c` CI job) | conformance/e2e suites |

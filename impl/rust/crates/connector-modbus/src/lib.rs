@@ -481,11 +481,19 @@ async fn write_point(
                 .await
                 .map_err(ConnectorError::Transport)?;
             let cur = current.first().copied().unwrap_or(0);
+            // A value that does not fit the field fails rather than being cut by the mask.
+            let max = (1u64 << bc.min(16)) - 1;
             let field = match &value {
-                Value::Number(n) => *n as u64,
-                Value::Bool(b) => *b as u64,
-                Value::Text(t) => t.parse::<u64>().unwrap_or(0),
-            };
+                Value::Number(n) if n.fract() == 0.0 && (0.0..=max as f64).contains(n) => {
+                    Some(*n as u64)
+                }
+                Value::Number(_) => None,
+                Value::Bool(b) => Some(*b as u64),
+                Value::Text(t) => t.parse::<u64>().ok().filter(|f| *f <= max),
+            }
+            .ok_or_else(|| {
+                ConnectorError::Decode(format!("bit-field value must be an integer 0..={max}"))
+            })?;
             let mask: u32 = ((1u32 << bc) - 1) << sb;
             let merged = (cur as u32 & !mask) | ((field as u32) << sb & mask);
             vec![merged as u16]
