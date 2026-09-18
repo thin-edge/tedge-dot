@@ -25,7 +25,7 @@ MANIFEST := "--manifest-path impl/rust/Cargo.toml"
 # Every capability name a `requires:<capability>` tag may use. Declaring the vocabulary in one
 # place is what turns a mistyped tag into an error instead of a test that quietly runs against
 # a build that cannot pass it (see `just check-capability-tags`).
-KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2"
+KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2 opcua-basic128rsa15"
 
 # This list is the single source of truth for what the C build still lacks. Keep it in sync
 # with the parity table in impl/c/README.md. Adding a capability here is a deliberate act:
@@ -33,7 +33,7 @@ KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2"
 #
 # NOTE: a capability listed here only becomes ENFORCED once a test is tagged with it;
 # `just check-capability-tags` reports the ones that are still inert.
-C_MISSING_CAPABILITIES := "canbus-fd profibus-serial snmpv3-sha2"
+C_MISSING_CAPABILITIES := "canbus-fd profibus-serial snmpv3-sha2 opcua-basic128rsa15"
 
 # Create/refresh the single Python virtualenv used by every system test (and by the editor,
 # see .vscode/settings.json).
@@ -197,6 +197,45 @@ test-e2e proto *args="":
 # Usage: just test-e2e-c modbus
 test-e2e-c proto *args="":
     just _e2e {{proto}} c "{{args}}"
+
+# The OPC UA interop suite: the same connector against the OPC Foundation UA-.NETStandard
+# reference server (connectors/opcua/interop/). It is kept out of `just test-e2e` because it
+# runs five .NET servers; run it explicitly.
+# Usage: just test-interop opcua
+test-interop proto="opcua" *args="":
+    just _interop {{proto}} rust "{{args}}"
+
+# The same interop suite against the C implementation.
+# Usage: just test-interop-c opcua
+test-interop-c proto="opcua" *args="":
+    just _interop {{proto}} c "{{args}}"
+
+# Shared body of test-interop / test-interop-c, mirroring _e2e.
+_interop proto impl args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{impl}}" in
+        rust) outdir=connectors/{{proto}}/interop/output ;;
+        c)    outdir=connectors/{{proto}}/interop/output-c
+              export CONNECTOR_DOCKERFILE=connectors/_shared/Dockerfile.connector-c ;;
+        # Without this the stack would fall through to the Rust Dockerfile and report a
+        # fully green run as coverage of the OTHER implementation.
+        *)    echo "unknown implementation '{{impl}}' (expected rust or c)" >&2; exit 1 ;;
+    esac
+    export IMPL={{impl}}
+    compose=connectors/{{proto}}/interop/docker-compose.yaml
+    [ -f "$compose" ] || { echo "no interop stack for {{proto}} ($compose)" >&2; exit 1; }
+    caps=$(just _missing-capabilities {{impl}})
+    skips=()
+    while read -r cap; do
+        [ -n "$cap" ] && skips+=(--skip "requires:$cap")
+    done <<< "$caps"
+    just venv
+    just _pull-stack-images "$compose"
+    just _prebuild-stack-images "$compose"
+    ./.venv/bin/python -m robot \
+        --outputdir "$outdir" --variable IMPL:{{impl}} "${skips[@]+"${skips[@]}"}" {{args}} \
+        connectors/{{proto}}/interop/tests/
 
 # Capabilities the named implementation does NOT provide, one per line, so the suite runners
 # can turn them into `robot --skip requires:<capability>` arguments. An unknown implementation

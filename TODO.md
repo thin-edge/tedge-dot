@@ -16,6 +16,13 @@
       - `canbus-fd` — classic frames only today; the Rust build has a `canbus-fd` feature.
       - `profibus-serial` — the C module speaks `tcp://` only (no serial PHY, no FDL token
         timing), so it cannot yet drive a multi-master RS-485 bus.
+      - `opcua-basic128rsa15` — open62541 aborts a Basic128Rsa15 handshake against the OPC
+        Foundation UA-.NETStandard reference server with `BadDecodingError`, where async-opcua
+        connects to the same endpoint, so the fault is in the policy implementation rather than
+        the server or the configuration. Found by `just test-interop-c opcua`. Deprecated and
+        opt-in only (open62541 itself warns its encryption is broken), and `Basic256` works in
+        both builds, so this is recorded rather than worked around. Worth a reduced test case
+        and an upstream issue before spending more on it.
       - `snmpv3-sha2` — the C build links net-snmp's own crypto (`--with-openssl=internal`), which
         covers MD5/SHA-1 authentication and DES/AES-128 privacy; SHA-224…512 and AES-192/256 need
         a real OpenSSL, which would cost the small, dependency-free package. A device configured
@@ -23,6 +30,19 @@
       Also: CAN bus push delivery (the C module renders the push-based bus as drain-into-cache
       polling — same samples, worse latency, so it is not tagged), and the 255/256-byte cap on
       string/raw values (`tdot_value_t.str`, `TDOT_RAW_MAX`).
+
+* [ ] **Address an OPC UA node by namespace URI, not only by index.** `device.point.address`
+      takes `node_id = "ns=2;s=..."` or `namespace` + `identifier`
+      (`impl/rust/crates/connector-opcua/src/config.rs`); there is no `nsu=` / `namespace_uri`
+      form. A server's namespace array is ordered by the server, not by the specification, so a
+      firmware update that registers one more namespace silently shifts every index and breaks a
+      working configuration — the points resolve to nothing, or worse, to different nodes. The
+      UA-.NETStandard reference server documents its own indices as "typical, not guaranteed",
+      which is why the interop suite resolves the index at startup
+      (`connectors/opcua/interop/resolve-ns.py`) instead of hardcoding it: that proves the
+      connector works, but not that an operator could cope. Additive change: accept
+      `namespace_uri` alongside `namespace`, resolve it from `Server.NamespaceArray` once per
+      session, and re-resolve on reconnect.
 
 * [ ] SNMP connector follow-ups (`doc/connectors/snmp-connector-spec.md`; polling, SET writes,
       v1/v2c/v3 traps and informs shipped):

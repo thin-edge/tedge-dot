@@ -767,6 +767,12 @@ static void disconnect_device(tdot_connector_t *self, tdot_device_t *dev) {
 #define R_IDENTITY_UNSUPPORTED "identity unsupported:"
 #define R_PLAINTEXT "plaintext password refused:"
 #define R_APPCERT "application certificate:"
+/* The server refused *our* certificate. Told apart from R_UNTRUSTED by
+ * ordering, not by status code: both directions of distrust arrive as
+ * BadSecurityChecksFailed / BadCertificateUntrusted, so only the fact that our
+ * own check of the server already passed (or was skipped) says whose
+ * judgement failed. */
+#define R_APPCERT_REJECTED "application certificate rejected:"
 
 static const char *reason_category(UA_StatusCode rc) {
     switch (rc & 0xFFFF0000u) {
@@ -1144,6 +1150,24 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
             }
             snprintf(ua->server_thumbprint, sizeof ua->server_thumbprint, "%s",
                      info.thumbprint);
+            /* The key length belongs to the security policy (OPC UA Part 7),
+             * not to trust, so it is checked before the trust store AND before
+             * trust_any: that option says "do not judge who this server is",
+             * not "use a key the policy forbids". open62541 refuses such a key
+             * in the policy itself, where no trust setting can reach it, but it
+             * reports BadCertificateUseNotAllowed with nothing to act on --
+             * saying which key and which policy is the point of doing it here.
+             * The Rust build checks this at the same place. */
+            if (info.key_bits < ua->policy->min_bits ||
+                info.key_bits > ua->policy->max_bits) {
+                snprintf(err, errlen,
+                         R_INVALID " the server certificate's key is %zu bits, which %s "
+                         "does not allow (it requires %zu-%zu) (thumbprint %s, subject %s)",
+                         info.key_bits, ua->policy->name, ua->policy->min_bits,
+                         ua->policy->max_bits, info.thumbprint, info.subject);
+                UA_EndpointDescription_clear(&chosen);
+                return -1;
+            }
             if (ua->trust_any) {
                 fprintf(stderr,
                         "warn  device %s: server certificate %s is accepted "
@@ -1228,9 +1252,10 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
             char tp[41];
             ua_pki_thumbprint(st->own_cert.data, st->own_cert.length, tp);
             snprintf(err, errlen,
-                     R_UNTRUSTED " the server rejected the connection (%s); it may "
-                     "not trust this connector's application certificate "
-                     "(thumbprint %s, export it with `tedge-dot pki export`)",
+                     R_APPCERT_REJECTED " the server rejected the connection (%s); it "
+                     "does not trust this connector's application certificate "
+                     "(thumbprint %s, export it with `tedge-dot pki export` and "
+                     "have the server administrator trust it)",
                      UA_StatusCode_name(rc), tp);
         } else if (cat && !strcmp(cat, R_IDENTITY_REJECTED)) {
             snprintf(err, errlen,

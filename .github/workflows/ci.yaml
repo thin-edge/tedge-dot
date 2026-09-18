@@ -238,3 +238,27 @@ jobs:
           name: robot-output-c-${{ matrix.protocol }}
           path: connectors/${{ matrix.protocol }}/output-c/
           if-no-files-found: ignore
+
+  # Interoperability against the OPC Foundation UA-.NETStandard reference server. Deliberately
+  # its own job, not part of `e2e`: the servers come from a third-party project, so an upstream
+  # regression must not be able to fail the suites that gate our own behaviour. It is also
+  # heavier -- five .NET servers -- which is why `just test-e2e` does not pull it in.
+  interop:
+    name: interop, UA-.NETStandard (${{ matrix.impl }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        impl: [rust, c]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - name: Run the OPC UA interop suite
+        run: just test-interop${{ matrix.impl == 'c' && '-c' || '' }} opcua
+      - name: Upload robot output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-output-interop-${{ matrix.impl }}
+          path: connectors/opcua/interop/output${{ matrix.impl == 'c' && '-c' || '' }}/
+          if-no-files-found: ignore

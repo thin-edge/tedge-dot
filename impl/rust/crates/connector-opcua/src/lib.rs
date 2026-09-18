@@ -959,6 +959,41 @@ impl Attempt<'_> {
         let der = cert.to_der().unwrap_or_default();
         let thumbprint = pki::thumbprint(&der);
         info["server_thumbprint"] = thumbprint.clone().into();
+        // The key length is a property of the security policy (OPC UA Part 7), not a trust
+        // decision, so it is checked before both the trust store AND
+        // `trust_any_server_certificate`: that option says "do not judge who this server is",
+        // not "use a key the policy forbids". open62541 enforces this in the policy itself and
+        // refuses whatever the trust settings say, so skipping it here would also mean the two
+        // implementations disagree about which servers are usable.
+        //
+        // It has to come before the trust store for a second reason: async-opcua's validator
+        // logs the real cause but returns a plain BadCertificateUntrusted for a short key, so
+        // the reason would tell the operator to run `tedge-dot pki trust` -- which they may
+        // already have done, and which cannot help, because trusting a certificate does not
+        // make its key longer.
+        if let Some((min, max)) = self.security.policy.key_bits() {
+            // An unreadable key length is a refusal, not a pass: `X509::key_length()` only
+            // parses RSA, so an EC certificate lands here, and every policy with a key range is
+            // an RSA policy. Letting it through would also split the two builds -- the C side
+            // reads the size with `mbedtls_pk_get_bitlen`, which answers for EC keys too and
+            // refuses them on the range.
+            let Ok(bits) = cert.key_length() else {
+                return Err(format!(
+                    "{} the server certificate's key is not RSA, which {} requires (thumbprint {thumbprint}, subject {})",
+                    security::CERTIFICATE_INVALID,
+                    self.security.policy.name(),
+                    cert.subject_text()
+                ));
+            };
+            if bits < min || bits > max {
+                return Err(format!(
+                    "{} the server certificate's key is {bits} bits, which {} does not allow (it requires {min}-{max}) (thumbprint {thumbprint}, subject {})",
+                    security::CERTIFICATE_INVALID,
+                    self.security.policy.name(),
+                    cert.subject_text()
+                ));
+            }
+        }
         if self.security.trust_any_server_certificate {
             warn!(
                 endpoint = %self.endpoint.endpoint,
@@ -1001,30 +1036,18 @@ impl Attempt<'_> {
         server_verified: bool,
         own: Option<&OwnCertificate>,
     ) -> String {
-        let Some(status) = status else {
-            return "session failed to connect".to_string();
-        };
-        match security::category(status) {
-            // The server certificate passed our checks, so the refusal is the server's: it does
-            // not accept this connector's certificate.
-            Some(security::CERTIFICATE_UNTRUSTED) if server_verified || own.is_some() => {
-                let thumbprint = own
-                    .and_then(|o| o.certificate.to_der().ok())
-                    .map(|d| pki::thumbprint(&d))
-                    .unwrap_or_default();
-                format!(
-                    "{} the server rejected the connection ({status}); it may not trust this connector's application certificate (thumbprint {thumbprint}, export it with `tedge-dot pki export`)",
-                    security::CERTIFICATE_UNTRUSTED
-                )
-            }
-            Some(security::IDENTITY_REJECTED) => format!(
-                "{} the server rejected the {} identity ({status})",
-                security::IDENTITY_REJECTED,
-                self.security.identity.kind()
-            ),
-            Some(category) => format!("{category} {} ({status})", security::describe(status)),
-            None => format!("session failed to connect: {status}"),
-        }
+        let own_thumbprint = own
+            .and_then(|o| o.certificate.to_der().ok())
+            .map(|d| pki::thumbprint(&d));
+        // Reaching here means our own check of the server certificate is already behind us: it
+        // passed, or `trust_any_server_certificate` skipped it. Either way a distrust reported
+        // now is the server's judgement of us, not ours of it.
+        security::session_failure_reason(
+            status,
+            server_verified || own.is_some(),
+            own_thumbprint.as_deref(),
+            self.security.identity.kind(),
+        )
     }
 }
 

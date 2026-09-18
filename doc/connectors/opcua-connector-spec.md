@@ -166,12 +166,15 @@ An anonymous device without security dials `endpoint` directly. Every other devi
 calls GetEndpoints on `endpoint` (over a channel without security, which servers allow for
 discovery) and selects the endpoint with the device's policy and mode that offers a user token
 policy for its identity, preferring the highest `securityLevel`. The selected endpoint's URL is
-replaced by the configured `endpoint`: the session always goes to the configured host and port
-(servers behind NAT advertise names the client cannot reach), and host-name checks use the
-configured host.
+replaced *in full* by the configured `endpoint` — host, port and resource path: the session
+always goes to the configured address (servers behind NAT advertise names the client cannot
+reach, and the UA-.NETStandard reference server advertises `opc.tcp://0.0.0.0:<port>`, which
+nothing can dial), and host-name checks use the configured host.
 
 No endpoint with the policy and mode → `no matching endpoint: the server offers no <policy>/<mode>
-endpoint (it offers <policy>/<mode>, …)` (sorted, deduplicated). Such endpoints exist, but none
+endpoint (it offers <policy>/<mode>, …)` (sorted, deduplicated). A policy this connector does
+not implement is listed by its full URI rather than dropped, so a server offering only, say,
+the ECC policies explains itself instead of appearing to offer nothing. Such endpoints exist, but none
 accepts the identity → `identity unsupported: …`. The token policy must be listed, for an
 anonymous identity too: an endpoint that lists no token policies is not usable, since neither
 client library can activate a session on it.
@@ -182,6 +185,13 @@ Before dialling a secured endpoint, the connector validates the certificate the 
 advertises; the session validates the certificate of the channel again the same way. Steps, in
 order:
 
+0. **Key length** for the policy is checked first, before any trust lookup: 2048–4096 bits
+   (1024–2048 for the deprecated policies). A key that is too short cannot be made acceptable by
+   trusting the certificate, so reporting it as untrusted — and advising `tedge-dot pki trust` —
+   would send the operator in a circle. Such a certificate is refused as `certificate invalid:`
+   naming the key size and the policy, and is *not* copied to `rejected/certs`, which is a list
+   of certificates an operator could choose to trust. (The UA-.NETStandard reference server
+   auto-generates a 1024-bit certificate, so this is not hypothetical.)
 1. **Pinned.** A certificate identical to one in `trusted/certs` is trusted.
 2. **Chain.** Otherwise the path is built from the certificate through CAs (basicConstraints
    `cA`, subject = issuer, valid signature: RSA PKCS#1 v1.5 with SHA-1/256/384/512 or RSA-PSS
@@ -191,11 +201,10 @@ order:
 3. **Revocation.** For every certificate on the path, the CRLs issued (named and signed) by its
    issuer are looked up in both `crl` directories. None → revocation unknown. Its serial listed
    → revoked. A CA outside its validity period → issuer time invalid.
-4. **Key length** for the policy: 2048–4096 bits (1024–2048 for the deprecated policies).
-5. **Validity period** of the certificate.
-6. **Host name**: one of the certificate's SANs after the first equals the configured host
+4. **Validity period** of the certificate.
+5. **Host name**: one of the certificate's SANs after the first equals the configured host
    (case-insensitive).
-7. **Application URI**: the first SAN equals the server's advertised `applicationUri`.
+6. **Application URI**: the first SAN equals the server's advertised `applicationUri`.
 
 An untrusted certificate (steps 1–2) is copied to `rejected/certs` unless it is already there.
 `rejected/certs` is a list for the operator to review (OPC UA Part 12), not a deny list: a
@@ -213,7 +222,8 @@ A security failure leaves the device `disconnected` with a `reason` starting wit
 
 | Prefix | Status codes / cause |
 | --- | --- |
-| `certificate untrusted:` | BadCertificateUntrusted, BadSecurityChecksFailed; includes the thumbprint, the subject and ``trust it with `tedge-dot pki trust <8 hex>` ``. When the server certificate passed §5.2 and the server still refuses, the reason says the server may not trust this connector's certificate and gives its thumbprint. |
+| `certificate untrusted:` | BadCertificateUntrusted, BadSecurityChecksFailed while validating the server certificate; includes the thumbprint, the subject and ``trust it with `tedge-dot pki trust <8 hex>` ``. |
+| `application certificate rejected:` | The same status codes, but *after* §5.2 passed (or was skipped by §5.4): the refusal is then the server's judgement of **our** certificate, not ours of theirs. Names our own thumbprint and says to hand `tedge-dot pki export` to the server administrator. Only the ordering tells the two apart — the wire says the same thing both ways. |
 | `certificate invalid:` | BadCertificateTimeInvalid, BadCertificateIssuerTimeInvalid, BadCertificateHostNameInvalid, BadCertificateUriInvalid, BadCertificateInvalid, BadCertificatePolicyCheckFailed, BadCertificateUseNotAllowed, BadCertificateIssuerUseNotAllowed, BadCertificateChainIncomplete |
 | `certificate revoked:` | BadCertificateRevoked, BadCertificateIssuerRevoked, BadCertificate[Issuer]RevocationUnknown (the text says "revocation unknown" and to add the CRL, an empty one if the CA revoked nothing) |
 | `no matching endpoint:` | §5.1 |
@@ -322,5 +332,13 @@ Debian purge deletes the directory.
 | Secured sessions (in-process server) | `connector-opcua/tests/security.rs` |
 | Conformance over secured channels | `connectors/opcua/conformance-secure.toml`, `conformance-secure-c.toml` |
 | End to end | `connectors/opcua/tests/opcua_security_e2e.robot` (`docker-compose.secure.yaml`) |
+| Interop, third-party server | `connectors/opcua/interop/tests/opcua_interop.robot` (`just test-interop opcua`, and `-c`) |
 | `tedge-dot pki` | `impl/rust/tests/pki_cli.rs`, `impl/c/tests/opcua_pki_cli.sh`, parity `impl/c/ci/pki-parity.sh` |
 | Fuzzing | `connector-opcua/fuzz` (`pki_files`) |
+
+Every layer above the interop one runs against a server this project wrote, so a misreading of
+the specification is invisible to it. The interop suite exists to catch that: it runs both
+implementations against the OPC Foundation UA-.NETStandard reference stack (packaged by
+`php-opcua/uanetstandard-test-suite`, MIT). It is a separate CI job from `e2e`, so an upstream
+regression cannot fail the suites that gate our own behaviour, and it is the only place where
+`Aes128_Sha256_RsaOaep`, `Basic256` and `Basic128Rsa15` are exercised on the wire.

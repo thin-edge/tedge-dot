@@ -15,6 +15,11 @@ pub const IDENTITY_REJECTED: &str = "identity rejected:";
 pub const IDENTITY_UNSUPPORTED: &str = "identity unsupported:";
 pub const PLAINTEXT_PASSWORD_REFUSED: &str = "plaintext password refused:";
 pub const APPLICATION_CERTIFICATE: &str = "application certificate:";
+/// The server refused *our* certificate. Told apart from `CERTIFICATE_UNTRUSTED` by ordering,
+/// not by status code: both directions of distrust report `BadSecurityChecksFailed` /
+/// `BadCertificateUntrusted`, so only the fact that our own check of the server already passed
+/// (or was skipped) says whose judgement failed. See `Session::failure_reason`.
+pub const APPLICATION_CERTIFICATE_REJECTED: &str = "application certificate rejected:";
 
 /// The reason category of a status code, when it is a security failure about the server
 /// certificate or the user identity.
@@ -79,6 +84,36 @@ pub fn describe(status: StatusCode) -> &'static str {
         | StatusCode::BadIdentityTokenInvalid
         | StatusCode::BadUserAccessDenied => "the server rejected the user identity",
         _ => "the server certificate is invalid",
+    }
+}
+
+/// The link reason for a session that did not activate.
+///
+/// `server_checked` says whether our own judgement of the server certificate had already been
+/// made — it passed, or `trust_any_server_certificate` skipped it. Both directions of distrust
+/// arrive as the same status code, so that ordering is the only thing that distinguishes "we do
+/// not trust the server" (reported before dialling, never here) from "the server does not trust
+/// us". `own_thumbprint` is this connector's application certificate, named so the operator
+/// knows which certificate to export.
+pub fn session_failure_reason(
+    status: Option<StatusCode>,
+    server_checked: bool,
+    own_thumbprint: Option<&str>,
+    identity_kind: &str,
+) -> String {
+    let Some(status) = status else {
+        return "session failed to connect".to_string();
+    };
+    match category(status) {
+        Some(CERTIFICATE_UNTRUSTED) if server_checked => format!(
+            "{APPLICATION_CERTIFICATE_REJECTED} the server rejected the connection ({status}); it does not trust this connector's application certificate (thumbprint {}, export it with `tedge-dot pki export` and have the server administrator trust it)",
+            own_thumbprint.unwrap_or("unknown")
+        ),
+        Some(IDENTITY_REJECTED) => {
+            format!("{IDENTITY_REJECTED} the server rejected the {identity_kind} identity ({status})")
+        }
+        Some(category) => format!("{category} {} ({status})", describe(status)),
+        None => format!("session failed to connect: {status}"),
     }
 }
 
@@ -334,6 +369,105 @@ mod tests {
         assert!(
             e.ends_with("(it offers Basic256Sha256/sign, None/none)"),
             "{e}"
+        );
+    }
+
+    /// An endpoint whose policy this connector does not implement, so `Policy::from_uri` cannot
+    /// name it. The ECC policies of a UA-.NETStandard server are the real case.
+    fn foreign_endpoint(uri: &str, mode: MessageSecurityMode) -> EndpointDescription {
+        EndpointDescription {
+            security_policy_uri: uri.into(),
+            security_mode: mode,
+            ..endpoint(Policy::None, mode, 1, &[(UserTokenType::Anonymous, "")])
+        }
+    }
+
+    #[test]
+    fn no_matching_endpoint_lists_policies_we_do_not_implement() {
+        // Dropping these would leave the reason claiming the server offers nothing at all,
+        // which reads as a broken server rather than an unsupported one.
+        const NIST256: &str = "http://opcfoundation.org/UA/SecurityPolicy#ECC_nistP256";
+        const NIST384: &str = "http://opcfoundation.org/UA/SecurityPolicy#ECC_nistP384";
+        let endpoints = vec![
+            foreign_endpoint(NIST256, MessageSecurityMode::Sign),
+            foreign_endpoint(NIST384, MessageSecurityMode::SignAndEncrypt),
+        ];
+        let sec = device(
+            Policy::Basic256Sha256,
+            SecurityMode::SignAndEncrypt,
+            Identity::Anonymous,
+        );
+        let e = select_endpoint(&endpoints, &sec, "u").unwrap_err();
+        assert!(e.starts_with(NO_MATCHING_ENDPOINT), "{e}");
+        assert!(e.contains(NIST256) && e.contains("/sign,"), "{e}");
+        assert!(e.contains(NIST384) && e.contains("/sign_and_encrypt"), "{e}");
+    }
+
+    #[test]
+    fn selection_keeps_the_configured_resource_path() {
+        // The advertised URL names another host AND another path; both are replaced, so a
+        // server reachable only at the configured address is still dialled there.
+        let endpoints = vec![endpoint(
+            Policy::Basic256Sha256,
+            MessageSecurityMode::SignAndEncrypt,
+            1,
+            &[(UserTokenType::Anonymous, "")],
+        )];
+        let sec = device(
+            Policy::Basic256Sha256,
+            SecurityMode::SignAndEncrypt,
+            Identity::Anonymous,
+        );
+        for configured in [
+            "opc.tcp://plc:4840/UA/TestServer",
+            // The discovery instance of the reference server serves an empty resource path.
+            "opc.tcp://plc:4840",
+        ] {
+            let chosen = select_endpoint(&endpoints, &sec, configured).unwrap();
+            assert_eq!(chosen.endpoint_url.as_ref(), configured);
+        }
+    }
+
+    #[test]
+    fn session_failure_reason_tells_the_two_distrusts_apart() {
+        // Same status code both ways round: only whether our own check already happened says
+        // whose judgement failed.
+        let ours = session_failure_reason(
+            Some(StatusCode::BadSecurityChecksFailed),
+            false,
+            Some("aabbcc"),
+            "anonymous",
+        );
+        assert!(ours.starts_with(CERTIFICATE_UNTRUSTED), "{ours}");
+
+        let theirs = session_failure_reason(
+            Some(StatusCode::BadSecurityChecksFailed),
+            true,
+            Some("aabbcc"),
+            "anonymous",
+        );
+        assert!(
+            theirs.starts_with(APPLICATION_CERTIFICATE_REJECTED),
+            "{theirs}"
+        );
+        assert!(
+            theirs.contains("aabbcc") && theirs.contains("tedge-dot pki export"),
+            "{theirs}"
+        );
+
+        // Categories that say nothing about whose certificate it is are unaffected.
+        let identity = session_failure_reason(
+            Some(StatusCode::BadUserAccessDenied),
+            true,
+            Some("aabbcc"),
+            "username",
+        );
+        assert!(identity.starts_with(IDENTITY_REJECTED), "{identity}");
+        assert!(identity.contains("username"), "{identity}");
+
+        assert_eq!(
+            session_failure_reason(None, true, None, "anonymous"),
+            "session failed to connect"
         );
     }
 

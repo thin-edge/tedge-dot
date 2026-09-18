@@ -72,3 +72,39 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.sim }}-sim
           cache-to: type=gha,mode=max,scope=${{ matrix.sim }}-sim
+
+  # The OPC UA interop suite's servers: the OPC Foundation UA-.NETStandard reference stack,
+  # packaged by php-opcua/uanetstandard-test-suite (MIT, over OPC Foundation MIT 1.00).
+  #
+  # We build it ourselves rather than use their published image because that one is amd64-only
+  # and aborts under qemu with a .NET AccessViolationException, which would make the interop
+  # suite unrunnable on an arm64 developer machine. Their Dockerfile is used unmodified and the
+  # build context is a pinned upstream tag, so none of their source is vendored here and we
+  # carry no patches. Bumping REFSERVER_REF is a reviewed commit.
+  # Bumping REFSERVER_REF means bumping the image tag and build context in
+  # connectors/opcua/interop/docker-compose.yaml to match.
+  publish-refserver:
+    runs-on: ubuntu-latest
+    env:
+      REFSERVER_REF: v1.5.5
+    steps:
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          # A git context: nothing of this repository is sent, and nothing of theirs is stored
+          # here. Their Dockerfile builds .NET for both architectures from multi-arch bases.
+          context: "https://github.com/php-opcua/uanetstandard-test-suite.git#${{ env.REFSERVER_REF }}"
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ghcr.io/${{ github.repository }}/uanetstandard-refserver:${{ env.REFSERVER_REF }}
+          cache-from: type=gha,scope=uanetstandard-refserver
+          cache-to: type=gha,mode=max,scope=uanetstandard-refserver
