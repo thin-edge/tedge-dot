@@ -198,6 +198,45 @@ test-e2e proto *args="":
 test-e2e-c proto *args="":
     just _e2e {{proto}} c "{{args}}"
 
+# The OPC UA interop suite: the same connector against the OPC Foundation UA-.NETStandard
+# reference server (connectors/opcua/interop/). It is kept out of `just test-e2e` because it
+# runs five .NET servers; run it explicitly.
+# Usage: just test-interop opcua
+test-interop proto="opcua" *args="":
+    just _interop {{proto}} rust "{{args}}"
+
+# The same interop suite against the C implementation.
+# Usage: just test-interop-c opcua
+test-interop-c proto="opcua" *args="":
+    just _interop {{proto}} c "{{args}}"
+
+# Shared body of test-interop / test-interop-c, mirroring _e2e.
+_interop proto impl args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{impl}}" in
+        rust) outdir=connectors/{{proto}}/interop/output ;;
+        c)    outdir=connectors/{{proto}}/interop/output-c
+              export CONNECTOR_DOCKERFILE=connectors/_shared/Dockerfile.connector-c ;;
+        # Without this the stack would fall through to the Rust Dockerfile and report a
+        # fully green run as coverage of the OTHER implementation.
+        *)    echo "unknown implementation '{{impl}}' (expected rust or c)" >&2; exit 1 ;;
+    esac
+    export IMPL={{impl}}
+    compose=connectors/{{proto}}/interop/docker-compose.yaml
+    [ -f "$compose" ] || { echo "no interop stack for {{proto}} ($compose)" >&2; exit 1; }
+    caps=$(just _missing-capabilities {{impl}})
+    skips=()
+    while read -r cap; do
+        [ -n "$cap" ] && skips+=(--skip "requires:$cap")
+    done <<< "$caps"
+    just venv
+    just _pull-stack-images "$compose"
+    just _prebuild-stack-images "$compose"
+    ./.venv/bin/python -m robot \
+        --outputdir "$outdir" --variable IMPL:{{impl}} "${skips[@]+"${skips[@]}"}" {{args}} \
+        connectors/{{proto}}/interop/tests/
+
 # Capabilities the named implementation does NOT provide, one per line, so the suite runners
 # can turn them into `robot --skip requires:<capability>` arguments. An unknown implementation
 # is an error rather than an empty list: a typo must not silently run every test.

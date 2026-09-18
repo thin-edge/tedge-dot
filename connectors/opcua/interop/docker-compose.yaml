@@ -1,0 +1,170 @@
+# INTEROP stack for the OPC UA connector (tests/opcua_interop.robot starts it with
+# `Setup OT Stack opcua compose_file=...`).
+#
+# The servers are the OPC Foundation UA-.NETStandard reference stack, packaged by
+# php-opcua/uanetstandard-test-suite (MIT, over OPC Foundation MIT 1.00). Upstream publishes
+# an amd64-only image that aborts under qemu, so we build their unmodified Dockerfile from a
+# pinned tag for both architectures and publish it ourselves; see
+# openspec/changes/opcua-reference-server-interop/design.md.
+#
+# One image, five profiles -- everything is env-driven, so a profile is just a set of
+# variables. `ref-all` alone serves 11 endpoints (every policy x mode).
+#
+# Note: the reference server advertises `opc.tcp://0.0.0.0:<port><path>` as its endpoint URL
+# (BuildBaseAddresses hardcodes it and ignores OPCUA_HOSTNAME). A client that dials what the
+# server advertises cannot connect at all -- which is exactly what the connector's "keep the
+# configured address" rule exists for, and what `Server Advertising 0.0.0.0 Is Reachable`
+# pins.
+#
+# Ports are published without a fixed host port (parallel-safe); BROKER_PORT pins the broker's
+# by hand. The servers need no host port: only the connector talks to them.
+
+x-refserver: &refserver
+  image: ghcr.io/thin-edge/tedge-dot/uanetstandard-refserver:${REFSERVER_TAG:-v1.5.5}
+  restart: unless-stopped
+
+services:
+  broker:
+    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    volumes:
+      - ../../_shared/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - target: 1883
+        published: "${BROKER_PORT:-}"
+
+  # Every policy and mode, every identity type, auto-accepting our certificate: the target for
+  # the matrix, identity and address-space tests. Only this service declares `build:`, so the
+  # image is built once (just _prebuild-stack-images) and the others reuse it.
+  ref-all:
+    <<: *refserver
+    build:
+      context: "https://github.com/php-opcua/uanetstandard-test-suite.git#${REFSERVER_TAG:-v1.5.5}"
+    environment:
+      OPCUA_SERVER_NAME: ref-all
+      OPCUA_PORT: "4840"
+      OPCUA_RESOURCE_PATH: /UA/TestServer
+      OPCUA_SECURITY_POLICIES: "None,Basic128Rsa15,Basic256,Basic256Sha256,Aes128_Sha256_RsaOaep,Aes256_Sha256_RsaPss"
+      OPCUA_SECURITY_MODES: "None,Sign,SignAndEncrypt"
+      OPCUA_ALLOW_ANONYMOUS: "true"
+      OPCUA_AUTH_USERS: "true"
+      OPCUA_AUTH_CERTIFICATE: "true"
+      OPCUA_AUTO_ACCEPT_CERTS: "true"
+      OPCUA_ENABLE_DYNAMIC: "true"
+    healthcheck: &refserver-health
+      # The runtime image is aspnet-alpine: its busybox `nc` has no `-z`, `dotnet` is not on
+      # PATH, and the port speaks OPC UA binary rather than HTTP, so wget cannot probe it.
+      # /proc/net/tcp needs no tooling at all: 12E8 is 4840, state 0A is LISTEN.
+      test: ["CMD", "sh", "-c", "grep -q ':12E8 0[0-9A-F]*:0000 0A' /proc/net/tcp"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 10s
+
+  # Does NOT auto-accept an unknown client certificate: the only way to exercise the server
+  # refusing OUR application certificate. entrypoint.sh drops our certificate into the shared
+  # `refserver-trust` volume, which the server copies into its trust list AT STARTUP -- so the
+  # suite restarts this service to make the trust take effect.
+  ref-strict:
+    <<: *refserver
+    environment:
+      OPCUA_SERVER_NAME: ref-strict
+      OPCUA_PORT: "4840"
+      OPCUA_RESOURCE_PATH: /UA/TestServer
+      OPCUA_SECURITY_POLICIES: "Basic256Sha256"
+      OPCUA_SECURITY_MODES: "SignAndEncrypt"
+      OPCUA_ALLOW_ANONYMOUS: "true"
+      OPCUA_AUTO_ACCEPT_CERTS: "false"
+    volumes:
+      - refserver-trust:/app/certs
+    healthcheck: *refserver-health
+
+  # Elliptic-curve policies only. Neither connector implements them, so a device pointed here
+  # must fail with a listed "no matching endpoint:" reason rather than crash or hang.
+  ref-ecc:
+    <<: *refserver
+    environment:
+      OPCUA_SERVER_NAME: ref-ecc
+      OPCUA_PORT: "4840"
+      OPCUA_RESOURCE_PATH: /UA/TestServer
+      OPCUA_SECURITY_POLICIES: "ECC_nistP256,ECC_nistP384"
+      OPCUA_SECURITY_MODES: "Sign,SignAndEncrypt"
+      OPCUA_ALLOW_ANONYMOUS: "true"
+      OPCUA_AUTO_ACCEPT_CERTS: "true"
+    healthcheck: *refserver-health
+
+  # A short secure-channel token, so a test run of a couple of minutes spans several renewals.
+  ref-token:
+    <<: *refserver
+    environment:
+      OPCUA_SERVER_NAME: ref-token
+      OPCUA_PORT: "4840"
+      OPCUA_RESOURCE_PATH: /UA/TestServer
+      OPCUA_SECURITY_POLICIES: "Basic256Sha256"
+      OPCUA_SECURITY_MODES: "SignAndEncrypt"
+      OPCUA_ALLOW_ANONYMOUS: "true"
+      OPCUA_AUTO_ACCEPT_CERTS: "true"
+      OPCUA_SECURITY_TOKEN_LIFETIME: "30000"
+    healthcheck: *refserver-health
+
+  # An endpoint with no resource path at all (the discovery instance).
+  ref-discovery:
+    <<: *refserver
+    environment:
+      OPCUA_SERVER_NAME: ref-discovery
+      OPCUA_PORT: "4840"
+      OPCUA_RESOURCE_PATH: ""
+      OPCUA_IS_DISCOVERY: "true"
+      OPCUA_SECURITY_POLICIES: "None,Basic256Sha256"
+      OPCUA_SECURITY_MODES: "None,SignAndEncrypt"
+      OPCUA_ALLOW_ANONYMOUS: "true"
+      OPCUA_AUTO_ACCEPT_CERTS: "true"
+    healthcheck: *refserver-health
+
+  # Resolves the reference server's namespace index and renders connector.toml from its
+  # template. The server's namespace indices are documented as typical, not guaranteed, and
+  # the connector can only address a node by index -- so the index is looked up, never assumed.
+  # Runs to completion before the connector starts.
+  ns-resolver:
+    build:
+      context: ../../..
+      dockerfile: connectors/opcua/sim/Dockerfile
+    entrypoint: ["python", "/opt/interop/resolve-ns.py"]
+    command: ["opc.tcp://ref-all:4840/UA/TestServer", "/opt/interop/connector.toml.in", "/rendered/connector.toml"]
+    volumes:
+      - ./:/opt/interop:ro
+      - rendered:/rendered
+    depends_on:
+      ref-all:
+        condition: service_healthy
+
+  connector:
+    image: tedge-dot-${IMPL:-rust}-opcua-connector
+    build:
+      context: ../../..
+      dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/opcua/Dockerfile.connector}
+      args:
+        PROTOCOL: opcua
+    entrypoint: ["/opt/interop/entrypoint.sh"]
+    volumes:
+      - ./:/opt/interop:ro
+      - rendered:/rendered
+      - refserver-trust:/refserver-trust
+    labels:
+      device-test-core.role: main
+    depends_on:
+      broker:
+        condition: service_started
+      ns-resolver:
+        condition: service_completed_successfully
+      ref-strict:
+        condition: service_healthy
+      ref-ecc:
+        condition: service_healthy
+      ref-token:
+        condition: service_healthy
+      ref-discovery:
+        condition: service_healthy
+
+volumes:
+  rendered:
+  refserver-trust:
