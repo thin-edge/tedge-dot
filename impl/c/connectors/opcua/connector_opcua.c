@@ -1150,6 +1150,24 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
             }
             snprintf(ua->server_thumbprint, sizeof ua->server_thumbprint, "%s",
                      info.thumbprint);
+            /* The key length belongs to the security policy (OPC UA Part 7),
+             * not to trust, so it is checked before the trust store AND before
+             * trust_any: that option says "do not judge who this server is",
+             * not "use a key the policy forbids". open62541 refuses such a key
+             * in the policy itself, where no trust setting can reach it, but it
+             * reports BadCertificateUseNotAllowed with nothing to act on --
+             * saying which key and which policy is the point of doing it here.
+             * The Rust build checks this at the same place. */
+            if (info.key_bits < ua->policy->min_bits ||
+                info.key_bits > ua->policy->max_bits) {
+                snprintf(err, errlen,
+                         R_INVALID " the server certificate's key is %zu bits, which %s "
+                         "does not allow (it requires %zu-%zu) (thumbprint %s, subject %s)",
+                         info.key_bits, ua->policy->name, ua->policy->min_bits,
+                         ua->policy->max_bits, info.thumbprint, info.subject);
+                UA_EndpointDescription_clear(&chosen);
+                return -1;
+            }
             if (ua->trust_any) {
                 fprintf(stderr,
                         "warn  device %s: server certificate %s is accepted "
