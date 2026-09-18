@@ -169,14 +169,19 @@ Session Survives Secure Channel Token Renewal
     ...                this test means the channel was renewed rather than re-established.
     [Timeout]    5 minutes
     Wait For Link Status    token    connected
-    ${before}=    Connector Log
     Sleep    75s    reason=two 30s token lifetimes, so at least two renewals fall inside
-    ${link}=    Wait For Link Status    token    connected
-    Should Be Equal    ${{ json.loads($link)["status"] }}    connected
     Sample Should Arrive    token    counter
-    ${after}=    Connector Log
-    ${new}=    Set Variable    ${{ $after[len($before):] }}
-    Should Not Contain    ${new}    device token: disconnected
+    # The link status is published on change, so its whole history over the window is the
+    # evidence: a renewal that failed would have dropped the session and published
+    # `disconnected` before reconnecting. Asserted on the published status rather than on log
+    # text, which the two runtimes word differently ("device token: link disconnected" in C,
+    # "link status changed device=token status=disconnected" in Rust) -- a log-string check
+    # silently matches neither and can never fail.
+    ${history}=    Get Messages    te/device/token/ot/${PROTOCOL}/status/link
+    ${states}=    Evaluate    [json.loads(m)["status"] for m in $history]    modules=json
+    Should Not Contain    ${states}    disconnected
+    ...    msg=the session dropped and reconnected instead of renewing its token: ${states}
+    Should Contain    ${states}    connected
 
 
 *** Keywords ***

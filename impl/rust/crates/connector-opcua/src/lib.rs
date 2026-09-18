@@ -972,15 +972,26 @@ impl Attempt<'_> {
         // already have done, and which cannot help, because trusting a certificate does not
         // make its key longer.
         if let Some((min, max)) = self.security.policy.key_bits() {
-            if let Ok(bits) = cert.key_length() {
-                if bits < min || bits > max {
-                    return Err(format!(
-                        "{} the server certificate's key is {bits} bits, which {} does not allow (it requires {min}-{max}) (thumbprint {thumbprint}, subject {})",
-                        security::CERTIFICATE_INVALID,
-                        self.security.policy.name(),
-                        cert.subject_text()
-                    ));
-                }
+            // An unreadable key length is a refusal, not a pass: `X509::key_length()` only
+            // parses RSA, so an EC certificate lands here, and every policy with a key range is
+            // an RSA policy. Letting it through would also split the two builds -- the C side
+            // reads the size with `mbedtls_pk_get_bitlen`, which answers for EC keys too and
+            // refuses them on the range.
+            let Ok(bits) = cert.key_length() else {
+                return Err(format!(
+                    "{} the server certificate's key is not RSA, which {} requires (thumbprint {thumbprint}, subject {})",
+                    security::CERTIFICATE_INVALID,
+                    self.security.policy.name(),
+                    cert.subject_text()
+                ));
+            };
+            if bits < min || bits > max {
+                return Err(format!(
+                    "{} the server certificate's key is {bits} bits, which {} does not allow (it requires {min}-{max}) (thumbprint {thumbprint}, subject {})",
+                    security::CERTIFICATE_INVALID,
+                    self.security.policy.name(),
+                    cert.subject_text()
+                ));
             }
         }
         if self.security.trust_any_server_certificate {

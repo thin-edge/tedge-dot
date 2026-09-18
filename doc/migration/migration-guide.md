@@ -270,7 +270,9 @@ impact is on configurations written in anticipation.)
    tedge-dot pki export --pem --output tedge-dot.pem
    ```
 
-   Until they do, the reason reads `certificate untrusted: the server rejected the connection …`.
+   Until they do, the reason reads `application certificate rejected: the server rejected the
+   connection …`. (Before this category existed it read `certificate untrusted: …`, which is the
+   prefix an older gateway reports.)
 
 **Trusting a site CA instead of each server.** Import the CA certificate and its CRL; every
 server certificate it issues is then trusted:

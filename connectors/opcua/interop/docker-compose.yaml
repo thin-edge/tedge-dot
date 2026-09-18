@@ -19,8 +19,12 @@
 # Ports are published without a fixed host port (parallel-safe); BROKER_PORT pins the broker's
 # by hand. The servers need no host port: only the connector talks to them.
 
+# The tag is written out rather than interpolated: `just _pull-stack-images` greps `image:`
+# lines and hands them to `docker pull` verbatim, so a `${VAR}` here reaches docker as those
+# literal characters and is rejected as an invalid reference. Bumping it means editing this
+# line and REFSERVER_REF in .github/workflows/publish-simulators.yaml together.
 x-refserver: &refserver
-  image: ghcr.io/thin-edge/tedge-dot/uanetstandard-refserver:${REFSERVER_TAG:-v1.5.5}
+  image: ghcr.io/thin-edge/tedge-dot/uanetstandard-refserver:v1.5.5
   restart: unless-stopped
 
 services:
@@ -51,7 +55,9 @@ services:
   ref-all:
     <<: *refserver
     build:
-      context: "https://github.com/php-opcua/uanetstandard-test-suite.git#${REFSERVER_TAG:-v1.5.5}"
+      # Builds the image when it has not been published yet (a pull request before the tag
+      # exists on ghcr, or a fresh checkout); otherwise the pull above wins.
+      context: "https://github.com/php-opcua/uanetstandard-test-suite.git#v1.5.5"
     environment:
       OPCUA_SERVER_NAME: ref-all
       OPCUA_PORT: "4840"
@@ -92,8 +98,11 @@ services:
       OPCUA_SERVER_NAME: ref-strict
       OPCUA_PORT: "4840"
       OPCUA_RESOURCE_PATH: /UA/TestServer
-      OPCUA_SECURITY_POLICIES: "Basic256Sha256"
-      OPCUA_SECURITY_MODES: "SignAndEncrypt"
+      # As for ref-token, `None` exists so ns-resolver can read the namespace array. It does
+      # not soften what this server tests: the `strict` device asks for
+      # Basic256Sha256/sign_and_encrypt, and OPCUA_AUTO_ACCEPT_CERTS stays false.
+      OPCUA_SECURITY_POLICIES: "None,Basic256Sha256"
+      OPCUA_SECURITY_MODES: "None,SignAndEncrypt"
       OPCUA_ALLOW_ANONYMOUS: "true"
       OPCUA_AUTO_ACCEPT_CERTS: "false"
       OPCUA_ENABLE_HTTPS: "true"
@@ -126,8 +135,12 @@ services:
       OPCUA_SERVER_NAME: ref-token
       OPCUA_PORT: "4840"
       OPCUA_RESOURCE_PATH: /UA/TestServer
-      OPCUA_SECURITY_POLICIES: "Basic256Sha256"
-      OPCUA_SECURITY_MODES: "SignAndEncrypt"
+      # `None` is here for ns-resolver, which reads the namespace array over an unsecured
+      # session; without it the server answers BadSecurityPolicyRejected and nothing can be
+      # resolved. The `token` device still asks for Basic256Sha256/sign_and_encrypt, so what
+      # this server exists to exercise is unchanged.
+      OPCUA_SECURITY_POLICIES: "None,Basic256Sha256"
+      OPCUA_SECURITY_MODES: "None,SignAndEncrypt"
       OPCUA_ALLOW_ANONYMOUS: "true"
       OPCUA_AUTO_ACCEPT_CERTS: "true"
       OPCUA_SECURITY_TOKEN_LIFETIME: "30000"
@@ -156,21 +169,33 @@ services:
       OPCUA_AUTO_ACCEPT_CERTS: "true"
     healthcheck: *refserver-health
 
-  # Resolves the reference server's namespace index and renders connector.toml from its
-  # template. The server's namespace indices are documented as typical, not guaranteed, and
-  # the connector can only address a node by index -- so the index is looked up, never assumed.
+  # Resolves each server's namespace index and renders connector.toml from its template. The
+  # indices are documented as typical, not guaranteed, and the connector can only address a
+  # node by index -- so they are looked up, never assumed, andeach server is asked for its own.
   # Runs to completion before the connector starts.
   ns-resolver:
     build:
       context: ../../..
       dockerfile: connectors/opcua/sim/Dockerfile
     entrypoint: ["python", "/opt/interop/resolve-ns.py"]
-    command: ["opc.tcp://ref-all:4840/UA/TestServer", "/opt/interop/connector.toml.in", "/rendered/connector.toml"]
+    command:
+      - /opt/interop/connector.toml.in
+      - /rendered/connector.toml
+      - "@NS_REF_ALL@=opc.tcp://ref-all:4840/UA/TestServer"
+      - "@NS_REF_DISCOVERY@=opc.tcp://ref-discovery:4840"
+      - "@NS_REF_TOKEN@=opc.tcp://ref-token:4840/UA/TestServer"
+      - "@NS_REF_STRICT@=opc.tcp://ref-strict:4840/UA/TestServer"
     volumes:
       - ./:/opt/interop:ro
       - rendered:/rendered
     depends_on:
       ref-all:
+        condition: service_healthy
+      ref-discovery:
+        condition: service_healthy
+      ref-token:
+        condition: service_healthy
+      ref-strict:
         condition: service_healthy
 
   connector:

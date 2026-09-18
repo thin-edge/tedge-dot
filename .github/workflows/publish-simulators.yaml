@@ -81,6 +81,8 @@ jobs:
   # suite unrunnable on an arm64 developer machine. Their Dockerfile is used unmodified and the
   # build context is a pinned upstream tag, so none of their source is vendored here and we
   # carry no patches. Bumping REFSERVER_REF is a reviewed commit.
+  # Bumping REFSERVER_REF means bumping the image tag and build context in
+  # connectors/opcua/interop/docker-compose.yaml to match.
   publish-refserver:
     runs-on: ubuntu-latest
     env:

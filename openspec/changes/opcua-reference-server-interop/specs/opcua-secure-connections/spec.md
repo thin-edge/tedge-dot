@@ -9,8 +9,9 @@ because a certificate is untrusted, the failure is the server's judgement of the
 application certificate, not the connector's judgement of the server's.
 
 The connector SHALL report that case with the reason category `application certificate
-rejected:`. The reason SHALL name the connector's own certificate by its SHA-1 thumbprint and
-subject, and SHALL state that the server administrator has to trust it. The reason SHALL NOT
+rejected:`. The reason SHALL name the connector's own certificate by its SHA-1 thumbprint, and
+SHALL state that the server administrator has to trust it. The subject is not required: the
+certificate is the connector's own, so the thumbprint and `tedge-dot pki export` identify it. The reason SHALL NOT
 state that the server's certificate is untrusted.
 
 The device SHALL stay `disconnected` and keep retrying with the normal reconnect backoff, and
