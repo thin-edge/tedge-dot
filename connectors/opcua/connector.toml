@@ -106,6 +106,17 @@ default_mode     = "typed"
   unit     = "°C"
   address  = { node_id = "ns=2;s=Temperature" }
 
+  # The same static node, with a heartbeat (report.max_interval, contract §5.3). A subscription
+  # never pushes it again, so every sample after the first is the runtime's on-demand read of
+  # the node: what keeps a device whose values never change available in the cloud. See
+  # "A Heartbeat Keeps A Static Subscribed Node Reporting" in tests/opcua_e2e.robot.
+  [[device.point]]
+  id       = "temperature_heartbeat"
+  datatype = "float64"
+  unit     = "°C"
+  address  = { node_id = "ns=2;s=Temperature" }
+  report   = { on_change = true, max_interval = "3s" }
+
   # The Count node again, as a read-only parameter that names its own key in its set: the
   # `counters` twin fragment carries it as `count`, not as its id, and the capability descriptor
   # lists the key (parameter_keys, §7) so the flows know it before the point samples. Last on

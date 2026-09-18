@@ -365,6 +365,19 @@ Identical Notifications Are Separate Samples
     Wait Until Keyword Succeeds    ${SAMPLE_TIMEOUT}s    500ms
     ...    Message Count Should Be At Least    ${SAMPLE_PREFIX}/link_down    ${before + 2}
 
+A Trap Point Gets No Heartbeat
+    [Documentation]    Every point inherits `report.max_interval = "2s"` from [connector]
+    ...                (contract §5.3), but a trap point cannot be read on demand: it is
+    ...                published when a notification arrives, and never as a heartbeat. The
+    ...                attempt does not disturb the device's link either.
+    ${mark}=    Get Message Mark
+    Run Keyword And Expect Error    *timed out*
+    ...    Wait For Fresh Message With Field    ${SAMPLE_PREFIX}/link_down    quality    good    bad
+    ...    timeout=7    since=${mark}
+    ${link}=    Wait For Retained    ${LINK_TOPIC}    timeout=${SAMPLE_TIMEOUT}
+    ${status}=    Get Json Field    ${link}    status
+    Should Be Equal    ${status}    connected
+
 An Inform Is Acknowledged And Delivered
     [Documentation]    snmpinform exits non-zero unless it receives the Response.
     ${mark}=    Get Message Mark

@@ -1064,9 +1064,9 @@ async fn check_b12_reporting_policy(ctx: &Ctx<'_>, layer: &mut Layer, config_pat
     let caps_topic = ctx.caps_topic();
     let pushed = records
         .iter()
+        .rev()
         .filter(|r| r.client == ctx.client && r.topic == caps_topic)
-        .filter_map(|r| r.json().ok())
-        .last()
+        .find_map(|r| r.json().ok())
         .is_some_and(|caps| caps["subscribe"] == true);
 
     let setup = async {
@@ -1194,9 +1194,9 @@ async fn check_b12_reporting_policy(ctx: &Ctx<'_>, layer: &mut Layer, config_pat
         .broker
         .records_from(mark)
         .into_iter()
+        .rev()
         .filter(|r| r.client == ctx.client && r.topic == caps_topic)
-        .filter_map(|r| r.json().ok())
-        .last()
+        .find_map(|r| r.json().ok())
         .ok_or_else(|| "no capability descriptor was republished after define-device".to_string())
         .and_then(|caps| {
             let listed = caps["reports"]["points"]

@@ -173,6 +173,27 @@ Subscribed Static Node Falls Silent After Its First Value
     # ...and then nothing more, because the node never changes.
     No New Messages On Topic    ${SAMPLE_PREFIX}/temperature_pushed    timeout=5
 
+A Heartbeat Keeps A Static Subscribed Node Reporting
+    [Documentation]    temperature_heartbeat is subscribed to the same static node as
+    ...                temperature_pushed, with `report = { on_change = true, max_interval = "3s" }`
+    ...                (contract §5.3). The subscription never pushes it again, so the samples
+    ...                that keep coming are the runtime reading the node on demand once 3 s pass
+    ...                without a publish: fresh reads, good quality, consecutive seq -- never the
+    ...                last value replayed. This is what keeps a device whose values never change
+    ...                available in Cumulocity.
+    [Tags]    requires:subscribe
+    ${first}=    Wait For Sample    ${SAMPLE_PREFIX}/temperature_heartbeat    timeout=${SAMPLE_TIMEOUT}
+    ${second}=    Wait For Sample    ${SAMPLE_PREFIX}/temperature_heartbeat    timeout=10
+    Sample Should Be Good    ${second}
+    ${value}=    Get Json Field    ${second}    value
+    Should Be True    abs(${value} - 21.5) < 0.05
+    ${seq1}=    Get Json Field    ${first}    seq
+    ${seq2}=    Get Json Field    ${second}    seq
+    Should Be Equal As Integers    ${seq2}    ${seq1 + 1}    unchanged readings in between must not consume seq
+    ${ts1}=    Get Json Field    ${first}    ts_ms
+    ${ts2}=    Get Json Field    ${second}    ts_ms
+    Should Be True    ${ts2} - ${ts1} >= 2500    a heartbeat comes no sooner than max_interval: ${ts2} - ${ts1}
+
 Push Delivery Recovers After The Server Restarts
     [Documentation]    A subscribed point is OFF the polling schedule, so if push stops the
     ...                device goes silent and nothing else notices. When the server restarts,

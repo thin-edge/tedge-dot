@@ -27,9 +27,9 @@
 ## 4. Conformance, parity and e2e
 
 - [x] 4.1 Add layer-3 `ot-conformance` cases: on_change with a polled point, deadband, a flat signal with a heartbeat, `seq` continuity with suppression, and the descriptor's `reports`. Keep `report` off the point that B2-seq (`layer3.rs`) samples, so it still sees at least 3 samples in its window.
-- [ ] 4.2 Add push-path cases with the OPC UA simulator: the trailing publish, and the heartbeat read of a static node. Add an SNMP case: a trap point inheriting `max_interval` produces nothing without a trap.
-- [ ] 4.3 Run the suites through the parity harness (`IMPL=rust` and `IMPL=c`) and record any gaps.
-- [ ] 4.4 Update the e2e suites and configs that use the flow's `meta` keys: `connectors/opcua/tests/opcua_e2e.robot` (the `meta.on_change` assertion), `connectors/opcua/conformance/connector*.toml`, and `connectors/modbus/conformance/connector.toml`. Add an e2e case in which a static OPC UA node keeps the device available through the heartbeat.
+- [x] 4.2 Add push-path cases with the OPC UA simulator: the trailing publish, and the heartbeat read of a static node. Add an SNMP case: a trap point inheriting `max_interval` produces nothing without a trap. (Layer 3 has built-in simulators for Modbus and OPC UA only, so the pushed heartbeat is B12 with a subscribed clone and the OPC UA e2e case, and the SNMP case is in the SNMP e2e suite. The trailing publish of a pushed point is covered by the shared vectors and the C runtime test with a fake module.)
+- [x] 4.3 Run the suites through the parity harness (`IMPL=rust` and `IMPL=c`) and record any gaps.
+- [x] 4.4 Update the e2e suites and configs that use the flow's `meta` keys: `connectors/opcua/tests/opcua_e2e.robot` (the `meta.on_change` assertion), `connectors/opcua/conformance/connector*.toml`, and `connectors/modbus/conformance/connector.toml`. Add an e2e case in which a static OPC UA node keeps the device available through the heartbeat.
 
 ## 5. Flows
 
