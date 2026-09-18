@@ -1,14 +1,15 @@
 ## Context
 
-Samples are published from exactly one function in each runtime:
+Samples are published from a small, fixed set of functions in each runtime:
 
 - **Rust**: `publish_sample` in `impl/rust/crates/sdk/src/runtime.rs`. Both the poll loop and the
-  subscription channel call it. The main loop also wakes on a 200 ms `tick`.
+  subscription channel call it. The main loop also wakes on a 200 ms `tick`. The stdout mode
+  has its own loop, `run_stdout_until`, which publishes through `print_sample`.
 - **C**: `emit_sample` in `impl/c/sdk/src/runtime.c`. Both the poll loop and `push_sink`
-  (called through `drain_subscriptions` on the main loop thread) call it. The loop computes
-  `now = tdot_mono()` on every pass.
+  (called through `drain_subscriptions` on the main loop thread) call it, and so does stdout
+  mode. The loop computes `now = tdot_mono()` on every pass.
 
-So the policy can be applied in one place per runtime, with no change to any connector module.
+So the policy can be applied at these few call sites, with no change to any connector module.
 Both runtimes already own `seq`, the device identity, and `meta` echoing.
 
 `ot-measurement` implements `on_change`, `deadband`, `min_interval` and `debounce`
@@ -58,10 +59,24 @@ report = { on_change = true }                     # device default
   report = { deadband = 0.5, min_interval = "10s" }  # point override
 ```
 
-Inheritance merges key by key: a point's value wins over the device's, and the device's wins
-over the connector's. A point library can declare `report` on its points, and the site's
-point-level value wins over the library's. This uses the same rules as the existing library
-field merge (RFC 0004).
+Inheritance merges key by key. From least to most specific:
+
+1. `[connector]`
+2. `[[device]]`
+3. the point as declared in a point library
+4. the point as declared (or overridden) in the site's config
+
+A more specific level wins for the keys it sets. A library point is point-level, so its
+`deadband` wins over a site's device-level `deadband`. A site overrides it by setting `report`
+on that point. In the Rust loader `report` joins `DEEP_MERGED_KEYS`
+(`impl/rust/crates/sdk/src/library.rs:57`), and it joins the matching key list in the C loader
+(`config.c`). Without that, a site's `report` would replace the library's table wholesale
+instead of merging with it.
+
+An inherited key can be switched off at a more specific level:
+
+- `max_interval = "0"`, `min_interval = "0"` or `debounce = "0"` disables that setting;
+- `on_change = false` together with `deadband = 0` disables change detection.
 
 - Why not `meta`: the contract says the connector *never* interprets `meta`. Having the runtime
   read `meta.on_change` would break that rule, and the settings would stay hidden among
@@ -69,43 +84,97 @@ field merge (RFC 0004).
 - Alternative considered: flat fields on the point (`on_change = true`). This was rejected
   because it clutters the point namespace and makes a device-level default awkward.
 
+**Validation:**
+
+- A single `report` table that sets both `min_interval` and `max_interval`, with
+  `max_interval <= min_interval`, is rejected. So is a negative deadband, a malformed percent,
+  or an invalid duration.
+- The `max_interval <= min_interval` case can also arise only through inheritance, for example
+  a point with `min_interval = "1h"` under the shipped `max_interval = "30m"`. That config is
+  **not** rejected. The effective heartbeat is raised to twice `min_interval`, keeping it
+  strictly greater as validation requires, and the loader logs a warning that names the
+  point. The shipped default therefore never invalidates an existing
+  config.
+
 ### D2: Semantics
 Each point is evaluated independently, keyed by (device, point id). The runtime compares the
-value **after** `transform`, which is what the sample's `value` carries.
+value **after** `transform`, which is what the sample's `value` carries. The policy consists of
+the steps below, in order.
 
-1. **Always publish** when any of these hold. These cases bypass every filter except
-   `min_interval`, and they bypass that too when quality changes:
-   - it is the first sample since the runtime started, since a reload that changed this
-     point's config, or since the device reconnected;
-   - `quality` differs from the last published sample's quality.
-2. **Debounce** (`debounce > 0`): a candidate value is accepted only once it has been seen
-   unchanged for `debounce`. The age is measured on the monotonic clock. For a pushed point
-   with no further push, the tick sends the value once the period has passed.
+1. **Always publish**, bypassing every other rule, including `min_interval` and `debounce`,
+   when any of these hold:
+   - it is the first sample since the runtime started;
+   - it is the first sample since the policy state was reset (see "Resets" below);
+   - its `quality` differs from the last published sample's quality.
+
+   Publishing a quality change also discards any pending (rate-limited) sample and any
+   debounce candidate. An older good value can therefore never follow a newer bad one.
+2. **Debounce** (`debounce > 0`, implies change detection):
+   - A reading that differs from the last published value becomes the *candidate*.
+   - Later readings that are "the same" as the candidate keep it alive. "The same" means
+     within the deadband when one is set, and equal (epsilon 1e-9) otherwise, so noisy analog
+     values can settle.
+   - A reading that is not the same replaces the candidate and restarts the period. A reading
+     that is not a change from the last published value clears the candidate.
+   - The candidate is accepted once it has been the candidate for `debounce`, measured on the
+     monotonic clock.
+   - The published sample is the **most recent** reading of the stable run, with its own `ts`.
+   - A pushed point that receives no further push is accepted by the loop once the period ends.
 3. **Change test** (`on_change` or `deadband`):
-   - Numbers: publish if `|v - last| >= deadband`. For an absolute deadband, `deadband` is the
-     number. For `"<p>%"` it is `p/100 * |last|`. With `last == 0` any non-zero change passes.
-     With `on_change` and no deadband, any difference passes, using an epsilon of 1e-9 as the
-     flow does.
-   - bool, string, bytes and raw mode: publish on any difference in `value`, or in `raw` when
-     there is no decoded value. `deadband` does not apply to them.
-4. **Rate limit** (`min_interval`): if the last publish was less than `min_interval` ago,
-   store the sample as *pending* (replacing any older pending one) and do not publish. When
-   the tick finds that the window has elapsed, it re-runs the change test on the pending
-   sample and publishes it if it still passes. The sample keeps its original `ts`.
-5. **Heartbeat** (`max_interval`): if a point has published nothing for `max_interval`:
-   - Polled point: the next reading is published whether or not it changed. No timer is
-     needed, because a reading arrives every `poll_interval`.
-   - Pushed point: the tick re-publishes the last published sample with `ts = now`, but only
-     while the device's link is `connected`. A heartbeat must never make a dead source look
-     alive.
-   - A sample sent as a heartbeat is not marked specially, because to a consumer it is simply a
-     current reading.
-   - The configuration is rejected if `max_interval <= min_interval`.
+   - Numbers (`value_repr = "number"`): publish if `|v - last| >= threshold`.
+     - An absolute deadband's threshold is the configured number.
+     - A `"<p>%"` deadband's threshold is `p/100 × |last|`. With `last == 0`, any non-zero
+       change passes.
+     - With `on_change` and no deadband, any difference greater than 1e-9 passes.
+   - NaN counts as a value equal only to NaN. NaN → NaN is not a change. A number → NaN, or
+     NaN → a number, is a change. This keeps a published NaN from blocking the point forever.
+   - Anything else is compared by exact equality of `(value_repr, value)`, or of `raw` when
+     there is no decoded value, and `deadband` is ignored. This covers bool, string, bytes,
+     raw mode, and 64-bit integers carried as strings (contract §4.1). If a 64-bit integer
+     switches between number and string representation, that counts as a change.
+4. **Rate limit** (`min_interval`): if the last publish was less than `min_interval` ago, the
+   sample is stored as *pending*, replacing any older pending sample, and is not published.
+   Once the window has elapsed, the next pass of the main loop re-runs the change test on the
+   pending sample and publishes it if it still passes. The sample keeps its original `ts`.
+5. **Heartbeat** (`max_interval`): a heartbeat **never fabricates a sample**. When a point has
+   published nothing for `max_interval`, its next *fresh reading* is published even if it has
+   not changed:
+   - **Polled point**: this is simply the next scheduled read.
+   - **Pushed point**: the main loop requests an on-demand read of it through the ordinary
+     `read_points` / `read_point` path. That read also proves the source is alive.
+   - A heartbeat read has three possible outcomes:
+     - **Sample**: the reading is published, even when unchanged. A bad sample is published as
+       a quality change.
+     - **Failure**: in Rust, `read_points` returns an `Err` other than `Unsupported`, or the
+       operation timeout expires. In C, `read_point` returns `-1`. The runtime synthesises a
+       bad-quality sample for the point, with the error as its reason, and publishes it. A
+       hung or unreachable source is therefore reported, not silently skipped.
+     - **No data**: Rust returns `Unsupported` or an `Ok` without a sample for the point. C
+       returns the new `TDOT_READ_NO_DATA` (see D3). The point gets no heartbeat, and it is
+       marked *unreadable* until its next reset, so it is not retried on every pass. Examples
+       are SNMP trap and varbind points and CAN frames.
+   - Side effects: heartbeat reads feed the device's link status exactly like polls, through
+     `note_poll` in Rust and the rc handling in C. A transport failure therefore schedules the
+     same reconnect, and it also resets the push subscription, as a failed poll does today.
+     This is intended: a failed heartbeat read *is* evidence the device is unreachable.
+   - Each point gets at most one heartbeat read per `max_interval`. The reads are grouped per
+     device and bounded by the operation timeout, as polls are.
 6. `last` is updated only when a sample is published. The deadband is measured from the last
    published value, so slow drift is still reported once it adds up to the deadband. This
    matches the flow.
-7. `seq` is incremented only on publish (both runtimes move the increment after the policy
-   decision). A gap in `seq` still means a published sample was lost.
+7. `seq` is stamped only when the policy decides to publish. A sample that is then lost
+   because the broker is unreachable (Rust's `!is_online()` drop) still consumes its `seq`, as
+   today. A gap in `seq` therefore still means "published but lost", and never "filtered".
+
+**Resets**: the whole runtime's policy state (for every point) is cleared in each of these
+cases, so the next sample of every point is published:
+
+- an applied reload or configuration management command, which today already clears the
+  `seq` counters and reconnects the devices;
+- a device reconnect (for that device's points);
+- an **MQTT session restore after a broker reconnect**. Without this, `last` could hold a value
+  that never reached the broker: Rust drops samples while offline, and C's `mosquitto_publish`
+  fails silently. A filtered point would then stay quiet after the broker came back.
 
 - Why a percentage of the last published value, and not of a declared engineering range:
    - It needs no extra config.
@@ -113,26 +182,77 @@ value **after** `transform`, which is what the sample's `value` carries.
    - Its weakness near zero is covered by rule 3: with `last == 0`, any change passes.
 - Alternative considered: OPC UA's percent-of-EURange. That needs `range = [lo, hi]` on every
   point. It is deferred (see D6).
+- Alternative considered for the heartbeat: replaying the last value with a fresh `ts`. This
+  was rejected in review for two reasons:
+  - The runtime cannot tell whether a pushed source is alive. canbus has no
+    `check_subscription`, and for devices that are both polled and pushed only the reads judge
+    the link.
+  - Replaying an *occurrence* point (an SNMP trap with `meta.event.every`) would raise
+    invented events every `max_interval`.
 
 ### D3: Where it lives in each runtime
-- **Rust**: a new `report` module in the SDK crate. It provides a pure `ReportState` (a state
-  machine per point) with `offer(sample, now) -> Decision` and `due(now) -> Vec<Sample>` (the
-  trailing, debounced and heartbeat samples). Both publish paths call `offer`, and the tick
-  loop calls `due`. Keeping the state machine pure lets it be tested with proptest, without
-  any MQTT or a clock.
-- **C**: `sdk/src/report.c` with the same functions, operating on state stored in
-  `tdot_point_t` (last value, last quality, last publish time, pending sample, candidate).
-  `emit_sample` calls `tdot_report_offer`, and the main loop calls `tdot_report_due` on each
-  pass.
-- Both implementations share one set of table-driven test vectors: a JSON file of
-  (config, sequence of timed samples, expected publishes) in
-  `doc/contract/test-vectors/report/`. Rust unit tests and C unit tests both run it, which
-  keeps the two implementations in step at the unit level before the conformance suite runs.
+Each runtime has a pure policy module with the same interface, and each place that currently
+publishes a sample goes through it.
 
-### D4: Descriptor and link status
-The capability descriptor (§7) gains `point_reports`: a map from point id to its
-**effective** policy, after inheritance. It includes only points that have a policy. This
-lets tooling and flows see why a point is quiet, without reading the connector config.
+- **Rust**: a new `report` module in the SDK crate provides a pure `ReportState`, a state
+  machine per point, with:
+  - `offer(sample, now) -> Decision`;
+  - `due(now) -> Due`, which returns the pending or debounced samples that are ready to
+    publish, and the points whose heartbeat read is due.
+
+  The pure design allows proptest without MQTT or a real clock. The hooks:
+  - `offer` is called by `publish_sample` (both the poll path and the push path) **and by
+    `print_sample`** in the separate stdout loop `run_stdout_until`.
+  - `due` is called on every loop tick. Heartbeat reads go through `bounded(read_points)`.
+  - A reset is triggered on reload, on device reconnect, and in `restore_mqtt_session`.
+- **C API change**: the `read_point` contract (`include/tedge_dot/connector.h`) gains a third
+  return value, `TDOT_READ_NO_DATA`. It means "this point has nothing to read on demand", and
+  the runtime ignores `*out`. Today a C module can only return a bad sample, which would
+  publish bad quality on every heartbeat.
+  - `connector_snmp.c` returns it for trap and varbind points, instead of the current bad
+    sample with rc 0.
+  - `connector_canbus.c` (which polls a frame cache) returns it when no new frame for the CAN
+    id has arrived since the point's previous read. A cached frame is then never published
+    twice as if it were a fresh reading. This matches Rust canbus, which publishes once per
+    received frame.
+  - The runtime treats `TDOT_READ_NO_DATA` on a normal poll the same way: nothing is
+    published, and the link is unaffected.
+- **C**: `sdk/src/report.c` provides `tdot_report_offer` and `tdot_report_due`, with the state
+  stored on `tdot_point_t`: last value and quality, time of the last publish, the pending
+  sample, and the debounce candidate. The hooks:
+  - `emit_sample` calls `tdot_report_offer`. It serves the poll path, the push path via
+    `push_sink`, and stdout mode.
+  - The main loop calls `tdot_report_due` on each pass.
+  - A reset is triggered in `commit_config`, on device reconnect, and in the MQTT connect
+    callback when a session is resumed.
+- **Timing**: a trailing or debounced sample is published on the first loop pass after its
+  window ends. A loop pass waits for the protocol reads due on that pass, which are bounded by
+  `operation_timeout`. So the delay is "one loop iteration", not a fixed 200 ms.
+- **Not affected**: the CLI `read` and `write` commands call the module directly (Rust
+  `main.rs`, C `main.c`) and are exempt. They always print what they read.
+- **Shared test vectors**: both implementations run one set of table-driven vectors in
+  `doc/contract/test-vectors/report/`. Each vector gives a policy, a sequence of timed inputs,
+  and the expected publishes. Input kinds: sample, tick, link reset, mqtt reset, and read
+  result or unsupported. The Rust and C unit tests both run them.
+
+### D4: Descriptor
+The capability descriptor (§7) keeps its existing array style. It gains a `reports` object:
+
+```json
+"reports": {
+  "default": { "max_interval": "30m" },
+  "devices": [ { "device": "plc-1", "report": { "on_change": true } } ],
+  "points":  [ { "device": "plc-1", "point": "temp", "report": { "on_change": true, "deadband": 0.5, "max_interval": "30m" } } ]
+}
+```
+
+- `default` and `devices` hold what is declared at those levels.
+- `points` lists the **effective** policy (after merging) only for points whose policy differs
+  from their device's effective policy. The message stays small when only defaults are used.
+  Contract §7 already warns about the descriptor's size.
+- A consumer finds a point's effective policy from its `points` entry if it has one.
+  Otherwise it merges its device's `devices` entry over `default`, key by key.
+- The schema lives in `status.schema.json`.
 
 ### D5: `ot-measurement` compatibility
 The flow keeps its filtering code, but the defaults stay off, so nothing is filtered twice
@@ -144,22 +264,28 @@ unless a user configures both. The docs mark the flow's settings as deprecated a
   same samples.
 
 ### D6: Default heartbeat in the shipped configs; percent-of-range deferred
-- The configs installed by the packages (`packaging/config/*.toml` and
-  `impl/c/packaging/config/profibus.toml`) and the demo configs (`demo/config/*.toml`) set a
-  connector-wide heartbeat, active rather than commented out:
+- These configs set a connector-wide heartbeat that is active, not commented out:
+  - the configs installed by the packages: `packaging/config/{modbus,opcua,canopen}.toml` and
+    `impl/c/packaging/config/profibus.toml`;
+  - the demo configs for the same protocols: `demo/config/*.toml`.
 
   ```toml
   [connector]
-  # Re-publish every point at least this often, even when its value has not changed, so the
-  # cloud keeps seeing the device (Cumulocity marks it unavailable after its required interval).
+  # Publish every readable point at least this often, even when its value has not changed, so
+  # the cloud keeps seeing the device (Cumulocity marks it unavailable after its required
+  # interval). Points that cannot be read on demand (traps, CAN frames) are not affected.
   report = { max_interval = "30m" }
   ```
 
   - 30 minutes stays inside the 60-minute required interval used by the demos and by typical
     Cumulocity setups.
-  - On its own, the heartbeat only affects points that would otherwise go quiet: pushed points
-    with static values (the OPC UA "offline" case), and points given a change filter. A polled
-    point without a filter already publishes every reading.
+  - What it changes: a polled point without a filter already publishes every reading, so it
+    is unaffected. The default matters for pushed points with static values (the OPC UA
+    "offline" case, handled by the on-demand read) and for points a user gives a change
+    filter.
+  - **canbus and snmp** get the setting only as a commented-out example, because a heartbeat
+    cannot apply to their push-only or trap points. Writing it there would suggest it does
+    something.
   - Only fresh installs get the default. The packaged file is a conffile, so an edited
     `/etc` config keeps its content on upgrade. The release notes tell existing users how to
     add the setting.
@@ -173,18 +299,19 @@ unless a user configures both. The docs mark the flow's settings as deprecated a
 
 - [Every consumer sees the filtered stream. Alarm and event flows can react later, or not at
   all, to a change smaller than the deadband.] → Document that the deadband should be smaller
-  than an alarm's hysteresis. `ot-event` with `every = true` (trap occurrences) must not be
-  combined with `on_change`; the config loader warns when a point has both
-  `meta.event.every` and a `report` change filter.
-- [A heartbeat could hide a stale source.] → For pushed points it is only sent while the link
-  is `connected`, which the runtime's `check_subscription` probe keeps accurate. Polled points
-  never publish without a fresh reading.
-- [State lost on restart or reload means one extra publish per point.] → This is accepted and
-  documented.
+  than an alarm's hysteresis. The config loader warns when a point has both
+  `meta.event.every` and a change filter or debounce in its effective `report`. This is a
+  lint on free-form metadata only, and it never changes behaviour.
+- [A heartbeat could hide a stale source.] → It cannot, because it is always a fresh read
+  (D2.5). A failed read publishes bad quality.
+- [Heartbeat reads add protocol traffic.] → At most one read per point per `max_interval`, and
+  only for pushed points. This is negligible at 30 minutes.
+- [State lost on restart, reload or broker reconnect means one extra publish per point.] →
+  This is accepted and documented.
 - [The C and Rust implementations could drift.] → Shared test vectors (D3), plus conformance
   cases run through the parity harness.
 - [Trailing and debounced samples are sent late, with their original `ts`.] → Consumers
-  already order by `ts`. The delay is at most the window plus one tick (200 ms).
+  already order by `ts`. The delay is at most the window plus one loop iteration.
 
 ## Migration Plan
 
