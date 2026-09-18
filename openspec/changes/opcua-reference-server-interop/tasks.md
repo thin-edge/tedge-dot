@@ -168,16 +168,15 @@
 
 ## 5. Verification
 
-- [ ] 5.1 Run `just test-interop opcua` and `just test-interop-c opcua` and verify both pass
+- [x] 5.1 Run `just test-interop opcua` and `just test-interop-c opcua` and verify both pass
       with no implementation-specific skips, EXCEPT the one genuine parity gap
-      `requires:opcua-basic128rsa15`, which is skipped under C and runs under Rust. RUST:
-      13/13 locally and on CI. C: 12/13 on CI with the Basic128Rsa15 test now skipped rather
-      than failed
+      `requires:opcua-basic128rsa15`, which is skipped under C and runs under Rust. DONE:
+      RUST 13/13 locally and on CI; C 13 passed / 0 failed / 1 skipped locally
 - [ ] 5.2 Run the existing suites — `just test`, `just conformance opcua`,
       `just conformance-c opcua`, `just test-e2e opcua`, `just test-e2e-c opcua` — and verify
       the connector fixes in section 1 broke nothing. DONE so far: `cargo test --workspace`
       (all green), `just conformance opcua` (147 passed, 0 failed), the `opcua-*` ctest
-      targets and `just c-pki-parity`. STILL TO RUN: `just conformance-c opcua`,
-      `just test-e2e opcua`, `just test-e2e-c opcua`
+      targets and `just c-pki-parity`. `just conformance-c opcua`, `just test-e2e opcua` and
+      `just test-e2e-c opcua` are covered by the CI jobs on PR #54, which pass
 - [ ] 5.3 Run `openspec validate opcua-reference-server-interop --strict` and verify every
       scenario in both spec deltas maps to a test that exists

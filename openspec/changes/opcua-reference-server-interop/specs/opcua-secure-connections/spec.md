@@ -54,6 +54,37 @@ one requested. A failure to renew SHALL be handled as a lost connection: the dev
 
 ## MODIFIED Requirements
 
+### Requirement: Explicit opt-out of server certificate validation
+The connector SHALL support `trust_any_server_certificate = true` in `[connection]` or in a
+device's `protocol_address`. With it set, the connector SHALL NOT judge *who* the server is:
+the certificate is accepted whether or not it is pinned, chains to a trusted CA, is within its
+validity period, names the endpoint host or matches the server's `applicationUri`. The message
+is still signed or encrypted as configured. The option SHALL default to `false`.
+
+The option SHALL NOT waive the requirements the security policy itself places on the
+certificate. In particular the key length SHALL still be checked against the effective policy,
+and a key outside its range SHALL be refused with `certificate invalid:` even when the option is
+set. Trusting a certificate cannot change its key, and an implementation whose crypto stack
+enforces the range below the connector would refuse the session regardless.
+
+While the option is in effect, the connector SHALL log a warning for each affected device on
+every connect. The link-status `info` SHALL include `"server_certificate": "not_verified"`.
+
+#### Scenario: Opt-out accepts an unknown certificate
+- **WHEN** a device sets `trust_any_server_certificate = true` and the server certificate is not trusted
+- **THEN** the session is established, a warning is logged, and link-status `info.server_certificate` is `"not_verified"`
+
+#### Scenario: Default does not trust unknown certificates
+- **WHEN** an existing configuration that uses `Basic256Sha256` does not set `trust_any_server_certificate`
+- **THEN** an untrusted server certificate is rejected
+
+#### Scenario: Opt-out does not waive the policy's key length
+- **WHEN** a device sets `trust_any_server_certificate = true` with policy `Basic256Sha256` and
+  the server presents a 1024-bit certificate
+- **THEN** the device is `disconnected`, the reason starts with `certificate invalid:` and names
+  the key size and the policy
+
+
 ### Requirement: Endpoint selection keeps the configured address
 For a secured device, the connector SHALL query the server's endpoints and select the one that
 matches the effective policy, the effective mode and the required user token type. It SHALL
