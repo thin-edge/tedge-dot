@@ -959,20 +959,18 @@ impl Attempt<'_> {
         let der = cert.to_der().unwrap_or_default();
         let thumbprint = pki::thumbprint(&der);
         info["server_thumbprint"] = thumbprint.clone().into();
-        if self.security.trust_any_server_certificate {
-            warn!(
-                endpoint = %self.endpoint.endpoint,
-                "server certificate {thumbprint} is accepted without verification (trust_any_server_certificate)"
-            );
-            info["server_certificate"] = "not_verified".into();
-            return Ok(false);
-        }
-        // Check the key length before consulting the trust store. async-opcua's validator logs
-        // the real cause but returns a plain BadCertificateUntrusted for a key that is too
-        // short, so the reason would tell the operator to run `tedge-dot pki trust` -- which
-        // they may already have done, and which cannot help, because trusting a certificate
-        // does not make its key longer. The C build reports this as a policy check failure
-        // already (ua_pki.c); this keeps the two the same.
+        // The key length is a property of the security policy (OPC UA Part 7), not a trust
+        // decision, so it is checked before both the trust store AND
+        // `trust_any_server_certificate`: that option says "do not judge who this server is",
+        // not "use a key the policy forbids". open62541 enforces this in the policy itself and
+        // refuses whatever the trust settings say, so skipping it here would also mean the two
+        // implementations disagree about which servers are usable.
+        //
+        // It has to come before the trust store for a second reason: async-opcua's validator
+        // logs the real cause but returns a plain BadCertificateUntrusted for a short key, so
+        // the reason would tell the operator to run `tedge-dot pki trust` -- which they may
+        // already have done, and which cannot help, because trusting a certificate does not
+        // make its key longer.
         if let Some((min, max)) = self.security.policy.key_bits() {
             if let Ok(bits) = cert.key_length() {
                 if bits < min || bits > max {
@@ -984,6 +982,14 @@ impl Attempt<'_> {
                     ));
                 }
             }
+        }
+        if self.security.trust_any_server_certificate {
+            warn!(
+                endpoint = %self.endpoint.endpoint,
+                "server certificate {thumbprint} is accepted without verification (trust_any_server_certificate)"
+            );
+            info["server_certificate"] = "not_verified".into();
+            return Ok(false);
         }
         let host = security::url_host(&self.endpoint.endpoint).unwrap_or_default();
         let policy = SecurityPolicy::from_uri(&self.security.policy.uri());

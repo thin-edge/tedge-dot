@@ -73,22 +73,32 @@ Username Identity Is Accepted And Rejected As The Server Decides
 Weak Server Certificate Is Refused With Its Key Length
     [Documentation]    UA-.NETStandard auto-generates its application certificate with a
     ...                1024-bit RSA key (upstream says so in Program.cs), which Basic256Sha256
-    ...                forbids. The refusal must name the key length and must NOT tell the
-    ...                operator to run `tedge-dot pki trust`: trusting a certificate does not
-    ...                make its key longer, so that advice would send them in a circle.
+    ...                forbids. ref-discovery keeps that certificate on purpose.
     ...
-    ...                This is why the quarantine-then-trust flow is not exercised here; it
-    ...                stays covered by the secured e2e suite, whose genpki vectors are
-    ...                2048-bit.
-    ${reason}=    Link Is Refused    tofu    certificate invalid:
+    ...                The key length belongs to the security policy, not to trust, so this
+    ...                device sets `trust_any_server_certificate` and must STILL be refused --
+    ...                that option says "do not judge who this server is", not "use a key the
+    ...                policy forbids". The reason must name the key length, and must not
+    ...                advise `tedge-dot pki trust`: trusting a certificate cannot lengthen its
+    ...                key.
+    ${reason}=    Link Is Refused    weakcert    certificate invalid:
     Should Contain    ${reason}    1024
     Should Contain    ${reason}    Basic256Sha256
     Should Not Contain    ${reason}    tedge-dot pki trust
-    # Nor is it quarantined for review: `rejected/` is a list of certificates an operator could
-    # choose to trust, and trusting this one could never help.
-    ${rejected}=    Pki    list rejected --json
+
+Untrusted Server Is Quarantined Until Trusted
+    [Documentation]    The reference server regenerates its certificate on every start, so
+    ...                nothing can be pinned ahead of time: this is the operator flow
+    ...                (quarantine, inspect, `tedge-dot pki trust`) against a real server, and
+    ...                the trust must take effect without restarting the connector.
+    ${reason}=    Link Is Refused    tofu    certificate untrusted:
     ${thumbprint}=    Thumbprint In Reason    ${reason}
-    Should Not Contain    ${rejected}    ${thumbprint}
+    ${rejected}=    Pki    list rejected --json
+    Should Contain    ${rejected}    ${thumbprint}
+    Pki    trust ${thumbprint}
+    ${link}=    Wait For Link Status    tofu    connected
+    Should Be Equal    ${{ json.loads($link)["info"]["server_certificate"] }}    trusted
+    Should Be Equal    ${{ json.loads($link)["info"]["server_thumbprint"] }}    ${thumbprint}
 
 Server That Refuses Our Certificate Says So
     [Documentation]    ref-strict does not auto-accept an unknown client certificate, and we

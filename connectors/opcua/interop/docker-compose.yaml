@@ -24,6 +24,19 @@ x-refserver: &refserver
   restart: unless-stopped
 
 services:
+  # Gives the servers that need one an RSA-2048 certificate; see gen-server-certs.sh for why
+  # the auto-generated 1024-bit one makes every modern policy untestable.
+  refserver-certs:
+    image: public.ecr.aws/docker/library/alpine:3
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - apk add --no-cache openssl >/dev/null && exec /opt/interop/gen-server-certs.sh ref-all ref-token ref-strict
+    volumes:
+      - ./:/opt/interop:ro
+      - certs-ref-all:/out/ref-all
+      - certs-ref-token:/out/ref-token
+      - refserver-trust:/out/ref-strict
+
   broker:
     image: public.ecr.aws/docker/library/eclipse-mosquitto:2
     volumes:
@@ -50,6 +63,15 @@ services:
       OPCUA_AUTH_CERTIFICATE: "true"
       OPCUA_AUTO_ACCEPT_CERTS: "true"
       OPCUA_ENABLE_DYNAMIC: "true"
+      # Installs the RSA-2048 certificate from /app/certs/https-server; without it the server
+      # presents a 1024-bit key that no modern policy allows.
+      OPCUA_ENABLE_HTTPS: "true"
+      OPCUA_HTTPS_PORT: "4843"
+    volumes:
+      - certs-ref-all:/app/certs
+    depends_on:
+      refserver-certs:
+        condition: service_completed_successfully
     healthcheck: &refserver-health
       # The runtime image is aspnet-alpine: its busybox `nc` has no `-z`, `dotnet` is not on
       # PATH, and the port speaks OPC UA binary rather than HTTP, so wget cannot probe it.
@@ -74,8 +96,13 @@ services:
       OPCUA_SECURITY_MODES: "SignAndEncrypt"
       OPCUA_ALLOW_ANONYMOUS: "true"
       OPCUA_AUTO_ACCEPT_CERTS: "false"
+      OPCUA_ENABLE_HTTPS: "true"
+      OPCUA_HTTPS_PORT: "4843"
     volumes:
       - refserver-trust:/app/certs
+    depends_on:
+      refserver-certs:
+        condition: service_completed_successfully
     healthcheck: *refserver-health
 
   # Elliptic-curve policies only. Neither connector implements them, so a device pointed here
@@ -104,9 +131,18 @@ services:
       OPCUA_ALLOW_ANONYMOUS: "true"
       OPCUA_AUTO_ACCEPT_CERTS: "true"
       OPCUA_SECURITY_TOKEN_LIFETIME: "30000"
+      OPCUA_ENABLE_HTTPS: "true"
+      OPCUA_HTTPS_PORT: "4843"
+    volumes:
+      - certs-ref-token:/app/certs
+    depends_on:
+      refserver-certs:
+        condition: service_completed_successfully
     healthcheck: *refserver-health
 
-  # An endpoint with no resource path at all (the discovery instance).
+  # An endpoint with no resource path at all (the discovery instance). It deliberately keeps
+  # the weak 1024-bit certificate UA-.NETStandard generates for itself: that is what
+  # `Weak Server Certificate Is Refused With Its Key Length` needs a server for.
   ref-discovery:
     <<: *refserver
     environment:
@@ -168,3 +204,5 @@ services:
 volumes:
   rendered:
   refserver-trust:
+  certs-ref-all:
+  certs-ref-token:

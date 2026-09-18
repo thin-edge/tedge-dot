@@ -10,7 +10,7 @@
 # rest of the run -- only TestServer/Dynamic/Counter is pushed.
 #
 # Most secured devices set `trust_any_server_certificate` because the reference server
-# regenerates its self-signed certificate on every start, so there is nothing stable to pin.
+# regenerates its certificate on every start, so there is nothing stable to pin.
 # The `tofu` device deliberately does NOT, so the quarantine-then-`tedge-dot pki trust` flow is
 # exercised against a real server; and `strict` does, so that the test asserting the SERVER
 # refuses US is not also gated on our judgement of it.
@@ -177,6 +177,18 @@ protocol_address = { endpoint = "opc.tcp://ref-strict:4840/UA/TestServer", secur
 [[device]]
 name             = "ecc"
 protocol_address = { endpoint = "opc.tcp://ref-ecc:4840/UA/TestServer", security_policy = "Basic256Sha256", security_mode = "sign_and_encrypt", trust_any_server_certificate = true }
+  [[device.point]]
+  id = "double"
+  datatype = "float64"
+  subscribe = false
+  address = { node_id = "ns=@NS@;s=TestServer/DataTypes/Scalar/DoubleValue" }
+
+# ref-discovery keeps the 1024-bit certificate UA-.NETStandard generates for itself, which
+# Basic256Sha256 forbids: a conformant client must refuse it however the trust store is set up,
+# and must say that the key is too short rather than advise trusting it.
+[[device]]
+name             = "weakcert"
+protocol_address = { endpoint = "opc.tcp://ref-discovery:4840", security_policy = "Basic256Sha256", security_mode = "sign_and_encrypt", trust_any_server_certificate = true }
   [[device.point]]
   id = "double"
   datatype = "float64"
