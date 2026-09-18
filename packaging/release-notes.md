@@ -68,6 +68,27 @@ Two caveats:
   stays on the old package name and receives no further updates until you
   install one of the new ones explicitly.
 
+### Report by exception (`report`)
+
+A point, a device or `[connector]` can now declare a **reporting policy**, applied by the
+connector itself for every protocol before a sample is published: `on_change`, `deadband`
+(absolute, or a percentage such as `"2%"`), `min_interval` (a change held back is published
+when the interval ends), `max_interval` (a heartbeat that publishes a fresh reading of a flat
+signal, reading a subscribed OPC UA node on demand) and `debounce`. See
+`doc/reducing-data-volume.md`.
+
+- The packaged Modbus, OPC UA, CANopen and PROFIBUS configs set
+  `[connector] report = { max_interval = "30m" }`, so a device whose values never change stays
+  available in Cumulocity. This applies to **fresh installs only**: an existing
+  `/etc/tedge/plugins/ot/*.toml` is kept on upgrade. To opt in, add that line to its
+  `[connector]` section and reload the service. Without a `report` anywhere, every reading is
+  published as before.
+- The `ot-measurement` flow's `on_change`, `deadband`, `min_interval` and `debounce` settings,
+  and the same keys in a point's `meta`, are **deprecated**. They keep working; move them to
+  the point's `report` table, and do not use both.
+- `tedge-dot-c`, CAN bus: a signal is now published once per received frame, as in
+  `tedge-dot-rs`, instead of republishing the last frame on every poll.
+
 ### Notes
 
 - On a fresh install the service starts with **no devices configured**. Add

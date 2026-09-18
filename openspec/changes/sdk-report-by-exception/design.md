@@ -172,6 +172,10 @@ cases, so the next sample of every point is published:
 - an applied reload or configuration management command, which today already clears the
   `seq` counters and reconnects the devices;
 - a device reconnect (for that device's points);
+- a `write` or `write-batch` command to a device (for that device's points). A write that
+  the device rejects or clamps reads back unchanged, and a change filter would withhold that
+  reading while the parameter twin already shows the written value. Found while reviewing
+  `ot-parameter-state`;
 - an **MQTT session restore after a broker reconnect**. Without this, `last` could hold a value
   that never reached the broker: Rust drops samples while offline, and C's `mosquitto_publish`
   fails silently. A filtered point would then stay quiet after the broker came back.

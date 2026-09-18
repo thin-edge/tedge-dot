@@ -46,14 +46,16 @@ default_mode     = "typed"
   name     = "Cycle count"
   address  = { table = "holding", address = 4, count = 2 }
 
-  # float32 across two registers; meta is echoed verbatim in every sample.
-  # Description only.
+  # float32 across two registers; meta is echoed verbatim in every sample. The reporting
+  # policy is applied by the SDK runtime and is not echoed; a static value still publishes its
+  # first reading. Description only.
   [[device.point]]
   id          = "level_f32"
   datatype    = "float32"
   description = "Level in the buffer tank"
   address     = { table = "holding", address = 6, count = 2 }
-  meta        = { on_change = true, deadband = 0.5 }
+  report      = { on_change = true, deadband = 0.5 }
+  meta        = { source = "conformance" }
 
   # linear transform applied after decode: 250 / 10 = 25.
   [[device.point]]

@@ -55,7 +55,7 @@ the operation payloads carry logical fields:
 { "c8y_SetRegister": { "point": "boiler_setpoint", "value": 21.5 } }
 { "c8y_SetCoil":     { "point": "pump_run",        "value": true  } }
 
-// c8y_ModbusConfiguration  (transmitRate is now a flow concern; only pollingRate maps)
+// c8y_ModbusConfiguration  (only pollingRate maps; transmitRate corresponds to connector.report.min_interval)
 { "c8y_ModbusConfiguration": { "pollingRate": "5s" } }
 
 // c8y_SerialConfiguration

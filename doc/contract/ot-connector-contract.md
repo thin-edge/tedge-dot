@@ -661,7 +661,9 @@ point.
 **Rules** (per device and point):
 
 1. **Always published**, whatever the policy: the first reading after the connector starts, after
-   an applied reload or management command (§6.3), after the device reconnects, and after the
+   an applied reload or management command (§6.3), after the device reconnects, after a
+   `write` or `write-batch` command to the device (a rejected or clamped write reads back
+   unchanged, while the parameter twin already shows the written value), and after the
    connection to the broker is restored; and any reading whose `quality` differs from the last
    published one. Publishing a quality change discards a held reading, so an older good value
    never follows a newer bad one.

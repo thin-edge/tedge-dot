@@ -615,6 +615,46 @@ pub fn property_schema(param: &Parameter) -> Value {
     Value::Object(schema)
 }
 
+/// The `reports` object of the capability descriptor (§7): the reporting policies (§5.3) as
+/// declared on `[connector]` and on each device, and the effective policy of each point whose
+/// policy differs from its device's — so a consumer can tell why a point is quiet without the
+/// configuration, and a configuration using only defaults adds a few bytes, not one entry per
+/// point. `None` when no `report` is configured anywhere.
+pub fn reports(config: &ConnectorConfig) -> Option<Value> {
+    let mut out = Map::new();
+    if let Some(default) = non_empty(config.connector.report.as_ref()) {
+        out.insert("default".into(), Value::Object(default.clone()));
+    }
+    let mut devices = Vec::new();
+    let mut points = Vec::new();
+    for device in &config.devices {
+        if let Some(report) = non_empty(device.report.as_ref()) {
+            devices.push(json!({ "device": device.name, "report": report }));
+        }
+        let mut device_table = Map::new();
+        crate::report::merge_into(&mut device_table, config.connector.report.as_ref());
+        crate::report::merge_into(&mut device_table, device.report.as_ref());
+        for point in &device.points {
+            let table = config.report_table(device, point);
+            if table != device_table {
+                points.push(json!({ "device": device.name, "point": point.id, "report": table }));
+            }
+        }
+    }
+    if !devices.is_empty() {
+        out.insert("devices".into(), Value::Array(devices));
+    }
+    if !points.is_empty() {
+        out.insert("points".into(), Value::Array(points));
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
+}
+
+/// A `report` table as written, unless it is absent or empty.
+fn non_empty(report: Option<&Value>) -> Option<&Map<String, Value>> {
+    report.and_then(Value::as_object).filter(|m| !m.is_empty())
+}
+
 /// The `point_labels` of the capability descriptor (§7): every configured point that declares
 /// a `name` or a `description`, so a consumer can show something friendlier than the point id.
 ///

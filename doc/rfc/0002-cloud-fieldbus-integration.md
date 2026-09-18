@@ -53,17 +53,24 @@ shows the deployed configuration.
 
 Cloud Fieldbus attaches per-signal behaviour (measurement mapping, alarm thresholds,
 send-on-change) to each register definition. The contract now carries an uninterpreted
-per-point `meta` table that the runtime echoes in every sample envelope, and the
-`ot-measurement` flow honours `meta.on_change` / `meta.deadband` / `meta.min_interval` /
-`meta.debounce`. A Cloud Fieldbus register definition therefore round-trips losslessly:
+per-point `meta` table that the runtime echoes in every sample envelope, read by the flows
+(measurement naming, alarms, events), and a first-class per-point `report` table (contract
+§5.3) that the SDK runtime applies before a sample is published: on change, deadband,
+`min_interval`, a `max_interval` heartbeat and `debounce`. (The `ot-measurement` flow's own
+`meta.on_change` / `meta.deadband` / `meta.min_interval` / `meta.debounce` still work but are
+deprecated in favour of `report`.) A Cloud Fieldbus register definition therefore round-trips
+losslessly:
 
 ```
 c8y_ModbusDeviceType register        →  [[device.point]]
   name, number, multiplier, ...      →  id, address, transform, unit
   sendMeasurementTemplate            →  meta = { group/series naming }
-  noUpdateIfEqual / send-on-change   →  meta = { on_change = true }
+  noUpdateIfEqual / send-on-change   →  report = { on_change = true }
   alarm mapping                      →  meta = { alarm threshold fields, read by ot-alarm }
 ```
+
+The connector-wide `transmitRate` of `c8y_ModbusConfiguration` corresponds to
+`[connector] report = { min_interval = "..." }`.
 
 ## Increments
 

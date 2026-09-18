@@ -137,6 +137,11 @@ unique per device: when two points declare the same one, the first keeps it. An 
 first reading after a restart as its baseline, so a restart never reports a change that did not
 happen — and a change made while the mapper was down is not reported.
 
+Both flows act on the samples as published, so a point's reporting policy (`report`, see
+[Reducing data volume](../doc/reducing-data-volume.md#alarms-and-events)) applies to them too:
+keep a deadband smaller than the alarm's `hysteresis`, and give no change filter (and, for a
+pushed point, no heartbeat) to a point whose event uses `every = true`.
+
 By default `ot-measurement` names the measurement group after the sample's `protocol`
 (`m/modbus`, `m/opcua`, ...) and `ot-registration` types the child device as `<protocol>-device`.
 Override either via each flow's `params.toml`, where `ot-alarm` / `ot-event` can also watch one
@@ -150,8 +155,14 @@ connector points with a separator and set `point_separator` (e.g. `"."`): the po
 untouched. For per-signal shaping beyond this convention, run one filtered instance per signal
 (set `point`) or copy the flow and customise `main.js`.
 
-`ot-measurement` also covers the legacy register mapping options: publish-on-change
-(`on_change`) and batching a device's series into one measurement (`combine` + `combine_interval`).
+`ot-measurement` also covers the legacy register mapping option of batching a device's series
+into one measurement (`combine` + `combine_interval`). Publishing only on a change, beyond a
+deadband, at most so often or once a value has settled is the point's `report` table in the
+connector config: the SDK runtime applies it before a sample is published, so every flow sees the
+reduced stream, and it adds a heartbeat for flat signals. See
+[Reducing data volume](../doc/reducing-data-volume.md). `ot-measurement`'s own `on_change`,
+`deadband`, `min_interval` and `debounce` settings (and their `meta.*` overrides) still work but
+are **deprecated**; do not use them together with `report`.
 Linear scaling
 (`multiplier`/`divisor`/`decimal_shift`/`offset`) is a per-point property declared on the
 connector point (applied by the SDK), so the sample already carries the scaled value.

@@ -6,6 +6,11 @@ input.mqtt.topics = ["te/+/+/ot/+/sample/+"]
 point        = "${params.point}"
 # Convert boolean (coil) samples to 1/0 measurements. "true" or "false".
 include_boolean = "${params.include_boolean}"
+# DEPRECATED: on_change, deadband, min_interval and debounce below. Declare the point's
+# `report` table in the connector config instead (see doc/reducing-data-volume.md): the SDK
+# runtime then filters for every consumer, sends a heartbeat for flat signals and publishes a
+# rate-limited change when its window ends. These settings keep working; leave them off when
+# `report` is used, so the same samples are not filtered twice.
 # Only emit when the scaled value changes since the last emitted reading. "true" or "false".
 on_change    = "${params.on_change}"
 # Minimum absolute change (vs the last emitted value) required to emit. 0 = disabled.
@@ -15,7 +20,8 @@ min_interval = "${params.min_interval}"
 # A changed value must stay stable this long (by sample timestamps) before it is emitted.
 debounce     = "${params.debounce}"
 # Every setting above can also be overridden per signal via the point's `meta` table in the
-# connector config (echoed as sample.meta): meta.on_change / deadband / min_interval / debounce.
+# connector config (echoed as sample.meta): meta.on_change / deadband / min_interval / debounce
+# (deprecated too: use the point's `report` table instead).
 # Naming too: meta.measurement.group / meta.measurement.series name that signal's measurement
 # (written e.g. by the Cloud Fieldbus import from a device type's measurementMapping).
 # Batch every series of a device into one measurement, flushed on the step interval below.

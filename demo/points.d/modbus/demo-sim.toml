@@ -50,6 +50,12 @@ meta        = { parameter = { min = 0, max = 30000 } }
 # declared once here and every instance that references this library inherits
 # them, so nothing has to guess what "temp_scaled" means. They are published in
 # the connector's retained capability descriptor (§7), not in every sample.
+#
+# `report` publishes the temperature only when it moves by 0.5 °C or more, and at most
+# every 10 s (a change held back is still sent when the 10 s end). The connector's
+# heartbeat (`[connector] report.max_interval`) still sends it now and then when it is
+# flat. A site can override any key on its own point, e.g. `report = { deadband = 0.2 }`.
+# See doc/reducing-data-volume.md.
 [[point]]
 id          = "temp_scaled"
 name        = "Boiler temperature"
@@ -58,7 +64,7 @@ datatype    = "uint16"
 address     = { table = "holding", address = 3, count = 1 }
 transform   = { decimal_shift = -3 }
 unit        = "°C"
-meta        = { on_change = true, deadband = 0.5, min_interval = "10s" }
+report      = { deadband = 0.5, min_interval = "10s" }
 
 # Reading this address makes the simulator return an exception -> quality "bad".
 # Kept deliberately: it shows quality propagating end to end.

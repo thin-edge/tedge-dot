@@ -97,6 +97,8 @@ events:
 
 - an applied reload or configuration management command (all points);
 - a device reconnect (that device's points);
+- a `write` or `write-batch` command to a device (that device's points), because a rejected or
+  clamped write reads back unchanged while the parameter twin already shows the written value;
 - an MQTT session restore after a broker reconnect (all points).
 
 #### Scenario: Quality change bypasses filters
@@ -110,6 +112,10 @@ events:
 #### Scenario: First sample after restart
 - **WHEN** the connector restarts and reads a value equal to the one it last published before the restart
 - **THEN** that value is published
+
+#### Scenario: Rejected write is reported
+- **WHEN** a parameter point with `on_change = true` reads 5, a `write` of 7 is accepted by the connector but the device keeps 5, and the point then reads 5
+- **THEN** that reading of 5 is published, so the twin is corrected
 
 #### Scenario: Broker reconnect
 - **WHEN** a point with `on_change = true` reads a changed value while the broker is unreachable (so the sample is lost), and then the broker comes back and the value stays unchanged

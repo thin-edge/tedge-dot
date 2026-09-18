@@ -110,8 +110,9 @@ points_from = ["acme-meter-v2", "site-extras"]
 meaningful object: inheriting `table` and `count` while overriding `address` would produce a
 plausible-looking register that nobody declared. `meta` merges (recursively) because its whole
 purpose is a bag of independent per-signal facts, and the common override is adding *one* of
-them — a `meta.parameter.title` — to a point whose `deadband` should stay as the library set
-it. `transform` merges for the same reason, one factor at a time.
+them — a `meta.parameter.title` — to a point whose `meta.alarm` should stay as the library set
+it. `transform` merges for the same reason, one factor at a time, and so does the reporting
+policy `report` (contract §5.3), one key at a time.
 
 A repeated `id` *within a single library* is an error, not an override: there is no order in
 which to apply it, and the second definition would silently win.

@@ -80,12 +80,15 @@ default_mode     = "typed"
   # Incremented every second by the simulator; delivered via OPC-UA subscription
   # (monitored item) rather than polling — the other points opt out with subscribe = false
   # (static nodes only notify once, and bad_point would reject the device subscription).
-  # The free-form meta table is echoed verbatim in every sample envelope.
+  # The free-form meta table is echoed verbatim in every sample envelope. `report` is the
+  # reporting policy the SDK runtime applies (the value changes every second, so every push
+  # still passes); it is listed in the capability descriptor's `reports`, not in the sample.
   [[device.point]]
   id       = "ticks"
   datatype = "uint32"
   address  = { node_id = "ns=2;s=Ticks" }
-  meta     = { on_change = true, source = "sim" }
+  report   = { on_change = true }
+  meta     = { source = "sim" }
 
   # Subscribed, but pointing at the STATIC Temperature node, and it exists purely to make the
   # push tests discriminating.

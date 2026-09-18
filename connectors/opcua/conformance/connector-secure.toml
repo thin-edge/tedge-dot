@@ -62,13 +62,15 @@ default_mode     = "typed"
   subscribe = false
   address   = { namespace = 2, identifier = "NegativeOffset" }
 
-  # boolean read; meta is echoed verbatim in every sample.
+  # boolean read; meta is echoed verbatim in every sample. The reporting policy is applied by
+  # the SDK runtime and is not echoed; a static value still publishes its first reading.
   [[device.point]]
   id        = "running"
   datatype  = "bool"
   subscribe = false
   address   = { namespace = 2, identifier = "Running" }
-  meta      = { on_change = true }
+  report    = { on_change = true }
+  meta      = { source = "conformance" }
 
   # string value.
   [[device.point]]
@@ -164,13 +166,15 @@ default_mode     = "typed"
   subscribe = false
   address   = { namespace = 2, identifier = "NegativeOffset" }
 
-  # boolean read; meta is echoed verbatim in every sample.
+  # boolean read; meta is echoed verbatim in every sample. The reporting policy is applied by
+  # the SDK runtime and is not echoed; a static value still publishes its first reading.
   [[device.point]]
   id        = "running"
   datatype  = "bool"
   subscribe = false
   address   = { namespace = 2, identifier = "Running" }
-  meta      = { on_change = true }
+  report    = { on_change = true }
+  meta      = { source = "conformance" }
 
   # string value.
   [[device.point]]

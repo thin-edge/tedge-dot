@@ -23,9 +23,9 @@ exists but a translation/behaviour piece is missing; **missing** — no equivale
 | modbus-plugin | tedge-dot equivalent | Status |
 | --- | --- | --- |
 | `modbus.toml [modbus].pollinterval` (global, per-device override) | `connector.poll_interval`, plus per-device and per-point `poll_interval` ([`impl/rust/crates/sdk/src/config.rs`](../../impl/rust/crates/sdk/src/config.rs)) | covered |
-| `[modbus].transmitinterval` (stored by `c8y_ModbusConfiguration`, **never enforced** by the reader) | `ot-measurement` `min_interval` / `combine_interval` params (actually enforced) | covered |
+| `[modbus].transmitinterval` (stored by `c8y_ModbusConfiguration`, **never enforced** by the reader) | `[connector] report.min_interval` (or on a device or point), applied by the SDK runtime ([reporting policy](../reducing-data-volume.md)); batching via the `ot-measurement` `combine_interval` param | covered |
 | `[modbus].loglevel` | `connector.log_level` | covered |
-| `[modbus].combinemeasurements` (+ per-device, per-mapping override) | `ot-measurement` `combine` + `combine_interval` (flow-wide). Per-signal override via `point.meta` exists for `on_change`/`deadband`/`min_interval`/`debounce` but **not** for `combine` | partial |
+| `[modbus].combinemeasurements` (+ per-device, per-mapping override) | `ot-measurement` `combine` + `combine_interval` (flow-wide). There is no per-signal override for `combine` (`meta.combine`) | partial |
 | `[serial].*` (port, baudrate, stopbits, parity, databits) | `[connection.serial]` defaults + per-device `protocol_address` overrides (spec §3.1–3.2) | covered |
 | `[thinedge].mqtthost` / `mqttport` | `[mqtt] host` / `port` | covered |
 | `[thinedge].subscribe_topics` | implicit — command topics derived from the [contract](../contract/ot-connector-contract.md) | covered |
@@ -34,7 +34,7 @@ exists but a translation/behaviour piece is missing; **missing** — no equivale
 | Per-register `littleendian` | `point.endianness` | covered |
 | Scaling `multiplier`/`divisor`/`decimalshiftright`/`offset` | `point.transform` `{multiplier, divisor, decimal_shift, offset}` applied by the connector ([`impl/rust/crates/sdk/src/model.rs`](../../impl/rust/crates/sdk/src/model.rs)) | covered |
 | `measurementmapping.templatestring` (`{"G":{"S":%%}}`) | `ot-measurement` `group`/`series`/`target_topic`/`point_separator` params | covered |
-| Per-register `on_change` | `point.meta.on_change` honoured by `ot-measurement` (plus `deadband`, `min_interval`, `debounce` — superset) | covered |
+| Per-register `on_change` | `point.report.on_change`, applied by the SDK runtime to every consumer (plus `deadband` absolute or `"N%"`, `min_interval`, `max_interval` heartbeat, `debounce` — superset; see [Reducing data volume](../reducing-data-volume.md)). `ot-measurement`'s `meta.on_change` still works but is deprecated | covered |
 | `alarmmapping` (raise on 0→1 edge, never clears) | [`ot-alarm`](../../flows/ot-alarm/) flow, declared per point as `point.meta.alarm` (a coil needs no `when`: the alarm stands while the value is `true`; thresholds with hysteresis and string values too), raises **and clears** | covered |
 | `eventmapping` (event on value change) | [`ot-event`](../../flows/ot-event/) flow, declared per point as `point.meta.event` | covered |
 | Coils / discrete inputs | `table = "coil"` / `"discrete_input"`, `datatype = "bool"` | covered |
@@ -53,7 +53,7 @@ marker so mapper-cleared retained commands are not re-forwarded).
 | --- | --- | --- | --- |
 | `c8y_SetRegister` | Explicit-address payload (`address`, `register`, `startBit`, `noBits`, `ipAddress`, `value`) **and** name-based `metrics[]` payload with prefix matching; integer read-modify-write masking; float 16/32/64 writes | Shim → `ot_write` → connector `write` verb. Payload is **point-id based only**: `{"point": "temp_u16", "value": 4242}`. Bit-field read-modify-write per spec §6 | partial |
 | `c8y_SetCoil` | Explicit-address (`coil`, `address`, `ipAddress`, `value`) and name-based `metrics[]` | Shim → `ot_write_coil` → connector `write-coil`; `{"point": "coil_rw", "value": true}` | partial |
-| `c8y_ModbusConfiguration` | Writes `transmitRate`+`pollingRate` into `modbus.toml`; publishes retained twin `te/device/main///twin/c8y_ModbusConfiguration` | Shim → `ot_set_config` patching `connector.poll_interval` only; `transmitRate` dropped; **no twin echo** | partial |
+| `c8y_ModbusConfiguration` | Writes `transmitRate`+`pollingRate` into `modbus.toml`; publishes retained twin `te/device/main///twin/c8y_ModbusConfiguration` | Shim → `ot_set_config` patching `connector.poll_interval` only; `transmitRate` dropped (it would map to `connector.report.min_interval`); **no twin echo** | partial |
 | `c8y_SerialConfiguration` | Writes `[serial]` into `modbus.toml`; publishes twin `c8y_SerialConfiguration` on main | Shim → `ot_set_config` patching `connection.serial`; **no twin echo** | partial |
 | `c8y_ModbusDevice` | Cloud Fieldbus flow: registers external id `<device.id>:device:<name>` (type `c8y_Serial`) for the **UI-created child MO** via the local c8y proxy, fetches the device-type MO from `payload.type` (an inventory path), translates `c8y_Registers[*]` (address, scaling, `measurementMapping.type/series`) into `devices.toml` | Shim → `ot_define_device`, but the payload must already be a connector-shaped `device` object (`protocol_address`, `point[]`). The stock Cloud Fieldbus payload (`protocol`, `address`, `ipAddress`, `type`, `id`, `name`) is **not understood**; no device-type fetch, no external-id linking | **missing** (biggest gap) |
 | `c8y_Registers` / `c8y_Coils` | Effectively stubs (dump the raw argument to a file; the data is consumed via `c8y_ModbusDevice`'s type fetch instead) | Intentionally dropped — points travel inside `ot_define_device` (`operations/README.md`) | covered (by design) |
@@ -118,7 +118,7 @@ shim assumes a connector-shaped `device` object that no stock UI produces.
      `device.point[]` entry: `number/startBit/noBits/signed` → `address` + `datatype`,
      `multiplier/divisor/offset` → `transform`, `unit` → `point.unit`,
      `measurementMapping.type/series` → `point.meta` measurement naming,
-     `noUpdateIfEqual`/send-on-change → `meta.on_change`, alarm/event/status mappings →
+     `noUpdateIfEqual`/send-on-change → `report.on_change`, alarm/event/status mappings →
      `meta` fields read by `ot-alarm`/`ot-event`;
    - emit one `ot_define_device` command; the SDK runtime persists it into the TOML
      (`impl/rust/crates/sdk/src/runtime.rs` `apply_define_device`) and live-reloads.
@@ -159,8 +159,9 @@ reflects it back to the inventory.
 `te/device/main/service/+/ot/cmd/set-config/+` that, on `status: "successful"`, republishes the applied
 `config` object as the matching twin fragment(s). Alternatively the SDK runtime publishes an
 "effective config" descriptor after every reload (also serves RFC 0002's export path).
-`transmitRate` should be accepted and mapped to the `ot-measurement` `min_interval` param (or
-explicitly documented as dropped — the legacy reader stored but never enforced it).
+`transmitRate` should be accepted and mapped to `[connector] report.min_interval` (the SDK's
+reporting policy, which also publishes a held-back change when the interval ends), or explicitly
+documented as dropped — the legacy reader stored but never enforced it.
 
 ### G4 — Cloud Fieldbus alarm/event/status mappings from device types (missing in both)
 
@@ -201,7 +202,8 @@ worked example against the plugin's shipped sample config (`modbus-plugin/config
 | `modbus.toml [thinedge]` | `[mqtt]` |
 | `devices.toml [[device]]` | `[[device]]` + `protocol_address` |
 | `devices.toml [[device.registers]]` / `[[device.coils]]` | `[[device.point]]` (`address`, `datatype`, `transform`, `unit`, `meta`) |
-| `measurementmapping` / `combinemeasurements` / `on_change` | `ot-measurement` params + `point.meta` |
+| `measurementmapping` / `combinemeasurements` | `ot-measurement` params + `point.meta` |
+| `on_change` | `point.report` (`on_change`, `deadband`, ...) |
 | `alarmmapping` / `eventmapping` | `ot-alarm` / `ot-event` params |
 
 Legacy (`devices.toml`):

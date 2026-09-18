@@ -187,6 +187,25 @@ See [demo/](demo/) for the local exploration guide and the full
 all-protocols demo on a real device — both use the same configs in
 [demo/config/](demo/config/).
 
+## Sending less: report by exception
+
+A point, a device or the whole connector can declare a **reporting policy**, so a reading is
+published only when it matters: on a change, beyond a deadband (absolute or a percentage), at
+most so often, or once a flapping value has settled. A heartbeat still publishes a flat signal
+now and then, so Cumulocity keeps the device available:
+
+```toml
+[connector]
+report = { max_interval = "30m" }                   # heartbeat (set in the packaged configs)
+
+  [[device.point]]
+  id     = "boiler_temp"
+  report = { deadband = 0.5, min_interval = "10s" }
+```
+
+The SDK runtime applies it the same way for every connector, before anything reaches the
+broker. See [Reducing data volume](doc/reducing-data-volume.md).
+
 ## Writing to devices
 
 Writable points (`access = "read_write"` / `"write"`) are written through retained

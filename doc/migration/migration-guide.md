@@ -31,6 +31,7 @@ One Python responsibility becomes either a **connector config field** (transport
 | `[modbus].pollinterval` | `connector.poll_interval` (duration string, e.g. `"2s"`) |
 | `[modbus].loglevel` | `connector.log_level` |
 | `[modbus].combinemeasurements` | **flow** (a grouping/aggregation flow) |
+| `[modbus].transmitinterval` | `connector.report.min_interval` (see §2.3) |
 | `[serial].*` (port, baudrate, …) | `connection.serial.*` (defaults) and/or per-device `protocol_address` |
 | `[thinedge].mqtthost/mqttport` | `mqtt.host` / `mqtt.port` |
 | `[thinedge].subscribe_topics` | implicit — the SDK derives command topics from the contract |
@@ -142,6 +143,29 @@ severity   = "major"
 text       = "Alarm triggered"
 ```
 
+### 2.3 Send on change and transmit rate → `report`
+
+The legacy per-register `on_change` (Cloud Fieldbus: `noUpdateIfEqual`, "send on change") and
+the transmit rate become the point's **reporting policy**, `report` (contract §5.3). The SDK
+runtime applies it before a sample is published, so the reduced stream is what every flow and
+the broker see:
+
+```toml
+[connector]
+report = { max_interval = "30m" }           # was: nothing (heartbeat so a flat device stays available)
+
+[[device]]
+name = "TestCase1"
+report = { on_change = true }               # was: on_change on every register
+
+  [[device.point]]
+  id     = "Test_Int16"
+  report = { deadband = 0.5, min_interval = "10s" }   # was: transmitinterval, per signal
+```
+
+`report` can be set on `[connector]`, on a device and on a point, and merges key by key. See
+[Reducing data volume](../reducing-data-volume.md) for the full set of options.
+
 ## 3. Operations mapping
 
 Every legacy operation maps onto a **generic, protocol-neutral command verb** (contract §6) driven
@@ -154,7 +178,7 @@ operation completes.
 | --- | --- | --- |
 | `c8y_SetRegister` | `ot_write` (`write`) | protocol module — typed/raw point write |
 | `c8y_SetCoil` | `ot_write_coil` (`write-coil`) | protocol module — coil write (alias for `write`; separate command type required by thin-edge.io) |
-| `c8y_ModbusConfiguration` (poll rate) | `ot_set_config` (`set-config`) | SDK runtime — patches `connector.poll_interval` |
+| `c8y_ModbusConfiguration` (poll rate) | `ot_set_config` (`set-config`) | SDK runtime — patches `connector.poll_interval` (`transmitRate` is not mapped; set `connector.report.min_interval` instead) |
 | `c8y_SerialConfiguration` | `ot_set_config` (`set-config`) | SDK runtime — patches `connection.serial.*` |
 | `c8y_ModbusDevice` (+ `c8y_Coils`/`c8y_Registers`) | `ot_define_device` (`define-device`) | SDK runtime — adds device + points; child registration via the [registration flow](../flows/) |
 
@@ -303,3 +327,31 @@ revocation unknown`. If the CA has never revoked anything, publish (or ask for) 
 - As a temporary escape hatch, `trust_any_server_certificate = true` restores the old
   behaviour for a device or the whole connection (messages are still signed/encrypted; a
   warning is logged on every connect). Do not leave it on.
+
+## 8. Upgrading tedge-dot: report by exception (`report`)
+
+Publishing on change, beyond a deadband, at most so often, or once a value has settled was
+configured on the `ot-measurement` flow: its `on_change`, `deadband`, `min_interval` and
+`debounce` parameters, or the same keys in a point's `meta`. These settings are now
+**deprecated**. They keep working, but the same behaviour, and more, is the point's `report`
+table, which the SDK runtime applies before a sample is published:
+
+| Before (`ot-measurement`) | Now (`report`) |
+| --- | --- |
+| `meta = { on_change = true }` | `report = { on_change = true }` |
+| `meta = { deadband = 0.5 }` | `report = { deadband = 0.5 }`, or a relative `deadband = "2%"` |
+| `meta = { min_interval = "10s" }` | `report = { min_interval = "10s" }`: a change held back is now **published when the interval ends** instead of being dropped |
+| `meta = { debounce = "2s" }` | `report = { debounce = "2s" }` |
+| flow param `on_change = "true"` (every point) | `[connector] report = { on_change = true }`, or on a device |
+| — | `max_interval`: a heartbeat for a value that does not change |
+
+Move the keys from `meta` into `report` and leave the other `meta` keys (`measurement`,
+`alarm`, `event`, `parameter`) where they are. Do not keep both: the flow would filter a stream
+the runtime has already filtered. Every consumer of the samples now sees the reduced stream,
+not just the measurements: keep a deadband smaller than the hysteresis of an alarm on the same
+signal, and do not give a change filter to a point declaring `meta.event.every`. The
+[Reducing data volume](../reducing-data-volume.md) guide explains each option.
+
+The packaged configs of fresh installs set `[connector] report = { max_interval = "30m" }` for
+Modbus, OPC UA, CANopen and PROFIBUS. An existing `/etc/tedge/plugins/ot/*.toml` is kept on
+upgrade; add that line to the `[connector]` section to opt in.

@@ -14,6 +14,15 @@ service_name  = "tedge-dot-canopen"
 poll_interval = "1s"
 log_level     = "info"
 
+# Heartbeat (reporting policy, see doc/reducing-data-volume.md): publish every point at least
+# this often, even when its value has not changed, because Cumulocity marks a device unavailable
+# when it sends nothing within its required interval; 30m stays inside the usual 60m. A
+# heartbeat is always a fresh reading, never a replayed value. It is the object's next SDO poll.
+# A polled point without a change filter already publishes every reading, so this matters for
+# points you give `on_change`, `deadband`, `min_interval` or `debounce`. Those keys can be set
+# here, on a device or on a point; "0" switches an inherited setting off.
+report = { max_interval = "30m" }
+
 [mqtt]
 host = "127.0.0.1"
 port = 1883
