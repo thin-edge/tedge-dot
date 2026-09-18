@@ -180,6 +180,14 @@ if(TDOT_OPCUA)
     foreach(_tdot_ua_target open62541 open62541-object open62541-plugins)
       if(TARGET ${_tdot_ua_target})
         target_compile_options(${_tdot_ua_target} PRIVATE -Wno-date-time)
+        # Basic128Rsa15 and Basic256 are compiled into the library but left out of the
+        # default policy set behind this macro, which open62541 exposes as no CMake option
+        # (it appears only in plugins/ua_config_default.c). Without it the C client cannot
+        # offer them at all and a device configured for one fails with BadInternalError,
+        # while the Rust build connects -- the two would disagree about which servers are
+        # reachable. They stay refused unless a device sets `allow_deprecated_security`;
+        # that opt-in, not the absence of the code, is what keeps them out of use.
+        target_compile_definitions(${_tdot_ua_target} PRIVATE UA_INCLUDE_INSECURE_POLICIES)
         add_dependencies(${_tdot_ua_target} mbedtls mbedx509 mbedcrypto)
       endif()
     endforeach()
