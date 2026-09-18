@@ -25,7 +25,7 @@ MANIFEST := "--manifest-path impl/rust/Cargo.toml"
 # Every capability name a `requires:<capability>` tag may use. Declaring the vocabulary in one
 # place is what turns a mistyped tag into an error instead of a test that quietly runs against
 # a build that cannot pass it (see `just check-capability-tags`).
-KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2"
+KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2 opcua-basic128rsa15"
 
 # This list is the single source of truth for what the C build still lacks. Keep it in sync
 # with the parity table in impl/c/README.md. Adding a capability here is a deliberate act:
@@ -33,7 +33,7 @@ KNOWN_CAPABILITIES := "subscribe canbus-fd profibus-serial snmpv3-sha2"
 #
 # NOTE: a capability listed here only becomes ENFORCED once a test is tagged with it;
 # `just check-capability-tags` reports the ones that are still inert.
-C_MISSING_CAPABILITIES := "canbus-fd profibus-serial snmpv3-sha2"
+C_MISSING_CAPABILITIES := "canbus-fd profibus-serial snmpv3-sha2 opcua-basic128rsa15"
 
 # Create/refresh the single Python virtualenv used by every system test (and by the editor,
 # see .vscode/settings.json).

@@ -51,14 +51,23 @@ Unsecured Channel Connects And Reads Every Datatype
     Sample Should Be    plain    int32     ${-100000}
     Sample String Should Be    plain    string    Hello OPC UA
 
-Deprecated Policies Connect With The Opt-In
-    [Documentation]    Basic256 and Basic128Rsa15 had only ever been covered by configuration-
-    ...                validation unit tests; here they run against a server that really offers
-    ...                them. The refusal WITHOUT `allow_deprecated_security` stays a
-    ...                configuration concern, covered by connector-opcua's own unit tests --
-    ...                it never reaches a server, so it does not belong in an interop suite.
-    Device Connects With    legacy-b256    Basic256           sign_and_encrypt
-    Device Connects With    legacy-b128    Basic128Rsa15      sign_and_encrypt
+Deprecated Basic256 Connects With The Opt-In
+    [Documentation]    Basic256 had only ever been covered by configuration-validation unit
+    ...                tests; here it runs against a server that really offers it. The refusal
+    ...                WITHOUT `allow_deprecated_security` stays a configuration concern,
+    ...                covered by connector-opcua's own unit tests -- it never reaches a
+    ...                server, so it does not belong in an interop suite.
+    Device Connects With    legacy-b256    Basic256    sign_and_encrypt
+
+Deprecated Basic128Rsa15 Connects With The Opt-In
+    [Documentation]    The C build cannot complete this handshake against UA-.NETStandard:
+    ...                open62541 aborts with BadDecodingError while async-opcua connects to the
+    ...                same endpoint, so the fault is in the policy implementation, not the
+    ...                server or the configuration. Basic128Rsa15 is deprecated and open62541
+    ...                itself warns that its encryption is broken, so this is recorded as a
+    ...                parity gap rather than worked around.
+    [Tags]    requires:opcua-basic128rsa15
+    Device Connects With    legacy-b128    Basic128Rsa15    sign_and_encrypt
 
 Username Identity Is Accepted And Rejected As The Server Decides
     [Documentation]    The reference server's own user database (config/users.json). The

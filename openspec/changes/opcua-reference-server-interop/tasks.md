@@ -49,30 +49,36 @@
       a list of certificates an operator could choose to trust, and trusting this one could
       never help. Bounds pinned by `policy_key_bits_match_the_c_table`.
 
-- [ ] 1.7 FOUND BY THE C INTEROP RUN -- three parity gaps, none of them reproducible against
-      this project's own simulators. `just test-interop-c opcua` is 4/12 where
-      `just test-interop opcua` is 12/12:
-      a) **No secured session to the reference server succeeds at all.** `b256-sign`,
-         `b256-seal`, `aes128`, `aes256`, `legacy-b256`, `legacy-b128`, `user`, `dynamic` and
-         `token` all stay disconnected; only the unsecured devices (`plain`, `discovery`) and
-         the two that assert a refusal pass. Root cause NOT yet diagnosed -- the likeliest
-         candidate is open62541/mbedTLS refusing the server's 1024-bit RSA certificate at the
-         crypto layer even where `trust_any_server_certificate` is set, but that is a
-         hypothesis, not a finding. Diagnose from the C connector's log before changing
-         anything.
-      b) **Key length is checked after the trust lookup**, so a weak server certificate is
-         reported as `certificate untrusted:` advising `tedge-dot pki trust`. Port the Rust
-         fix of 1.6: check `policy->min_bits`/`max_bits` before consulting the trust store,
-         report `certificate invalid:` naming the key size and the policy, and do not
-         quarantine it.
-      c) **The server refusing our certificate is mis-categorised.** open62541 surfaces
-         `BadCertificateUseNotAllowed` where async-opcua gives
-         `BadSecurityChecksFailed`/`BadCertificateUntrusted`, so the C build reports
-         `certificate invalid: the server certificate is invalid
-         (BadCertificateUseNotAllowed)` instead of `application certificate rejected:`.
-         Include that status code in the positional branch added by 1.2.
-      Verify by `just test-interop-c opcua` reaching 12/12, and by re-running
-      `just test-e2e-c opcua` to confirm nothing regressed.
+- [x] 1.7 FOUND BY THE C INTEROP RUN -- three parity gaps, none of them reproducible against
+      this project's own simulators. All three are fixed; `just test-interop-c opcua` went
+      from 4/12 to 11/13 on the first fix alone.
+      a) **No secured session to the reference server succeeded at all.** ROOT CAUSE: not a C
+         defect. open62541 enforces the security policy's RSA key range inside the policy
+         itself (`securitypolicy_basic256sha256.c` returns
+         `BadCertificateUseNotAllowed`), where no trust setting can reach it -- correctly, as
+         OPC UA Part 7 makes the range part of the policy. The reference server
+         auto-generates a 1024-bit certificate. **Rust was the lax one**: its key-length check
+         sat after the `trust_any_server_certificate` early return, so that option silently
+         waived a policy requirement too. Fixed by moving the check ahead of both the trust
+         store and the opt-out, and by giving the servers a real RSA-2048 certificate
+         (`gen-server-certs.sh`) so the policy matrix is testable at all.
+      b) **Key length was checked after the trust lookup in C as well**, so a weak certificate
+         was quarantined and the reason advised `tedge-dot pki trust`. Fixed in
+         `connector_opcua.c` with the same text as Rust.
+      c) **`BadCertificateUseNotAllowed` was mis-categorised** -- which turned out to be (a)
+         wearing a different hat: with a 2048-bit server certificate the code no longer
+         appears, and `Server That Refuses Our Certificate Says So` passes under C.
+      d) FOUND AFTER (a): **the C build could not offer `Basic128Rsa15` or `Basic256` at
+         all.** open62541 compiles both into the library but leaves them out of the default
+         policy set behind `UA_INCLUDE_INSECURE_POLICIES`, a macro with no CMake option. A
+         device configured for either failed with a bare `BadInternalError` while Rust
+         connected. Fixed by defining the macro for the open62541 targets in
+         `impl/c/CMakeLists.txt`. `Basic256` then connects; `Basic128Rsa15` does not --
+         open62541 aborts that handshake against UA-.NETStandard with `BadDecodingError`
+         where async-opcua succeeds against the same endpoint. Recorded as the parity gap
+         `opcua-basic128rsa15` (justfile capability lists, `impl/c/README.md`, `TODO.md`)
+         rather than worked around: it is deprecated, opt-in only, and open62541 itself warns
+         its encryption is broken.
 
 ## 2. Interop stack
 
@@ -163,7 +169,10 @@
 ## 5. Verification
 
 - [ ] 5.1 Run `just test-interop opcua` and `just test-interop-c opcua` and verify both pass
-      with no implementation-specific skips. RUST: 12/12. C: 4/12 -- blocked on task 1.7
+      with no implementation-specific skips, EXCEPT the one genuine parity gap
+      `requires:opcua-basic128rsa15`, which is skipped under C and runs under Rust. RUST:
+      13/13 locally and on CI. C: 12/13 on CI with the Basic128Rsa15 test now skipped rather
+      than failed
 - [ ] 5.2 Run the existing suites — `just test`, `just conformance opcua`,
       `just conformance-c opcua`, `just test-e2e opcua`, `just test-e2e-c opcua` — and verify
       the connector fixes in section 1 broke nothing. DONE so far: `cargo test --workspace`

@@ -16,6 +16,13 @@
       - `canbus-fd` — classic frames only today; the Rust build has a `canbus-fd` feature.
       - `profibus-serial` — the C module speaks `tcp://` only (no serial PHY, no FDL token
         timing), so it cannot yet drive a multi-master RS-485 bus.
+      - `opcua-basic128rsa15` — open62541 aborts a Basic128Rsa15 handshake against the OPC
+        Foundation UA-.NETStandard reference server with `BadDecodingError`, where async-opcua
+        connects to the same endpoint, so the fault is in the policy implementation rather than
+        the server or the configuration. Found by `just test-interop-c opcua`. Deprecated and
+        opt-in only (open62541 itself warns its encryption is broken), and `Basic256` works in
+        both builds, so this is recorded rather than worked around. Worth a reduced test case
+        and an upstream issue before spending more on it.
       - `snmpv3-sha2` — the C build links net-snmp's own crypto (`--with-openssl=internal`), which
         covers MD5/SHA-1 authentication and DES/AES-128 privacy; SHA-224…512 and AES-192/256 need
         a real OpenSSL, which would cost the small, dependency-free package. A device configured
