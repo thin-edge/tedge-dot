@@ -1772,12 +1772,14 @@ static bool same_report(const cJSON *a, const cJSON *b) {
 
 cJSON *tdot_config_reports(const tdot_config_t *cfg) {
     cJSON *reports = cJSON_CreateObject();
-    if (cfg->report_table)
+    /* An empty table (`report = {}`) declares nothing, and is left out as the
+     * Rust build leaves it out. */
+    if (cfg->report_table && cfg->report_table->child)
         cJSON_AddItemToObject(reports, "default", canonical_report(cfg->report_table));
     cJSON *devices = NULL, *points = NULL;
     for (size_t i = 0; i < cfg->ndevices; i++) {
         const tdot_device_t *dev = &cfg->devices[i];
-        if (dev->report_table) {
+        if (dev->report_table && dev->report_table->child) {
             if (!devices)
                 devices = cJSON_CreateArray();
             cJSON *entry = cJSON_CreateObject();

@@ -3588,6 +3588,14 @@ protocol_address = {}
         let bare: ConnectorConfig = toml::from_str("[connector]\nprotocol = \"modbus\"\n").unwrap();
         let json: serde_json::Value = serde_json::from_str(&capability_payload(&caps, &bare)).unwrap();
         assert!(json.get("reports").is_none());
+
+        // An empty table declares nothing (the C build agrees).
+        let empty: ConnectorConfig = toml::from_str(
+            "[connector]\nprotocol = \"modbus\"\nreport = {}\n[[device]]\nname = \"d\"\nprotocol_address = {}\nreport = {}\n",
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&capability_payload(&caps, &empty)).unwrap();
+        assert!(json.get("reports").is_none());
     }
 
     #[test]

@@ -1896,6 +1896,21 @@ static void check_report_merges_through_libraries_and_levels(void) {
               tdot_report_is_passthrough(&cfg->devices[0].points[0].report),
           "no report anywhere: no `reports`, and the passthrough");
     tdot_config_free(cfg);
+
+    /* An empty table declares nothing: no `reports` either, as in Rust. */
+    write_file(&s, "etc/modbus.toml",
+               "[connector]\nprotocol = \"modbus\"\nreport = {}\n"
+               "[[device]]\nname = \"plc\"\nprotocol_address = {}\nreport = {}\n"
+               "  [[device.point]]\n  id = \"a\"\n  datatype = \"uint16\"\n  address = {}\n");
+    cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg != NULL, "empty report tables must load: %s", err);
+    if (cfg) {
+        cJSON *reports = tdot_config_reports(cfg);
+        text = json_text(reports);
+        CHECK(!text, "empty report tables: no `reports`, got %s", text ? text : "(null)");
+        free(text);
+        tdot_config_free(cfg);
+    }
     scratch_free(&s);
 }
 

@@ -150,7 +150,7 @@
     },
     "report_duration": {
       "type": "string",
-      "pattern": "^([0-9]+(\\.[0-9]+)?(ms|s|m|h)?)$",
+      "pattern": "^([0-9]+ms|[0-9]+(\\.[0-9]+)?(s|m|h)?)$",
       "description": "Duration string, e.g. '500ms', '10s', '30m'; \"0\" disables the setting."
     },
     "disabled_device": {
