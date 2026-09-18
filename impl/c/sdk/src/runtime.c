@@ -1,6 +1,7 @@
 #include "tedge_dot/runtime.h"
 
 #include <errno.h>
+#include <math.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -107,10 +108,49 @@ static void publish(rt_t *rt, const char *topic, const char *payload,
                       retained);
 }
 
-static void emit_sample(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
-                        const tdot_sample_t *s) {
+/* ---- reporting policy (contract §5.3) ----------------------------------------
+ * Every sample -- polled, pushed, read for a heartbeat, in MQTT and in stdout
+ * mode -- goes through emit_sample, which offers it to the point's policy
+ * (report.c) and publishes only what the policy lets through. `seq` is stamped
+ * on publish, so a gap still means "published but lost", never "filtered". */
+
+/* The policy's clock: monotonic nanoseconds. */
+static int64_t mono_ns(void) { return (int64_t)llround(tdot_mono() * 1e9); }
+
+/* The reporting state of a point, created on first use -- its origin, the
+ * heartbeat's reference before anything is published, is then. NULL for the
+ * passthrough policy, which publishes every reading exactly as before. */
+static tdot_report_state_t *report_state(tdot_point_t *pt, int64_t now) {
+    if (pt->report_state)
+        return pt->report_state;
+    if (tdot_report_is_passthrough(&pt->report))
+        return NULL;
+    pt->report_state = malloc(sizeof *pt->report_state);
+    if (pt->report_state)
+        tdot_report_init(pt->report_state, &pt->report, now);
+    return pt->report_state;
+}
+
+/* Forget what the policy knows about a device's points, so the next reading
+ * of each is published. */
+static void reset_device_reports(tdot_device_t *dev) {
+    int64_t now = mono_ns();
+    for (size_t j = 0; j < dev->npoints; j++)
+        if (dev->points[j].report_state)
+            tdot_report_reset(dev->points[j].report_state, now);
+}
+
+static void reset_all_reports(rt_t *rt) {
+    for (size_t i = 0; i < rt->cfg->ndevices; i++)
+        reset_device_reports(&rt->cfg->devices[i]);
+}
+
+/* Publish one reading with the time it was taken. */
+static void publish_item(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
+                         const tdot_report_item_t *item) {
     pt->seq++;
-    char *json = tdot_envelope_sample(rt->cfg, dev, pt, s);
+    char *json = tdot_envelope_sample_at(rt->cfg, dev, pt, &item->sample, item->ts,
+                                         item->ts_ms);
     if (!json)
         return;
     if (rt->output == TDOT_OUTPUT_STDOUT) {
@@ -124,6 +164,25 @@ static void emit_sample(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
                           false);
     }
     free(json);
+}
+
+static void emit_sample(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
+                        const tdot_sample_t *s) {
+    /* Stamped now, when it was read: a reading the policy holds back is
+     * published later with this time, not its publish time. */
+    tdot_report_item_t item;
+    item.sample = *s;
+    tdot_now_rfc3339(item.ts, sizeof item.ts);
+    item.ts_ms = tdot_now_ms();
+    int64_t now = mono_ns();
+    tdot_report_state_t *st = report_state(pt, now);
+    if (st) {
+        tdot_report_obs_t obs;
+        tdot_report_obs_of(&item.sample, &obs);
+        if (!tdot_report_offer(st, &item, &obs, item.sample.quality, now))
+            return;
+    }
+    publish_item(rt, dev, pt, &item);
 }
 
 /* Publish the device's current link status (retained), whether or not it
@@ -233,6 +292,8 @@ static void connect_device(rt_t *rt, tdot_device_t *dev) {
     if (rt->conn->connect_device(rt->conn, dev, err, sizeof err) == 0) {
         dev->link_reason[0] = '\0';
         dev->backoff_s = 0;
+        /* What was published before the link dropped may be long stale. */
+        reset_device_reports(dev);
         arm_subscriptions(rt, dev);
         publish_link(rt, dev, TDOT_LINK_CONNECTED);
     } else {
@@ -530,8 +591,13 @@ static void on_message(struct mosquitto *mosq, void *ud,
     if (strcmp(verb, "write") == 0 || strcmp(verb, "write-coil") == 0) {
         /* write-coil is c8y_SetCoil's alias for write (see the Rust module) */
         handle_write(rt, msg->topic, dev_name, dev, req);
+        /* Whatever the outcome (§5.3): a write the device rejects or clamps
+         * reads back unchanged, and on_change would withhold that reading
+         * while the parameter twin already shows the written value. */
+        reset_device_reports(dev);
     } else if (strcmp(verb, "write-batch") == 0) {
         handle_write_batch(rt, msg->topic, dev_name, dev, req);
+        reset_device_reports(dev);
     } else if (is_management_verb(verb)) {
         handle_management(rt, msg->topic, verb, req);
     } else {
@@ -658,6 +724,11 @@ static char *augmented_capabilities(const char *json, const tdot_config_t *cfg) 
     add_unique(features, "management");
     add_point_labels(caps, cfg);
     add_parameter_keys(caps, cfg);
+    /* `reports` (§7): the declared reporting policies, so a consumer knows
+     * which points are filtered and how often a quiet one still reports. */
+    cJSON *reports = tdot_config_reports(cfg);
+    if (reports)
+        cJSON_AddItemToObject(caps, "reports", reports);
     char *out = cJSON_PrintUnformatted(caps);
     cJSON_Delete(caps);
     return out;
@@ -718,6 +789,10 @@ static void on_connect(struct mosquitto *mosq, void *ud, int rc) {
     subscribe_commands(rt);
     publish_health(rt, "up");
     publish_capabilities(rt);
+    /* A reading published while the broker was away is lost (mosquitto_publish
+     * fails silently), and the policy would otherwise keep withholding the
+     * value it believes was delivered (§5.3). */
+    reset_all_reports(rt);
     for (size_t i = 0; i < rt->cfg->ndevices; i++)
         if (rt->cfg->devices[i].link != TDOT_LINK_UNKNOWN)
             publish_link_status(rt, &rt->cfg->devices[i]);
@@ -1468,6 +1543,60 @@ static bool stop_requested(const run_ctl_t *ctl) {
     return g_stop || (ctl && atomic_load(&ctl->stop));
 }
 
+/* A pass of the reporting policy (§5.3) over every point: publish the held
+ * readings whose interval ended and the debounced ones that settled, and read
+ * a pushed point on demand when its heartbeat is due -- a fresh reading, never
+ * a replay. A heartbeat read counts like a poll: a failure publishes the bad
+ * sample and takes the transport down, a bad reading degrades the link. */
+static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
+    tdot_connector_t *conn = rt->conn;
+    for (size_t i = 0; i < rt->cfg->ndevices && !stop_requested(ctl); i++) {
+        tdot_device_t *dev = &rt->cfg->devices[i];
+        bool transport_down = false;
+        size_t bad = 0, read = 0;
+        for (size_t j = 0; j < dev->npoints && !transport_down; j++) {
+            tdot_point_t *pt = &dev->points[j];
+            int64_t now = mono_ns();
+            tdot_report_state_t *st = report_state(pt, now);
+            if (!st)
+                continue;
+            /* Only a pushed point is read on demand: a polled one's next
+             * scheduled read is its heartbeat. */
+            bool pushed = pt->subscribed && dev->link != TDOT_LINK_DISCONNECTED &&
+                          (pt->access & TDOT_ACCESS_READ);
+            tdot_report_item_t held;
+            bool due_read = false;
+            if (tdot_report_due(st, now, pushed, &held, &due_read)) {
+                publish_item(rt, dev, pt, &held);
+                tdot_report_item_release(&held);
+            }
+            if (!due_read)
+                continue;
+            tdot_sample_t s;
+            tdot_sample_init(&s);
+            int rc = conn->read_point(conn, dev, pt, &s);
+            if (rc == TDOT_READ_NO_DATA) {
+                /* Cannot be read on demand (a trap, a CAN frame): no heartbeat,
+                 * and no retry until the point's next reset. */
+                tdot_report_no_data(st);
+                continue;
+            }
+            if (pt->mode == TDOT_MODE_RAW)
+                s.value.kind = TDOT_VAL_NONE; /* raw: bytes only */
+            emit_sample(rt, dev, pt, &s);
+            read++;
+            if (s.quality == TDOT_Q_BAD)
+                bad++;
+            if (rc != 0)
+                transport_down = true;
+        }
+        if (transport_down)
+            mark_transport_down(rt, dev);
+        else if (read > 0)
+            publish_link(rt, dev, bad == read ? TDOT_LINK_DEGRADED : TDOT_LINK_CONNECTED);
+    }
+}
+
 /* Run one connector to completion. Assumes the mosquitto library is already
  * initialised and the signal handlers are installed by the caller, so it is
  * safe to call from one of several worker threads (each owns its own
@@ -1594,10 +1723,14 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                 tdot_sample_t s;
                 tdot_sample_init(&s);
                 int rc = conn->read_point(conn, dev, pt, &s);
+                pt->next_due = now + pt->poll_interval_s;
+                /* Nothing new to publish (a CAN frame not received again): not
+                 * a reading, so it says nothing about the link either. */
+                if (rc == TDOT_READ_NO_DATA)
+                    continue;
                 if (pt->mode == TDOT_MODE_RAW)
                     s.value.kind = TDOT_VAL_NONE; /* raw: bytes only */
                 emit_sample(&rt, dev, pt, &s);
-                pt->next_due = now + pt->poll_interval_s;
                 polled++;
                 if (s.quality == TDOT_Q_BAD)
                     bad++;
@@ -1633,6 +1766,8 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                 }
             }
         }
+
+        report_pass(&rt, ctl);
 
         if (rt.output == TDOT_OUTPUT_MQTT)
             mqtt_service(&rt);

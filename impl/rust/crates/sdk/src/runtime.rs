@@ -848,10 +848,13 @@ pub async fn run_until_reloadable(
                 // A write the device rejects or clamps leaves the value it reads back unchanged,
                 // which a change filter would withhold — while the parameter twin already shows
                 // the written value. So after a write, the device's next readings are published.
+                // Every device verb is a write of some kind (`write`, `write-batch`, a module's
+                // alias such as Modbus `write-coil`); only a new request counts, not the
+                // transitions this connector publishes on the same topic.
+                let is_request = serde_json::from_slice::<serde_json::Value>(&p.payload)
+                    .is_ok_and(|j| j["status"] == "init");
                 let written = match route_command(&p.topic, &protocol, &service, &config) {
-                    CommandRoute::Device { device, verb } if verb == "write" || verb == "write-batch" => {
-                        Some(device.to_string())
-                    }
+                    CommandRoute::Device { device, .. } if is_request => Some(device.to_string()),
                     _ => None,
                 };
                 match handle_command(
@@ -3523,11 +3526,8 @@ protocol_address = {}
             .heartbeat_result("opcua", "srv", &points[1..], Err(ConnectorError::Unsupported("push only".into())))
             .is_empty());
         let key = ("srv".to_string(), "trap".to_string());
-        let mut subscribed = HashSet::new();
-        subscribed.insert((0usize, "temp".to_string()));
-        subscribed.insert((0usize, "trap".to_string()));
         let later = reporter.now() + Duration::from_secs(3600);
-        assert!(reporter.states.get_mut(&key).unwrap().due(later, true).read == false);
+        assert!(!reporter.states.get_mut(&key).unwrap().due(later, true).read);
         let temp = ("srv".to_string(), "temp".to_string());
         assert!(reporter.states.get_mut(&temp).unwrap().due(later, true).read);
     }

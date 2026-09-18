@@ -36,6 +36,9 @@ typedef struct {
     bool is_signed;
     double factor;
     double offset;
+    /* The frame generation this point last read (cb_frame_t.gen): a read that
+     * finds the same one has nothing new to publish. */
+    uint64_t read_gen;
 } cb_point_t;
 
 typedef struct {
@@ -43,6 +46,9 @@ typedef struct {
     uint8_t data[CB_PAYLOAD_LEN];
     uint8_t len;
     bool seen;
+    /* Counts the frames received for this id, so each point can tell a frame
+     * it has not read yet from the cached one it already published. */
+    uint64_t gen;
 } cb_frame_t;
 
 /* Per-device state (dev->proto, flat, freed by config_free; the socket is
@@ -357,6 +363,7 @@ static int drain_frames(cb_device_t *cb) {
             e->len = fr.can_dlc > CB_PAYLOAD_LEN ? CB_PAYLOAD_LEN
                                                  : fr.can_dlc;
             e->seen = true;
+            e->gen++;
         }
     }
 }
@@ -394,6 +401,13 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
         tdot_sample_bad(out, "no frame received for can id 0x%x", cp->can_id);
         return 0; /* transport is fine, just no traffic */
     }
+    /* No frame since this point's previous read: the cache still holds the
+     * one already published, and publishing it again would pass an old frame
+     * off as a fresh reading (contract §5.3; the Rust connector publishes once
+     * per received frame). */
+    if (fr->gen == cp->read_gen)
+        return TDOT_READ_NO_DATA;
+    cp->read_gen = fr->gen;
 
     size_t raw_len = (size_t)cp->dlc;
     if (raw_len > CB_PAYLOAD_LEN)

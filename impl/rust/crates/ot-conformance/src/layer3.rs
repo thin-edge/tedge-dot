@@ -292,6 +292,7 @@ pub async fn run(manifest: &Manifest, schemas: &Schemas) -> Result<Vec<Layer>, S
     check_b6_write_roundtrip(&ctx, &mut layer).await;
     check_b7_access_control(&ctx, &mut layer).await;
     check_b8_hot_reload(&ctx, &mut layer, &config_path).await;
+    check_b12_reporting_policy(&ctx, &mut layer, &config_path).await;
     check_b11_unowned_device_ignored(&ctx, &mut layer).await;
     check_b5_link_drop_and_recovery(&ctx, &mut layer).await;
     check_b5_silent_peer(&ctx, &mut layer).await;
@@ -1015,6 +1016,212 @@ async fn check_b8_hot_reload(ctx: &Ctx<'_>, layer: &mut Layer, config_path: &std
         "a config change (added point) is picked up without restart",
         result,
     );
+}
+
+/// B12 — the reporting policy (contract §5.3) is applied by the runtime: a point with
+/// `report = { on_change = true, max_interval }` publishes its first reading, withholds the
+/// unchanged readings after it (without spending `seq` numbers on them), publishes a fresh
+/// reading as a heartbeat once `max_interval` has passed, and the capability descriptor lists
+/// its policy. The point is a clone of a good typed point whose value the simulator holds
+/// still, added with define-device like B8, so it runs on every connector: a subscribe-capable
+/// one delivers the clone by push, and then the heartbeat is the runtime's on-demand read.
+async fn check_b12_reporting_policy(ctx: &Ctx<'_>, layer: &mut Layer, config_path: &std::path::Path) {
+    const POINT: &str = "b12-report";
+    const QUIET: Duration = Duration::from_secs(2);
+    const HEARTBEAT: &str = "4s";
+    const IDS: [(&str, &str); 3] = [
+        ("B12-report-on-change", "unchanged readings are withheld by report.on_change"),
+        ("B12-report-heartbeat", "report.max_interval publishes a fresh reading, with the next seq"),
+        ("B12-report-descriptor", "the capability descriptor lists the point's reporting policy"),
+    ];
+    let skip = |layer: &mut Layer, reason: String| {
+        for (id, name) in IDS {
+            layer.skip(id, name, reason.clone());
+        }
+    };
+
+    // A template whose value does not move: two captured samples with the same value.
+    let records = ctx.broker.records_from(0);
+    let steady = ctx.points.iter().find(|p| {
+        if p.mode != Mode::Typed || ctx.sim.is_invalid(&p.spec()) || p.bitfield.is_some() || p.access != Access::Read {
+            return false;
+        }
+        let topic = p.sample_topic(&ctx.protocol);
+        let values: Vec<serde_json::Value> = records
+            .iter()
+            .filter(|r| r.client == ctx.client && r.topic == topic)
+            .filter_map(|r| r.json().ok())
+            .filter(|j| j["quality"] == "good")
+            .map(|j| j["value"].clone())
+            .collect();
+        values.len() >= 2 && values[values.len() - 1] == values[values.len() - 2]
+    });
+    let Some(template) = steady else {
+        skip(layer, "no read-only good typed point with a steady value was observed".into());
+        return;
+    };
+
+    let caps_topic = ctx.caps_topic();
+    let pushed = records
+        .iter()
+        .filter(|r| r.client == ctx.client && r.topic == caps_topic)
+        .filter_map(|r| r.json().ok())
+        .last()
+        .is_some_and(|caps| caps["subscribe"] == true);
+
+    let setup = async {
+        let text = std::fs::read_to_string(config_path)
+            .map_err(|e| format!("read {}: {e}", config_path.display()))?;
+        let doc: toml::Value = toml::from_str(&text).map_err(|e| format!("parse config: {e}"))?;
+        let device_toml = doc
+            .get("device")
+            .and_then(|d| d.as_array())
+            .and_then(|a| a.iter().find(|d| d.get("name").and_then(|n| n.as_str()) == Some(template.device.as_str())))
+            .ok_or("the template's device is not in the config")?;
+        let original: serde_json::Value =
+            serde_json::to_value(device_toml).map_err(|e| format!("device to JSON: {e}"))?;
+        let mut device = original.clone();
+        let points = device
+            .get_mut("point")
+            .and_then(|p| p.as_array_mut())
+            .ok_or("device has no points array")?;
+        let mut clone = points
+            .iter()
+            .find(|p| p["id"] == serde_json::json!(template.id))
+            .cloned()
+            .ok_or("template point not found in config")?;
+        clone["id"] = serde_json::json!(POINT);
+        clone["poll_interval"] = serde_json::json!("250ms");
+        // Pushed when the connector can: a static node then never pushes again, so the
+        // heartbeat can only be the runtime's on-demand read.
+        if pushed {
+            clone["subscribe"] = serde_json::json!(true);
+        }
+        clone["report"] = serde_json::json!({ "on_change": true, "max_interval": HEARTBEAT });
+        points.push(clone);
+        Ok::<_, String>((original, device))
+    }
+    .await;
+    let (original, device) = match setup {
+        Ok(pair) => pair,
+        Err(e) => {
+            for (id, name) in IDS {
+                layer.fail(id, name, e.clone());
+            }
+            return;
+        }
+    };
+
+    let define = |device: &serde_json::Value, id: &str| {
+        let topic = format!("te/device/main/service/{}/ot/cmd/define-device/{id}", ctx.service);
+        let mark = ctx.broker.mark();
+        ctx.broker.publish(
+            &topic,
+            serde_json::json!({ "status": "init", "device": device }).to_string().as_bytes(),
+            true,
+        );
+        (topic, mark)
+    };
+    let (topic, mark) = define(&device, "conf-b12");
+    let defined = ctx
+        .wait_connector_record(mark, COMMAND_TIMEOUT, "define-device 'successful'", |r| {
+            r.topic == topic && r.json().ok().map(|j| j["status"] == "successful").unwrap_or(false)
+        })
+        .await;
+    if let Err(e) = defined {
+        for (id, name) in IDS {
+            layer.fail(id, name, e.clone());
+        }
+        return;
+    }
+
+    let sample_topic = format!("te/device/{}/ot/{}/sample/{POINT}", template.device, ctx.protocol);
+    let first = ctx
+        .wait_connector_record(mark, SAMPLE_TIMEOUT, "first sample of the reported point", |r| {
+            r.topic == sample_topic
+        })
+        .await;
+    let quiet_and_heartbeat = match first {
+        Err(e) => Err(e),
+        Ok(first) => {
+            let first_seq = first.json().ok().and_then(|j| j["seq"].as_i64());
+            tokio::time::sleep(QUIET).await;
+            let during: Vec<Record> = ctx
+                .broker
+                .records_from(first.seq + 1)
+                .into_iter()
+                .filter(|r| r.client == ctx.client && r.topic == sample_topic)
+                .collect();
+            let on_change = if during.is_empty() {
+                Ok(Some(format!("no sample in the {}s after the first reading", QUIET.as_secs())))
+            } else {
+                Err(format!("{} unchanged reading(s) were published", during.len()))
+            };
+            let heartbeat = ctx
+                .wait_connector_record(first.seq + 1, SAMPLE_TIMEOUT, "heartbeat sample", |r| {
+                    r.topic == sample_topic
+                })
+                .await
+                .and_then(|r| {
+                    let json = r.json()?;
+                    if json["quality"] != "good" {
+                        return Err(format!("heartbeat published quality {:?}", json["quality"]));
+                    }
+                    let seq = json["seq"].as_i64();
+                    match (first_seq, seq) {
+                        (Some(a), Some(b)) if b == a + 1 => Ok(Some(format!(
+                            "seq {a} then {b} ({})",
+                            if pushed { "pushed: an on-demand read" } else { "polled" }
+                        ))),
+                        (a, b) => Err(format!("seq {a:?} then {b:?}: withheld readings must not consume seq")),
+                    }
+                });
+            Ok((on_change, heartbeat))
+        }
+    };
+    match quiet_and_heartbeat {
+        Ok((on_change, heartbeat)) => {
+            layer.check(IDS[0].0, IDS[0].1, on_change);
+            layer.check(IDS[1].0, IDS[1].1, heartbeat);
+        }
+        Err(e) => {
+            layer.fail(IDS[0].0, IDS[0].1, e.clone());
+            layer.fail(IDS[1].0, IDS[1].1, e);
+        }
+    }
+
+    let descriptor = ctx
+        .broker
+        .records_from(mark)
+        .into_iter()
+        .filter(|r| r.client == ctx.client && r.topic == caps_topic)
+        .filter_map(|r| r.json().ok())
+        .last()
+        .ok_or_else(|| "no capability descriptor was republished after define-device".to_string())
+        .and_then(|caps| {
+            let listed = caps["reports"]["points"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|p| p["device"] == serde_json::json!(template.device) && p["point"] == POINT)
+                .map(|p| p["report"].clone())
+                .ok_or_else(|| format!("reports.points has no entry for '{POINT}': {}", caps["reports"]))?;
+            if listed["on_change"] == true && listed["max_interval"] == HEARTBEAT {
+                Ok(Some(format!("{listed}")))
+            } else {
+                Err(format!("reports entry is {listed}"))
+            }
+        });
+    layer.check(IDS[2].0, IDS[2].1, descriptor);
+
+    // Put the device back as it was, so the fast-polled clone does not run through the
+    // outage checks that follow.
+    let (topic, mark) = define(&original, "conf-b12-restore");
+    let _ = ctx
+        .wait_connector_record(mark, COMMAND_TIMEOUT, "define-device 'successful'", |r| {
+            r.topic == topic && r.json().ok().map(|j| j["status"] == "successful").unwrap_or(false)
+        })
+        .await;
 }
 
 /// B5 (second half) — outage handling, in two escalating flavours:

@@ -49,11 +49,17 @@ static void add_value(cJSON *obj, const tdot_value_t *v) {
 
 char *tdot_envelope_sample(const tdot_config_t *cfg, const tdot_device_t *dev,
                            const tdot_point_t *pt, const tdot_sample_t *s) {
-    cJSON *obj = cJSON_CreateObject();
     char ts[40];
     tdot_now_rfc3339(ts, sizeof ts);
+    return tdot_envelope_sample_at(cfg, dev, pt, s, ts, tdot_now_ms());
+}
+
+char *tdot_envelope_sample_at(const tdot_config_t *cfg, const tdot_device_t *dev,
+                              const tdot_point_t *pt, const tdot_sample_t *s,
+                              const char *ts, double ts_ms) {
+    cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "ts", ts);
-    cJSON_AddNumberToObject(obj, "ts_ms", tdot_now_ms());
+    cJSON_AddNumberToObject(obj, "ts_ms", ts_ms);
     cJSON_AddStringToObject(obj, "device", dev->name);
     /* The device type (§3.1), when declared: what a consumer needs to name the
      * point's parameter set without reading the configuration file (§5.2). */

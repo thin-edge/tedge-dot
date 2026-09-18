@@ -13,6 +13,9 @@
 #include <stdint.h>
 
 #include "model.h"
+#include "report.h"
+
+struct cJSON;
 #include "toml.h"
 
 #ifdef __cplusplus
@@ -59,6 +62,14 @@ typedef struct tdot_point {
      * rate in both builds. */
     double poll_interval_s;
     toml_table_t *address;  /* protocol-specific, borrowed from the doc */
+    /* The point's own `report` table (contract §5.3) as a cJSON object, every
+     * definition merged key by key (a library's, then the site's), numbers
+     * kept as the text they were written as (cJSON raw items). NULL when no
+     * definition declares one. */
+    struct cJSON *report_table;
+    /* Effective policy: [connector] report, then the device's, then the
+     * point's, merged key by key (tdot_config_report_table). */
+    tdot_report_policy_t report;
 
     /* Filled by the connector during configure(): */
     char *addr_json; /* address echo for the sample envelope ("addr") */
@@ -72,6 +83,10 @@ typedef struct tdot_point {
      * cleared whenever the device link drops, so the point falls back to
      * polling until the subscription is re-established on reconnect. */
     bool subscribed;
+    /* The reporting policy's state (report.h), allocated by the runtime for a
+     * point whose policy is not the passthrough; NULL otherwise. Freed with
+     * the point, so a replaced configuration starts from a clean state. */
+    tdot_report_state_t *report_state;
 } tdot_point_t;
 
 typedef enum {
@@ -103,6 +118,9 @@ typedef struct tdot_device {
      * came from. */
     char **points_from;
     size_t npoints_from;
+    /* The device's `report` table (§5.3) as written, as a cJSON object (see
+     * tdot_point_t.report_table); NULL when none. */
+    struct cJSON *report_table;
 
     void *proto; /* connector per-device state (e.g. modbus_t*, UA_Client*) */
 
@@ -144,6 +162,10 @@ typedef struct tdot_config {
     int mqtt_port;   /* default 1883 */
 
     toml_table_t *connection; /* protocol-specific, borrowed; may be NULL */
+
+    /* [connector] report (§5.3), the default policy of every point, as written,
+     * as a cJSON object (see tdot_point_t.report_table); NULL when none. */
+    struct cJSON *report_table;
 
     tdot_device_t *devices;
     size_t ndevices;
@@ -191,6 +213,19 @@ bool tdot_is_path_reference(const char *ref);
 struct cJSON;
 int tdot_reject_local_only_settings(const struct cJSON *before, const struct cJSON *after,
                                     const char *const *keys, char *reason, size_t rlen);
+
+/* The merged `report` table of one point (contract §5.3): [connector], then its
+ * device, then the point, key by key. An object, possibly empty; caller
+ * cJSON_Delete()s. Mirrors ConnectorConfig::report_table (Rust). */
+struct cJSON *tdot_config_report_table(const tdot_config_t *cfg, const tdot_device_t *dev,
+                                       const tdot_point_t *pt);
+
+/* The capability descriptor's `reports` object (contract §7): `default` (the
+ * [connector] report as written), `devices` (each device's report as written)
+ * and `points` (the merged table of each point whose policy differs from its
+ * device's merged one). Each table's keys in the canonical order. NULL when no
+ * report is configured anywhere. Caller cJSON_Delete()s. */
+struct cJSON *tdot_config_reports(const tdot_config_t *cfg);
 
 tdot_device_t *tdot_config_device(tdot_config_t *cfg, const char *name);
 tdot_point_t *tdot_device_point(tdot_device_t *dev, const char *id);

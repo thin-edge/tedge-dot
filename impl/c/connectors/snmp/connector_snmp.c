@@ -1423,12 +1423,11 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
     (void)self;
     snmpc_point_t *sp = pt->proto;
     snmpc_device_t *sd = dev->proto;
-    if (!sp || sp->kind != PT_OBJECT) {
-        tdot_sample_bad(out, "snmp %s points are delivered by notifications; "
-                             "there is nothing to read",
-                        sp && sp->kind == PT_VARBIND ? "varbind" : "trap");
-        return 0;
-    }
+    /* Trap and varbind points are delivered by notifications only: there is
+     * nothing to read on demand, which is not a failure -- a heartbeat read
+     * (contract §5.3) must neither publish bad quality nor retry. */
+    if (!sp || sp->kind != PT_OBJECT)
+        return TDOT_READ_NO_DATA;
     if (!sd || !sd->connected || !sd->sess) {
         tdot_sample_bad(out, "device not connected");
         return -1;

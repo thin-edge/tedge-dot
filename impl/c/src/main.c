@@ -299,8 +299,21 @@ static int cmd_read(const args_t *a) {
                 tdot_sample_t s;
                 tdot_sample_init(&s);
                 g_in_call = 1;
-                conn->read_point(conn, dev, pt, &s);
+                int rc = conn->read_point(conn, dev, pt, &s);
                 g_in_call = 0;
+                if (rc == TDOT_READ_NO_DATA) {
+                    /* Not a sample, so nothing goes to stdout (it may be JSON
+                     * lines). Only an error when the point never had anything:
+                     * a later --poll round without a new CAN frame is normal. */
+                    fprintf(stderr,
+                            "%s/%s: no data: the point cannot be read on demand (it is "
+                            "delivered by notifications), or nothing new has arrived "
+                            "since its previous read\n",
+                            dev->name, pt->id);
+                    if (rounds == 0)
+                        exit_code = 1;
+                    continue;
+                }
                 print_sample(a, cfg, dev, pt, &s);
                 if (s.quality == TDOT_Q_BAD)
                     exit_code = 1;

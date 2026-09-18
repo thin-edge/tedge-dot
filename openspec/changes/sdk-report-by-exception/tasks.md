@@ -16,17 +16,17 @@
 
 ## 3. C SDK
 
-- [ ] 3.0 Add `TDOT_READ_NO_DATA` to the `read_point` contract in `include/tedge_dot/connector.h`, and handle it in the poll path (publish nothing, link unaffected). Make `connector_snmp.c` return it for trap and varbind points, and `connector_canbus.c` return it when no new frame has arrived since the point's previous read. Check that the canbus and SNMP e2e suites still pass (with C canbus, fewer samples are expected when frames are periodic).
-- [ ] 3.1 Parse, merge and validate `report` in `config.c` and `include/tedge_dot/config.h` (connector, device and point, with libraries deep-merged like `meta` and `transform`), using the same inheritance-conflict rule as 2.1.
-- [ ] 3.2 Add `sdk/src/report.c` with `tdot_report_offer`, `tdot_report_due` and `tdot_report_reset_*`, keeping its state on `tdot_point_t`.
-- [ ] 3.3 Wire it into `emit_sample` (poll, `push_sink` and stdout mode) and into the main loop: trailing publishes, and heartbeat reads through `read_point` bounded by the operation timeout. `-1` publishes a bad sample and goes through the normal transport-down handling. `TDOT_READ_NO_DATA` marks the point unreadable until a reset. Stamp `seq` only on publish. Reset in `commit_config`, on device reconnect, and in the connect callback when a session is resumed.
-- [ ] 3.4 Add `reports` to the descriptor in `descriptor.c`.
-- [ ] 3.5 Add the same `meta.event.every` warning as 2.5.
-- [ ] 3.6 Unit tests in `impl/c/tests`: run the shared vectors, and add config merge, validation and inheritance-conflict tests.
+- [x] 3.0 Add `TDOT_READ_NO_DATA` to the `read_point` contract in `include/tedge_dot/connector.h`, and handle it in the poll path (publish nothing, link unaffected). Make `connector_snmp.c` return it for trap and varbind points, and `connector_canbus.c` return it when no new frame has arrived since the point's previous read. Check that the canbus and SNMP e2e suites still pass (with C canbus, fewer samples are expected when frames are periodic).
+- [x] 3.1 Parse, merge and validate `report` in `config.c` and `include/tedge_dot/config.h` (connector, device and point, with libraries deep-merged like `meta` and `transform`), using the same inheritance-conflict rule as 2.1.
+- [x] 3.2 Add `sdk/src/report.c` with `tdot_report_offer`, `tdot_report_due` and `tdot_report_reset_*`, keeping its state on `tdot_point_t`.
+- [x] 3.3 Wire it into `emit_sample` (poll, `push_sink` and stdout mode) and into the main loop: trailing publishes, and heartbeat reads through `read_point` bounded by the operation timeout. `-1` publishes a bad sample and goes through the normal transport-down handling. `TDOT_READ_NO_DATA` marks the point unreadable until a reset. Stamp `seq` only on publish. Reset in `commit_config`, on device reconnect, and in the connect callback when a session is resumed.
+- [x] 3.4 Add `reports` to the descriptor in `descriptor.c`.
+- [x] 3.5 Add the same `meta.event.every` warning as 2.5.
+- [x] 3.6 Unit tests in `impl/c/tests`: run the shared vectors, and add config merge, validation and inheritance-conflict tests.
 
 ## 4. Conformance, parity and e2e
 
-- [ ] 4.1 Add layer-3 `ot-conformance` cases: on_change with a polled point, deadband, a flat signal with a heartbeat, `seq` continuity with suppression, and the descriptor's `reports`. Keep `report` off the point that B2-seq (`layer3.rs`) samples, so it still sees at least 3 samples in its window.
+- [x] 4.1 Add layer-3 `ot-conformance` cases: on_change with a polled point, deadband, a flat signal with a heartbeat, `seq` continuity with suppression, and the descriptor's `reports`. Keep `report` off the point that B2-seq (`layer3.rs`) samples, so it still sees at least 3 samples in its window.
 - [ ] 4.2 Add push-path cases with the OPC UA simulator: the trailing publish, and the heartbeat read of a static node. Add an SNMP case: a trap point inheriting `max_interval` produces nothing without a trap.
 - [ ] 4.3 Run the suites through the parity harness (`IMPL=rust` and `IMPL=c`) and record any gaps.
 - [ ] 4.4 Update the e2e suites and configs that use the flow's `meta` keys: `connectors/opcua/tests/opcua_e2e.robot` (the `meta.on_change` assertion), `connectors/opcua/conformance/connector*.toml`, and `connectors/modbus/conformance/connector.toml`. Add an e2e case in which a static OPC UA node keeps the device available through the heartbeat.
