@@ -150,6 +150,28 @@ proptest! {
         }
     }
 
+    /// `invert` undoes `apply`: writing back the value a point reads yields the raw value it
+    /// was read from (within float rounding), for any transform with an inverse.
+    #[test]
+    fn transform_invert_roundtrip(
+        raw in -1e9f64..1e9,
+        multiplier in prop_oneof![-1e3f64..-1e-3, 1e-3f64..1e3],
+        divisor in prop_oneof![Just(0.0), -1e3f64..-1e-3, 1e-3f64..1e3],
+        decimal_shift in -6i32..=6,
+        offset in -1e6f64..1e6,
+    ) {
+        let t = Transform { multiplier, divisor, decimal_shift, offset };
+        let Value::Number(eng) = t.apply(Value::Number(raw)) else { unreachable!() };
+        let back = match t.invert(Value::Number(eng)) {
+            Ok(Value::Number(back)) => back,
+            other => return Err(TestCaseError::fail(format!("{t:?} on {eng}: {other:?}"))),
+        };
+        let Value::Number(again) = t.apply(Value::Number(back)) else { unreachable!() };
+        // Relative to the magnitudes involved: the offset can dominate the scaled value.
+        let tol = 1e-9 * (eng.abs() + offset.abs() + 1.0);
+        prop_assert!((again - eng).abs() <= tol, "{t:?}: {raw} -> {eng} -> {back} -> {again}");
+    }
+
     /// Booleans and strings pass through any transform untouched.
     #[test]
     fn transform_passes_non_numbers(

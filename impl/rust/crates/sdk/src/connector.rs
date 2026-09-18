@@ -3,7 +3,7 @@
 
 use crate::config::ConnectorConfig;
 use crate::decode::{Endianness, WordOrder};
-use crate::model::{DataType, DeviceId, Mode, Sample, Transform};
+use crate::model::{DataType, DeviceId, InvertError, Mode, Sample, Transform, Value};
 use async_trait::async_trait;
 use thiserror::Error;
 
@@ -136,6 +136,74 @@ pub struct CommandRequest {
     pub value: Option<serde_json::Value>,
     pub value_repr: Option<String>,
     pub raw: Option<String>,
+}
+
+impl CommandRequest {
+    /// The request a connector's `write` receives for `point` (contract §4.2, §6.2).
+    ///
+    /// A write request carries engineering units — the units of the sample `value` — so for a
+    /// typed point a numeric `value` is mapped back through the inverse of the point's
+    /// transform, and rounded to the nearest integer (ties away from zero) when the datatype
+    /// is an integer, since connectors truncate or reject a fractional integer. Integer results
+    /// are sent as JSON integers. Booleans, strings, `raw` (hex) requests and raw-mode points
+    /// pass through unchanged. Every write path (the `write` and `write-batch` verbs and the
+    /// CLI) calls this once before `execute`, so connectors never deal with the transform on
+    /// write. Fails when the transform has no inverse; the write must then fail too.
+    pub fn to_raw_units(&self, point: &PointRef) -> Result<CommandRequest, String> {
+        let n = match &self.value {
+            Some(serde_json::Value::Number(n))
+                if self.raw.is_none()
+                    && point.mode == Mode::Typed
+                    && !point.transform.is_identity() =>
+            {
+                n.as_f64().unwrap_or(f64::NAN)
+            }
+            _ => return Ok(self.clone()),
+        };
+        let raw = match point.transform.invert(Value::Number(n)) {
+            Ok(Value::Number(raw)) => raw,
+            Ok(_) => unreachable!("invert keeps a number a number"),
+            Err(InvertError::NotInvertible { multiplier_zero }) => {
+                return Err(format!(
+                    "point {} transform is not invertible ({})",
+                    point.id,
+                    if multiplier_zero {
+                        "multiplier 0"
+                    } else {
+                        "decimal_shift out of range"
+                    }
+                ))
+            }
+            Err(InvertError::NotFinite) => {
+                return Err(format!(
+                    "point {}: value has no finite raw value under its transform",
+                    point.id
+                ))
+            }
+        };
+        let value = if point.datatype.is_some_and(DataType::is_integer) {
+            integer_json(raw.round())
+        } else {
+            serde_json::json!(raw)
+        };
+        Ok(CommandRequest {
+            value: Some(value),
+            ..self.clone()
+        })
+    }
+}
+
+/// A whole `f64` as a JSON integer (connectors read integer datatypes with `as_i64`/`as_u64`),
+/// falling back to a JSON float outside the 64-bit range.
+fn integer_json(n: f64) -> serde_json::Value {
+    // 2^64 and -2^63 are exact in f64, so the casts below are lossless.
+    if (0.0..18_446_744_073_709_551_616.0).contains(&n) {
+        serde_json::Value::from(n as u64)
+    } else if (-9_223_372_036_854_775_808.0..0.0).contains(&n) {
+        serde_json::Value::from(n as i64)
+    } else {
+        serde_json::json!(n)
+    }
 }
 
 /// The outcome of a successful command (the runtime wraps it in the result envelope).
@@ -276,4 +344,145 @@ pub trait Connector: Send {
 
     /// Close connections cleanly. Called on shutdown and before reload.
     async fn disconnect(&mut self) -> Result<(), ConnectorError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn point(datatype: DataType, mode: Mode, transform: Transform) -> PointRef {
+        PointRef {
+            id: "setpoint".into(),
+            mode,
+            datatype: Some(datatype),
+            endianness: Endianness::Big,
+            word_order: WordOrder::Big,
+            access: Access::ReadWrite,
+            unit: None,
+            transform,
+            interval: None,
+        }
+    }
+
+    fn write(value: serde_json::Value) -> CommandRequest {
+        CommandRequest {
+            point: "setpoint".into(),
+            value: Some(value),
+            value_repr: None,
+            raw: None,
+        }
+    }
+
+    const TENTHS: Transform = Transform {
+        multiplier: 0.1,
+        divisor: 1.0,
+        decimal_shift: 0,
+        offset: 0.0,
+    };
+
+    #[test]
+    fn integer_point_gets_the_rounded_raw_value() {
+        // 21.5 / 0.1 is 214.99999999999997 in f64: truncating would write 214
+        let p = point(DataType::Uint16, Mode::Typed, TENTHS);
+        let raw = write(json!(21.5)).to_raw_units(&p).unwrap();
+        assert_eq!(raw.value, Some(json!(215)));
+        assert!(
+            raw.value.unwrap().is_u64(),
+            "integer datatypes get a JSON integer"
+        );
+
+        let p = point(DataType::Int32, Mode::Typed, TENTHS);
+        assert_eq!(
+            write(json!(-21.5)).to_raw_units(&p).unwrap().value,
+            Some(json!(-215))
+        );
+    }
+
+    #[test]
+    fn integer_rounding_ties_away_from_zero() {
+        let p = point(
+            DataType::Int16,
+            Mode::Typed,
+            Transform {
+                offset: 0.5,
+                ..Transform::default()
+            },
+        );
+        assert_eq!(
+            write(json!(3.0)).to_raw_units(&p).unwrap().value,
+            Some(json!(3))
+        );
+        assert_eq!(
+            write(json!(-2.0)).to_raw_units(&p).unwrap().value,
+            Some(json!(-3))
+        );
+    }
+
+    #[test]
+    fn float_point_keeps_the_unrounded_value() {
+        let p = point(
+            DataType::Float32,
+            Mode::Typed,
+            Transform {
+                multiplier: 2.0,
+                offset: 1.0,
+                ..Transform::default()
+            },
+        );
+        assert_eq!(
+            write(json!(4.0)).to_raw_units(&p).unwrap().value,
+            Some(json!(1.5))
+        );
+    }
+
+    #[test]
+    fn pass_through_cases() {
+        let typed = point(DataType::Uint16, Mode::Typed, TENTHS);
+        for v in [json!(true), json!("21.5")] {
+            assert_eq!(
+                write(v.clone()).to_raw_units(&typed).unwrap().value,
+                Some(v)
+            );
+        }
+        // raw-mode point
+        let raw_mode = point(DataType::Uint16, Mode::Raw, TENTHS);
+        assert_eq!(
+            write(json!(21.5)).to_raw_units(&raw_mode).unwrap().value,
+            Some(json!(21.5))
+        );
+        // raw (hex) request
+        let hex = CommandRequest {
+            raw: Some("00d7".into()),
+            ..write(json!(21.5))
+        };
+        let out = hex.to_raw_units(&typed).unwrap();
+        assert_eq!(
+            (out.value, out.raw),
+            (Some(json!(21.5)), Some("00d7".into()))
+        );
+        // identity transform: untouched, even past 2^53
+        let identity = point(DataType::Uint64, Mode::Typed, Transform::default());
+        let big = json!(u64::MAX);
+        assert_eq!(
+            write(big.clone()).to_raw_units(&identity).unwrap().value,
+            Some(big)
+        );
+    }
+
+    #[test]
+    fn non_invertible_transform_fails_the_write() {
+        let p = point(
+            DataType::Uint16,
+            Mode::Typed,
+            Transform {
+                multiplier: 0.0,
+                ..Transform::default()
+            },
+        );
+        assert_eq!(
+            write(json!(1)).to_raw_units(&p).unwrap_err(),
+            "point setpoint transform is not invertible (multiplier 0)"
+        );
+    }
 }

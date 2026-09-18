@@ -4,8 +4,8 @@
 
 use crate::config::{parse_duration, ConnectorConfig};
 use crate::connector::{
-    Access, Capabilities, CommandRequest, Connector, ConnectorError, LinkReport, LinkStatus,
-    PointRef, SampleSink,
+    Access, Capabilities, CommandRequest, CommandResult, Connector, ConnectorError, LinkReport,
+    LinkStatus, PointRef, SampleSink,
 };
 use crate::decode::{Endianness, WordOrder};
 use crate::model::{format_rfc3339_ms, Mode, Sample};
@@ -1397,6 +1397,51 @@ pub fn point_ref(point: &crate::config::PointConfig, device_default: Option<Mode
     }
 }
 
+/// The request a connector's `write` receives for a write `request` to `device`: the point's
+/// transform inverted, see [`CommandRequest::to_raw_units`]. A device or point the
+/// configuration does not define, or a point that is not writable, passes through unchanged
+/// for the connector to reject as usual (the C SDK checks access before the transform too).
+pub fn raw_unit_request(
+    config: &ConnectorConfig,
+    device: &str,
+    request: &CommandRequest,
+) -> Result<CommandRequest, String> {
+    let point = config
+        .devices
+        .iter()
+        .find(|d| d.name == device)
+        .and_then(|d| {
+            d.points
+                .iter()
+                .find(|p| p.id == request.point)
+                .map(|p| point_ref(p, d.default_mode))
+                .filter(|p| p.access.can_write())
+        });
+    match point {
+        Some(point) => request.to_raw_units(&point),
+        None => Ok(request.clone()),
+    }
+}
+
+/// Execute a write `verb` for `request` (engineering units) on `connector`. The one place every
+/// write path — the `write` and `write-batch` verbs and the CLI — maps engineering units to raw
+/// units ([`raw_unit_request`]); the result echoes the value as requested (§6.2), not the raw
+/// value the connector wrote.
+pub async fn execute_write(
+    connector: &mut dyn Connector,
+    config: &ConnectorConfig,
+    device: &str,
+    verb: &str,
+    request: &CommandRequest,
+) -> Result<CommandResult, ConnectorError> {
+    let raw = raw_unit_request(config, device, request).map_err(ConnectorError::Other)?;
+    let mut result = connector.execute(&device.to_string(), verb, &raw).await?;
+    if raw.value != request.value {
+        result.value = request.value.clone();
+    }
+    Ok(result)
+}
+
 /// Who a message on the connector's command subscriptions is for (contract §6).
 #[derive(Debug, PartialEq)]
 enum CommandRoute<'a> {
@@ -1502,7 +1547,7 @@ async fn handle_command(
 
     // `write-batch` (§6.4) is implemented once here on top of the module's `write`.
     if verb == "write-batch" {
-        handle_write_batch(connector, client, topic, &device, &json, limits).await?;
+        handle_write_batch(connector, client, config, topic, &device, &json, limits).await?;
         debug!(%device, %verb, "command handled");
         return Ok(false);
     }
@@ -1536,7 +1581,8 @@ async fn handle_command(
     )
     .await?;
 
-    match bounded(limits, "write", connector.execute(&device, verb, &request)).await {
+    let write = execute_write(connector.as_mut(), config, &device, verb, &request);
+    match bounded(limits, "write", write).await {
         Ok(result) => {
             let mut obj = serde_json::Map::new();
             obj.insert("status".into(), serde_json::Value::String("successful".into()));
@@ -1625,6 +1671,7 @@ pub fn parse_batch_writes(json: &serde_json::Value) -> Result<Vec<BatchWrite>, S
 async fn handle_write_batch(
     connector: &mut Box<dyn Connector>,
     client: &Mqtt,
+    config: &ConnectorConfig,
     topic: &str,
     device: &str,
     json: &serde_json::Value,
@@ -1668,13 +1715,8 @@ async fn handle_write_batch(
             value_repr: None,
             raw: w.raw.clone(),
         };
-        match bounded(
-            limits,
-            "write",
-            connector.execute(&device.to_string(), "write", &request),
-        )
-        .await
-        {
+        let write = execute_write(connector.as_mut(), config, device, "write", &request);
+        match bounded(limits, "write", write).await {
             Ok(result) => {
                 let mut obj = serde_json::Map::new();
                 obj.insert("point".into(), serde_json::Value::String(result.point));
@@ -3257,5 +3299,159 @@ protocol_address = { transport = "tcp", host = "127.0.0.1", port = 502, unit_id 
             assert!(caps.command_verbs.iter().any(|v| v == verb), "missing {verb}");
         }
         assert!(caps.features.iter().any(|f| f == "management"));
+    }
+
+    /// A module stand-in that records the write requests it is handed and echoes them back,
+    /// as the real modules do.
+    #[derive(Default)]
+    struct Recorder(Vec<CommandRequest>);
+
+    #[async_trait::async_trait]
+    impl Connector for Recorder {
+        fn configure(&mut self, _: &ConnectorConfig) -> Result<(), crate::connector::ConfigError> {
+            Ok(())
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                protocol: "test",
+                version: "0",
+                modes: vec![Mode::Typed],
+                datatypes: vec![],
+                point_kinds: vec![],
+                command_verbs: vec!["write".into()],
+                features: vec![],
+                subscribe: false,
+            }
+        }
+        async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError> {
+            Ok(vec![])
+        }
+        async fn read_points(
+            &mut self,
+            _: &crate::model::DeviceId,
+            _: &[PointRef],
+        ) -> Result<Vec<Sample>, ConnectorError> {
+            Ok(vec![])
+        }
+        async fn execute(
+            &mut self,
+            _: &crate::model::DeviceId,
+            _: &str,
+            request: &CommandRequest,
+        ) -> Result<CommandResult, ConnectorError> {
+            self.0.push(request.clone());
+            Ok(CommandResult {
+                point: request.point.clone(),
+                value: request.value.clone(),
+                raw: request.raw.clone(),
+            })
+        }
+        async fn disconnect(&mut self) -> Result<(), ConnectorError> {
+            Ok(())
+        }
+    }
+
+    const SCALED: &str = r#"
+[connector]
+protocol = "test"
+
+[[device]]
+name = "plc-1"
+protocol_address = {}
+  [[device.point]]
+  id = "setpoint"
+  datatype = "uint16"
+  access = "read_write"
+  address = {}
+  transform = { multiplier = 0.1 }
+  [[device.point]]
+  id = "broken"
+  datatype = "uint16"
+  access = "read_write"
+  address = {}
+  transform = { multiplier = 0 }
+  [[device.point]]
+  id = "readonly"
+  datatype = "uint16"
+  address = {}
+  transform = { multiplier = 0 }
+"#;
+
+    fn write(point: &str, value: serde_json::Value) -> CommandRequest {
+        CommandRequest {
+            point: point.into(),
+            value: Some(value),
+            value_repr: None,
+            raw: None,
+        }
+    }
+
+    /// The runtime hands the module the raw value for an engineering-unit write, and the
+    /// result echoes the value as requested.
+    #[tokio::test]
+    async fn execute_write_hands_the_connector_raw_units() {
+        let config: ConnectorConfig = toml::from_str(SCALED).unwrap();
+        let mut rec = Recorder::default();
+        let request = write("setpoint", serde_json::json!(21.5));
+        let result = execute_write(&mut rec, &config, "plc-1", "write", &request)
+            .await
+            .unwrap();
+        assert_eq!(rec.0[0].value, Some(serde_json::json!(215)));
+        assert_eq!(result.value, Some(serde_json::json!(21.5)));
+    }
+
+    /// A transform with no inverse fails the write before the module is called.
+    #[tokio::test]
+    async fn execute_write_refuses_a_non_invertible_transform() {
+        let config: ConnectorConfig = toml::from_str(SCALED).unwrap();
+        let mut rec = Recorder::default();
+        let err = execute_write(
+            &mut rec,
+            &config,
+            "plc-1",
+            "write",
+            &write("broken", serde_json::json!(1)),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "point broken transform is not invertible (multiplier 0)"
+        );
+        assert!(rec.0.is_empty());
+    }
+
+    /// Points and devices the configuration does not define, and read-only points, reach the
+    /// module unchanged.
+    #[tokio::test]
+    async fn execute_write_passes_unknown_points_through() {
+        let config: ConnectorConfig = toml::from_str(SCALED).unwrap();
+        let mut rec = Recorder::default();
+        let request = write("nope", serde_json::json!(21.5));
+        execute_write(&mut rec, &config, "plc-1", "write", &request)
+            .await
+            .unwrap();
+        execute_write(
+            &mut rec,
+            &config,
+            "plc-9",
+            "write",
+            &write("setpoint", serde_json::json!(21.5)),
+        )
+        .await
+        .unwrap();
+        // read-only: the module's access check answers, not the transform
+        execute_write(
+            &mut rec,
+            &config,
+            "plc-1",
+            "write",
+            &write("readonly", serde_json::json!(1)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(rec.0[0].value, Some(serde_json::json!(21.5)));
+        assert_eq!(rec.0[1].value, Some(serde_json::json!(21.5)));
+        assert_eq!(rec.0[2].value, Some(serde_json::json!(1)));
     }
 }

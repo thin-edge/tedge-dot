@@ -40,7 +40,7 @@ impl WordOrder {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum DecodeError {
     #[error("expected {expected} bytes for {datatype:?}, got {actual}")]
     Length {
@@ -52,6 +52,8 @@ pub enum DecodeError {
     NoValue(DataType),
     #[error("invalid value for datatype {0:?}")]
     InvalidValue(DataType),
+    #[error("value out of range for datatype {0:?}")]
+    OutOfRange(DataType),
 }
 
 /// Reorder a "natural" byte buffer (each 16-bit word serialized big-endian, in word order)
@@ -161,12 +163,24 @@ pub fn encode_primitive(
             };
             return Ok(vec![if b { 1 } else { 0 }]);
         }
-        DataType::Int8 => (number(value, datatype)? as i64 as i8).to_be_bytes().to_vec(),
-        DataType::Uint8 => (number(value, datatype)? as i64 as u8).to_be_bytes().to_vec(),
-        DataType::Int16 => (number(value, datatype)? as i64 as i16).to_be_bytes().to_vec(),
-        DataType::Uint16 => (number(value, datatype)? as i64 as u16).to_be_bytes().to_vec(),
-        DataType::Int32 => (number(value, datatype)? as i64 as i32).to_be_bytes().to_vec(),
-        DataType::Uint32 => (number(value, datatype)? as i64 as u32).to_be_bytes().to_vec(),
+        DataType::Int8 => (small_int(value, datatype, i8::MIN as i64, i8::MAX as i64)? as i8)
+            .to_be_bytes()
+            .to_vec(),
+        DataType::Uint8 => (small_int(value, datatype, 0, u8::MAX as i64)? as u8)
+            .to_be_bytes()
+            .to_vec(),
+        DataType::Int16 => (small_int(value, datatype, i16::MIN as i64, i16::MAX as i64)? as i16)
+            .to_be_bytes()
+            .to_vec(),
+        DataType::Uint16 => (small_int(value, datatype, 0, u16::MAX as i64)? as u16)
+            .to_be_bytes()
+            .to_vec(),
+        DataType::Int32 => (small_int(value, datatype, i32::MIN as i64, i32::MAX as i64)? as i32)
+            .to_be_bytes()
+            .to_vec(),
+        DataType::Uint32 => (small_int(value, datatype, 0, u32::MAX as i64)? as u32)
+            .to_be_bytes()
+            .to_vec(),
         DataType::Int64 => int_from_value(value)?.to_be_bytes().to_vec(),
         DataType::Uint64 => uint_from_value(value)?.to_be_bytes().to_vec(),
         DataType::Float32 => (number(value, datatype)? as f32).to_be_bytes().to_vec(),
@@ -191,8 +205,28 @@ fn number(value: &Value, datatype: DataType) -> Result<f64, DecodeError> {
     }
 }
 
+/// An integer of at most 32 bits, rejected — never wrapped — when it is fractional or outside
+/// `min..=max` (the C SDK's `tdot_encode` rejects the same values).
+fn small_int(value: &Value, datatype: DataType, min: i64, max: i64) -> Result<i64, DecodeError> {
+    let n = number(value, datatype)?;
+    if n.fract() != 0.0 {
+        return Err(DecodeError::InvalidValue(datatype));
+    }
+    if !(min as f64..=max as f64).contains(&n) {
+        return Err(DecodeError::OutOfRange(datatype));
+    }
+    Ok(n as i64)
+}
+
 fn int_from_value(value: &Value) -> Result<i64, DecodeError> {
     match value {
+        // 2^63 is exact in f64; `as` would saturate rather than fail
+        Value::Number(n) if n.fract() != 0.0 => Err(DecodeError::InvalidValue(DataType::Int64)),
+        Value::Number(n)
+            if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(n) =>
+        {
+            Err(DecodeError::OutOfRange(DataType::Int64))
+        }
         Value::Number(n) => Ok(*n as i64),
         Value::Text(t) => t.parse::<i64>().map_err(|_| DecodeError::InvalidValue(DataType::Int64)),
         Value::Bool(b) => Ok(if *b { 1 } else { 0 }),
@@ -203,6 +237,10 @@ fn int_from_value(value: &Value) -> Result<i64, DecodeError> {
 /// above the JS safe range arrive as text and must round-trip through `u64`.
 fn uint_from_value(value: &Value) -> Result<u64, DecodeError> {
     match value {
+        Value::Number(n) if n.fract() != 0.0 => Err(DecodeError::InvalidValue(DataType::Uint64)),
+        Value::Number(n) if !(0.0..18_446_744_073_709_551_616.0).contains(n) => {
+            Err(DecodeError::OutOfRange(DataType::Uint64))
+        }
         Value::Number(n) => Ok(*n as u64),
         Value::Text(t) => t.parse::<u64>().map_err(|_| DecodeError::InvalidValue(DataType::Uint64)),
         Value::Bool(b) => Ok(if *b { 1 } else { 0 }),
@@ -348,5 +386,43 @@ mod tests {
         let v = decode_primitive(&b, DataType::Uint64, Endianness::Big, WordOrder::Big).unwrap();
         let re = encode_primitive(&v, DataType::Uint64, Endianness::Big, WordOrder::Big).unwrap();
         assert_eq!(re, b);
+    }
+
+    /// Out-of-range and fractional integers fail instead of wrapping or truncating (a scaled
+    /// write such as offset -40 on a uint16 can invert to a negative raw value).
+    #[test]
+    fn integer_encode_rejects_out_of_range_and_fractional() {
+        let enc =
+            |n: f64, dt| encode_primitive(&Value::Number(n), dt, Endianness::Big, WordOrder::Big);
+        assert_eq!(
+            enc(-5.0, DataType::Uint16),
+            Err(DecodeError::OutOfRange(DataType::Uint16))
+        );
+        assert_eq!(
+            enc(70000.0, DataType::Uint16),
+            Err(DecodeError::OutOfRange(DataType::Uint16))
+        );
+        assert_eq!(
+            enc(128.0, DataType::Int8),
+            Err(DecodeError::OutOfRange(DataType::Int8))
+        );
+        assert_eq!(
+            enc(-1.0, DataType::Uint64),
+            Err(DecodeError::OutOfRange(DataType::Uint64))
+        );
+        assert_eq!(
+            enc(1e20, DataType::Int64),
+            Err(DecodeError::OutOfRange(DataType::Int64))
+        );
+        assert_eq!(
+            enc(2.5, DataType::Int32),
+            Err(DecodeError::InvalidValue(DataType::Int32))
+        );
+        assert_eq!(
+            enc(f64::NAN, DataType::Uint8),
+            Err(DecodeError::InvalidValue(DataType::Uint8))
+        );
+        assert_eq!(enc(65535.0, DataType::Uint16).unwrap(), vec![0xff, 0xff]);
+        assert_eq!(enc(-128.0, DataType::Int8).unwrap(), vec![0x80]);
     }
 }

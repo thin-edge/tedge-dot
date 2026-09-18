@@ -53,6 +53,21 @@ impl DataType {
             DataType::String | DataType::Bytes => return None,
         })
     }
+
+    /// True for the signed/unsigned integer datatypes (8 to 64 bits).
+    pub fn is_integer(self) -> bool {
+        matches!(
+            self,
+            DataType::Int8
+                | DataType::Uint8
+                | DataType::Int16
+                | DataType::Uint16
+                | DataType::Int32
+                | DataType::Uint32
+                | DataType::Int64
+                | DataType::Uint64
+        )
+    }
 }
 
 /// A decoded value. `Number` covers all integer and float types within the JS safe range;
@@ -108,6 +123,45 @@ impl Transform {
             other => other,
         }
     }
+
+    /// The inverse of [`Transform::apply`], for writes (contract §4.2): the raw value that
+    /// `apply` maps to `value`,
+    /// `raw = (value - offset) * divisor / (multiplier * 10^decimal_shift)`,
+    /// with the same divisor-0-is-1 rule. Booleans and strings pass through unchanged, as do
+    /// numbers under the identity transform (bit-exact, no float round trip). Fails when the
+    /// scale is zero (every raw value maps to `offset`) or the result is not finite, so a write
+    /// never silently sends a meaningless value.
+    pub fn invert(&self, value: Value) -> Result<Value, InvertError> {
+        let n = match value {
+            Value::Number(n) if !self.is_identity() => n,
+            other => return Ok(other),
+        };
+        let divisor = if self.divisor == 0.0 {
+            1.0
+        } else {
+            self.divisor
+        };
+        let scale = self.multiplier * 10f64.powi(self.decimal_shift);
+        if scale == 0.0 || !scale.is_finite() {
+            return Err(InvertError::NotInvertible {
+                multiplier_zero: self.multiplier == 0.0,
+            });
+        }
+        let raw = (n - self.offset) * divisor / scale;
+        if !raw.is_finite() {
+            return Err(InvertError::NotFinite);
+        }
+        Ok(Value::Number(raw))
+    }
+}
+
+/// Why [`Transform::invert`] has no raw value for an engineering-unit value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvertError {
+    /// `multiplier * 10^decimal_shift` is zero (or overflows), so there is no inverse.
+    NotInvertible { multiplier_zero: bool },
+    /// The raw value would be NaN or infinite.
+    NotFinite,
 }
 
 impl Value {
@@ -301,6 +355,134 @@ mod tests {
         };
         assert_eq!(t.apply(Value::Bool(true)), Value::Bool(true));
         assert_eq!(t.apply(Value::Text("hi".into())), Value::Text("hi".into()));
+    }
+
+    #[test]
+    fn invert_undoes_multiplier() {
+        // a register with multiplier 0.1 reading 21.5 holds 215
+        let t = Transform {
+            multiplier: 0.1,
+            ..Transform::default()
+        };
+        let Value::Number(raw) = t.invert(Value::Number(21.5)).unwrap() else {
+            panic!()
+        };
+        assert!((raw - 215.0).abs() < 1e-9, "{raw}");
+        assert_eq!(raw.round(), 215.0);
+    }
+
+    #[test]
+    fn invert_multiplier_divisor_offset() {
+        // inverse of (50 * 2 / 4) + 10 = 35
+        let t = Transform {
+            multiplier: 2.0,
+            divisor: 4.0,
+            decimal_shift: 0,
+            offset: 10.0,
+        };
+        assert_eq!(t.invert(Value::Number(35.0)), Ok(Value::Number(50.0)));
+    }
+
+    #[test]
+    fn invert_decimal_shift() {
+        let t = Transform {
+            decimal_shift: -3,
+            ..Transform::default()
+        };
+        assert_eq!(t.invert(Value::Number(1.0)), Ok(Value::Number(1000.0)));
+    }
+
+    #[test]
+    fn invert_zero_divisor_is_one() {
+        let t = Transform {
+            multiplier: 2.0,
+            divisor: 0.0,
+            ..Transform::default()
+        };
+        assert_eq!(t.invert(Value::Number(14.0)), Ok(Value::Number(7.0)));
+    }
+
+    #[test]
+    fn invert_identity_is_bit_exact() {
+        let t = Transform::default();
+        let v = 0.1 + 0.2;
+        assert_eq!(t.invert(Value::Number(v)), Ok(Value::Number(v)));
+    }
+
+    #[test]
+    fn invert_fails_without_an_inverse() {
+        let zero = Transform {
+            multiplier: 0.0,
+            offset: 5.0,
+            ..Transform::default()
+        };
+        assert_eq!(
+            zero.invert(Value::Number(5.0)),
+            Err(InvertError::NotInvertible {
+                multiplier_zero: true
+            })
+        );
+        // 10^-400 underflows to 0
+        let underflow = Transform {
+            decimal_shift: -400,
+            ..Transform::default()
+        };
+        assert_eq!(
+            underflow.invert(Value::Number(1.0)),
+            Err(InvertError::NotInvertible {
+                multiplier_zero: false
+            })
+        );
+        let tiny = Transform {
+            multiplier: 1e-300,
+            decimal_shift: -10,
+            ..Transform::default()
+        };
+        assert_eq!(
+            tiny.invert(Value::Number(1e300)),
+            Err(InvertError::NotFinite)
+        );
+    }
+
+    #[test]
+    fn invert_leaves_non_numbers_unchanged() {
+        let t = Transform {
+            multiplier: 0.0,
+            divisor: 1.0,
+            decimal_shift: 0,
+            offset: 5.0,
+        };
+        assert_eq!(t.invert(Value::Bool(true)), Ok(Value::Bool(true)));
+        assert_eq!(
+            t.invert(Value::Text("hi".into())),
+            Ok(Value::Text("hi".into()))
+        );
+    }
+
+    #[test]
+    fn integer_datatypes() {
+        let ints = [
+            DataType::Int8,
+            DataType::Uint8,
+            DataType::Int16,
+            DataType::Uint16,
+            DataType::Int32,
+            DataType::Uint32,
+            DataType::Int64,
+            DataType::Uint64,
+        ];
+        for dt in ints {
+            assert!(dt.is_integer(), "{dt:?}");
+        }
+        for dt in [
+            DataType::Bool,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::String,
+            DataType::Bytes,
+        ] {
+            assert!(!dt.is_integer(), "{dt:?}");
+        }
     }
 
     #[test]

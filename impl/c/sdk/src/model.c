@@ -55,6 +55,22 @@ tdot_datatype_t tdot_datatype_parse(const char *name) {
     return TDOT_DT_NONE;
 }
 
+bool tdot_datatype_is_integer(tdot_datatype_t dt) {
+    switch (dt) {
+    case TDOT_DT_INT8:
+    case TDOT_DT_UINT8:
+    case TDOT_DT_INT16:
+    case TDOT_DT_UINT16:
+    case TDOT_DT_INT32:
+    case TDOT_DT_UINT32:
+    case TDOT_DT_INT64:
+    case TDOT_DT_UINT64:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void tdot_transform_init(tdot_transform_t *t) {
     t->multiplier = 1.0;
     t->divisor = 1.0;
@@ -66,6 +82,23 @@ double tdot_transform_apply(const tdot_transform_t *t, double value) {
     double divisor = (t->divisor == 0.0) ? 1.0 : t->divisor;
     return (value * t->multiplier * pow(10.0, t->decimal_shift) / divisor) +
            t->offset;
+}
+
+bool tdot_transform_is_identity(const tdot_transform_t *t) {
+    return t->multiplier == 1.0 && t->divisor == 1.0 && t->decimal_shift == 0 &&
+           t->offset == 0.0;
+}
+
+int tdot_transform_invert(const tdot_transform_t *t, double value, double *out) {
+    double divisor = (t->divisor == 0.0) ? 1.0 : t->divisor;
+    double scale = t->multiplier * pow(10.0, t->decimal_shift);
+    if (scale == 0.0 || !isfinite(scale))
+        return TDOT_TRANSFORM_NOT_INVERTIBLE;
+    double raw = (value - t->offset) * divisor / scale;
+    if (!isfinite(raw))
+        return TDOT_TRANSFORM_NOT_FINITE;
+    *out = raw;
+    return 0;
 }
 
 const char *tdot_quality_str(tdot_quality_t q) {

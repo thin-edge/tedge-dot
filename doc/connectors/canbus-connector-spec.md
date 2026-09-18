@@ -213,7 +213,7 @@ For `cmd/write/<id>` with `status: "init"`:
 
 1. Resolve the target point by `request.point` within the device.
 2. Reject (`failed`) if the point's `access` is `read`.
-3. **Typed write:** decode `request.value` into the signal's bit representation using `encode_can_signal(value, start_bit, bit_count, byte_order)`.
+3. **Typed write:** map `request.value` (engineering units) back through the point's `transform` (done by the SDK, contract §4.2), then encode it into the signal's bit representation using `encode_can_signal(value, start_bit, bit_count, byte_order)`.
 4. **Raw write:** take `request.raw` (hex string, must be exactly 8 bytes for classic / ≤ 64 bytes FD), send the frame verbatim.
 5. If the target message contains multiple signals (common in CAN), perform a **read-modify-write**:
    - Read the most-recently-received frame payload for this CAN ID from an in-memory cache (populated by the subscribe loop). If no cached frame exists, use a zero-filled payload.

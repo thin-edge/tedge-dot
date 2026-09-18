@@ -375,9 +375,10 @@ static int cmd_write(const args_t *a) {
         fprintf(stderr, "error: device %s: %s\n", dev->name, err);
         return 1;
     }
+    /* --value is in engineering units, like the `write` verb's value */
     tdot_value_t value;
     parse_value(a->value, &value);
-    int rc = conn->write_point(conn, dev, pt, &value, err, sizeof err);
+    int rc = tdot_connector_write(conn, dev, pt, &value, err, sizeof err);
     if (rc != 0)
         fprintf(stderr, "error: write %s/%s: %s\n", dev->name, pt->id, err);
     else

@@ -63,7 +63,9 @@ command whose `service` is not a plain topic level is **not forwarded**: the flo
 **Device parameters** (see [RFC 0003](../doc/rfc/0003-parameter-writes.md)): writable points are
 parameters. `ot-parameter-state` keeps one retained twin fragment per *parameter set*
 (`te/device/<device>///twin/<set>`, keyed by point id or by the key a point names) current from the samples (which echo each
-point's `access`) and from acknowledged writes. A point can name its own key in the fragment with
+point's `access`) and from acknowledged writes. Parameter values — in the twin and in a write — are
+in the point's engineering units (after its `transform`); the SDK converts a write back to the raw
+value before the connector encodes it (contract §4.2). A point can name its own key in the fragment with
 `meta.parameter.key`, keeping an id that is unique on the device:
 
 ```toml

@@ -37,6 +37,8 @@ size_t tdot_datatype_len(tdot_datatype_t dt);
 const char *tdot_datatype_str(tdot_datatype_t dt);
 /* Returns TDOT_DT_NONE when the name is unknown. */
 tdot_datatype_t tdot_datatype_parse(const char *name);
+/* True for the signed/unsigned integer datatypes (8 to 64 bits). */
+bool tdot_datatype_is_integer(tdot_datatype_t dt);
 
 /* ---- byte / word order --------------------------------------------------- */
 
@@ -82,6 +84,18 @@ typedef struct {
 
 void tdot_transform_init(tdot_transform_t *t);
 double tdot_transform_apply(const tdot_transform_t *t, double value);
+/* True when the transform leaves every value unchanged. */
+bool tdot_transform_is_identity(const tdot_transform_t *t);
+
+#define TDOT_TRANSFORM_NOT_INVERTIBLE (-1) /* multiplier * 10^decimal_shift == 0 */
+#define TDOT_TRANSFORM_NOT_FINITE (-2)     /* the raw value is NaN or infinite */
+
+/* The inverse, for writes (contract §4.2): the raw value that apply() maps to
+ * `value`,
+ *   raw = (value - offset) * divisor / (multiplier * 10^decimal_shift)
+ * with the same divisor-0-is-1 rule. Returns 0 with *out set, or one of the
+ * TDOT_TRANSFORM_* errors above (then *out is untouched). */
+int tdot_transform_invert(const tdot_transform_t *t, double value, double *out);
 
 /* ---- samples ------------------------------------------------------------- */
 

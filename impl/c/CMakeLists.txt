@@ -309,6 +309,12 @@ add_executable(tedge-dot-config tests/config.c)
 target_link_libraries(tedge-dot-config PRIVATE tedge_dot_sdk)
 add_test(NAME config COMMAND tedge-dot-config)
 
+# The write direction of the per-point transform (contract §4.2): the inverse math and the
+# one write path every command and the CLI take.
+add_executable(tedge-dot-write tests/write.c)
+target_link_libraries(tedge-dot-write PRIVATE tedge_dot_sdk)
+add_test(NAME write COMMAND tedge-dot-write)
+
 # OPC UA: the PKI directory and certificate trust over the PKI vectors the Rust build
 # validates too (connectors/opcua/conformance/tools/genpki.py; needs Python + cryptography).
 if(TDOT_OPCUA)
