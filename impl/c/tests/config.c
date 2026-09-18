@@ -1781,6 +1781,240 @@ static void check_local_only_settings(void) {
     cJSON_Delete(before);
 }
 
+/* ---- reporting policy (contract §5.3) -------------------------------------- */
+
+static char *json_text(cJSON *v) {
+    char *text = v ? cJSON_PrintUnformatted(v) : NULL;
+    cJSON_Delete(v);
+    return text;
+}
+
+/* `report` merges key by key through a library like `meta`, and the effective
+ * policy layers [connector], the device, then the point. Mirrors
+ * library.rs::report_merges_through_libraries_and_levels. */
+static void check_report_merges_through_libraries_and_levels(void) {
+    scratch_t s;
+    scratch_init(&s);
+    write_file(&s, "modbus/base.toml",
+               "[library]\nprotocol = \"modbus\"\n\n"
+               "[[point]]\nid       = \"flow\"\ndatatype = \"uint16\"\n"
+               "address  = { table = \"holding\", address = 7, count = 1 }\n"
+               "report   = { deadband = 1.0, min_interval = \"10s\" }\n\n"
+               "[[point]]\nid       = \"level\"\ndatatype = \"uint16\"\n"
+               "address  = { table = \"holding\", address = 8, count = 1 }\n");
+    char body[1024];
+    snprintf(body, sizeof body,
+             "[connector]\nprotocol = \"modbus\"\npoint_library_path = [\"%s\"]\n"
+             "report   = { max_interval = \"15m\" }\n\n"
+             "[[device]]\nname             = \"plc\"\n"
+             "protocol_address = { host = \"127.0.0.1\" }\npoints_from      = [\"base\"]\n"
+             "report           = { on_change = true, deadband = 5 }\n\n"
+             "  [[device.point]]\n  id     = \"flow\"\n  report = { deadband = 0.2 }\n",
+             s.dir);
+    write_file(&s, "etc/modbus.toml", body);
+    char err[512] = "";
+    tdot_config_t *cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg != NULL, "the report config must load: %s", err);
+    if (!cfg) {
+        scratch_free(&s);
+        return;
+    }
+    tdot_device_t *dev = &cfg->devices[0];
+    tdot_point_t *flow = tdot_device_point(dev, "flow");
+    tdot_point_t *level = tdot_device_point(dev, "level");
+    char *text = json_text(tdot_config_report_table(cfg, dev, flow));
+    CHECK(text && strcmp(text, "{\"max_interval\":\"15m\",\"on_change\":true,"
+                               "\"deadband\":0.2,\"min_interval\":\"10s\"}") == 0,
+          "flow's merged report, got %s", text ? text : "(null)");
+    free(text);
+    text = json_text(tdot_config_report_table(cfg, dev, level));
+    CHECK(text && strcmp(text, "{\"max_interval\":\"15m\",\"on_change\":true,"
+                               "\"deadband\":5}") == 0,
+          "level's merged report, got %s", text ? text : "(null)");
+    free(text);
+
+    /* The effective policy each point runs with. */
+    const int64_t S = 1000000000;
+    CHECK(flow->report.on_change && flow->report.deadband_kind == TDOT_DEADBAND_ABSOLUTE &&
+              flow->report.deadband == 0.2 && flow->report.min_interval == 10 * S &&
+              flow->report.max_interval == 900 * S && flow->report.debounce == 0,
+          "flow's effective policy");
+    CHECK(level->report.on_change && level->report.deadband == 5 &&
+              level->report.min_interval == 0 && level->report.max_interval == 900 * S,
+          "level's effective policy");
+
+    /* The descriptor's `reports` (§7): the declared levels as written, and the
+     * merged table of only the point whose own table changes it, keys in the
+     * canonical order. */
+    text = json_text(tdot_config_reports(cfg));
+    CHECK(text && strcmp(text,
+                         "{\"default\":{\"max_interval\":\"15m\"},"
+                         "\"devices\":[{\"device\":\"plc\",\"report\":{\"on_change\":true,"
+                         "\"deadband\":5}}],"
+                         "\"points\":[{\"device\":\"plc\",\"point\":\"flow\",\"report\":{"
+                         "\"on_change\":true,\"deadband\":0.2,\"min_interval\":\"10s\","
+                         "\"max_interval\":\"15m\"}}]}") == 0,
+          "reports descriptor, got %s", text ? text : "(null)");
+    free(text);
+    tdot_config_free(cfg);
+
+    /* A float stays a float and an integer an integer, as written; a point
+     * table that changes nothing is not listed; nothing configured, nothing
+     * described. */
+    write_file(&s, "etc/modbus.toml",
+               "[connector]\nprotocol = \"modbus\"\n"
+               "[[device]]\nname = \"plc\"\nprotocol_address = {}\n"
+               "  [[device.point]]\n  id = \"a\"\n  datatype = \"uint16\"\n  address = {}\n"
+               "  report = { deadband = 1.0 }\n"
+               "  [[device.point]]\n  id = \"b\"\n  datatype = \"uint16\"\n  address = {}\n"
+               "  report = { deadband = 1, min_interval = \"0\" }\n"
+               "  [[device.point]]\n  id = \"c\"\n  datatype = \"uint16\"\n  address = {}\n"
+               "  report = {}\n"
+               "  [[device.point]]\n  id = \"d\"\n  datatype = \"uint16\"\n  address = {}\n"
+               "  report = { deadband = 1e-7 }\n");
+    cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg != NULL, "the literal config must load: %s", err);
+    if (cfg) {
+        text = json_text(tdot_config_reports(cfg));
+        CHECK(text && strcmp(text,
+                             "{\"points\":["
+                             "{\"device\":\"plc\",\"point\":\"a\",\"report\":{\"deadband\":1.0}},"
+                             "{\"device\":\"plc\",\"point\":\"b\",\"report\":{\"deadband\":1,"
+                             "\"min_interval\":\"0\"}},"
+                             "{\"device\":\"plc\",\"point\":\"d\",\"report\":{\"deadband\":1e-7}}"
+                             "]}") == 0,
+              "values as written, got %s", text ? text : "(null)");
+        free(text);
+        tdot_config_free(cfg);
+    }
+    write_file(&s, "etc/modbus.toml",
+               "[connector]\nprotocol = \"modbus\"\n"
+               "[[device]]\nname = \"plc\"\nprotocol_address = {}\n"
+               "  [[device.point]]\n  id = \"a\"\n  datatype = \"uint16\"\n  address = {}\n");
+    cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg && !tdot_config_reports(cfg) &&
+              tdot_report_is_passthrough(&cfg->devices[0].points[0].report),
+          "no report anywhere: no `reports`, and the passthrough");
+    tdot_config_free(cfg);
+
+    /* An empty table declares nothing: no `reports` either, as in Rust. */
+    write_file(&s, "etc/modbus.toml",
+               "[connector]\nprotocol = \"modbus\"\nreport = {}\n"
+               "[[device]]\nname = \"plc\"\nprotocol_address = {}\nreport = {}\n"
+               "  [[device.point]]\n  id = \"a\"\n  datatype = \"uint16\"\n  address = {}\n");
+    cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg != NULL, "empty report tables must load: %s", err);
+    if (cfg) {
+        cJSON *reports = tdot_config_reports(cfg);
+        text = json_text(reports);
+        CHECK(!text, "empty report tables: no `reports`, got %s", text ? text : "(null)");
+        free(text);
+        tdot_config_free(cfg);
+    }
+    scratch_free(&s);
+}
+
+/* A `report` table is validated where it is written, with the Rust loader's
+ * messages; a conflict only through inheritance is not refused but raised.
+ * Mirrors library.rs::report_tables_are_validated_where_they_are. */
+static void check_report_tables_are_validated_where_they_are(void) {
+    scratch_t s;
+    scratch_init(&s);
+    static const struct {
+        const char *connector, *device, *point, *message;
+    } cases[] = {
+        {"report = { max_interval = \"soon\" }", "", "",
+         "[connector] report.max_interval must be a duration such as \"500ms\", \"2s\" or "
+         "\"5m\" (\"0\" switches it off)"},
+        {"", "report = { deadband = \"-1%\" }", "",
+         "device 'plc': report.deadband must be a number >= 0 or a percentage such as \"2%\""},
+        {"", "", "report = { min_interval = \"10s\", max_interval = \"5s\" }",
+         "device 'plc': point 'p': report.max_interval must be longer than "
+         "report.min_interval"},
+        {"", "", "report = { on_chnage = true }",
+         "unknown key 'on_chnage' in the report of point 'p' (did you mean 'on_change'?)"},
+        {"report = { deadbnd = 1 }", "", "",
+         "unknown key 'deadbnd' in the report of [connector] (did you mean 'deadband'?)"},
+        {"", "report = { debounce = 2 }", "",
+         "device 'plc': report.debounce must be a duration such as \"500ms\", \"2s\" or "
+         "\"5m\" (\"0\" switches it off)"},
+        {"", "", "report = { on_change = \"yes\" }",
+         "device 'plc': point 'p': report.on_change must be true or false"},
+        {"", "", "report = { deadband = -1 }",
+         "device 'plc': point 'p': report.deadband must be a number >= 0 or a percentage "
+         "such as \"2%\""},
+        {"", "", "report = { deadband = \"2\" }",
+         "device 'plc': point 'p': report.deadband must be a number >= 0 or a percentage "
+         "such as \"2%\""},
+        {"", "", "report = 5", "device 'plc': point 'p': report must be a table"},
+    };
+    char body[1024], err[1024];
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        snprintf(body, sizeof body,
+                 "[connector]\nprotocol = \"modbus\"\n%s\n[[device]]\nname = \"plc\"\n"
+                 "protocol_address = {}\n%s\n  [[device.point]]\n  id = \"p\"\n"
+                 "  datatype = \"uint16\"\n  address = {}\n  %s\n",
+                 cases[i].connector, cases[i].device, cases[i].point);
+        write_file(&s, "etc/modbus.toml", body);
+        err[0] = '\0';
+        tdot_config_t *cfg =
+            tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+        CHECK(!cfg && ends_with(err, cases[i].message), "case %zu: expected \"...%s\", got: %s",
+              i, cases[i].message, cfg ? "<loaded>" : err);
+        tdot_config_free(cfg);
+    }
+
+    /* Valid values load: a percentage with a fraction, "0" switching off. */
+    snprintf(body, sizeof body,
+             "[connector]\nprotocol = \"modbus\"\n\n[[device]]\nname = \"plc\"\n"
+             "protocol_address = {}\n\n  [[device.point]]\n  id = \"p\"\n"
+             "  datatype = \"uint16\"\n  address = {}\n"
+             "  report = { on_change = true, deadband = \"2.5%%\", min_interval = \"1h\", "
+             "max_interval = \"0\", debounce = \"500ms\" }\n");
+    write_file(&s, "etc/modbus.toml", body);
+    tdot_config_t *cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg && cfg->devices[0].points[0].report.deadband_kind == TDOT_DEADBAND_PERCENT &&
+              cfg->devices[0].points[0].report.deadband == 2.5 &&
+              cfg->devices[0].points[0].report.max_interval == 0 &&
+              cfg->devices[0].points[0].report.debounce == 500000000,
+          "valid report values must load: %s", cfg ? "" : err);
+    tdot_config_free(cfg);
+
+    /* Only within one table: a conflict through inheritance is accepted, and
+     * the heartbeat raised to twice the rate limit. */
+    snprintf(body, sizeof body,
+             "[connector]\nprotocol = \"modbus\"\nreport = { max_interval = \"30m\" }\n"
+             "[[device]]\nname = \"plc\"\nprotocol_address = {}\n"
+             "  [[device.point]]\n  id = \"p\"\n  datatype = \"uint16\"\n  address = {}\n"
+             "  report = { min_interval = \"1h\" }\n");
+    write_file(&s, "etc/modbus.toml", body);
+    cfg = tdot_config_load(scratch_path(&s, "etc/modbus.toml"), err, sizeof err);
+    CHECK(cfg && cfg->devices[0].points[0].report.max_interval == 7200LL * 1000000000,
+          "an inherited conflict must load with the heartbeat raised to 2h: %s",
+          cfg ? "" : err);
+    tdot_config_free(cfg);
+
+    /* In a point library, where it is written. */
+    write_file(&s, "modbus/bad.toml",
+               "[library]\nprotocol = \"modbus\"\n\n[[point]]\nid = \"p\"\n"
+               "datatype = \"uint16\"\naddress = {}\nreport = { deadband = \"x%\" }\n");
+    cfg = load_with_libs(&s, "\"bad\"", "", err, sizeof err);
+    CHECK(!cfg && strncmp(err, "point library '", 15) == 0 &&
+              ends_with(err, ": point 'p': report.deadband must be a number >= 0 or a "
+                             "percentage such as \"2%\""),
+          "a library's report is checked, got: %s", cfg ? "<loaded>" : err);
+    tdot_config_free(cfg);
+    write_file(&s, "modbus/bad.toml",
+               "[library]\nprotocol = \"modbus\"\n\n[[point]]\nid = \"p\"\n"
+               "datatype = \"uint16\"\naddress = {}\nreport = { max_intervl = \"1m\" }\n");
+    cfg = load_with_libs(&s, "\"bad\"", "", err, sizeof err);
+    CHECK(!cfg && strstr(err, "unknown key 'max_intervl' in the report of point 'p' "
+                              "(did you mean 'max_interval'?)"),
+          "a library's report keys are checked, got: %s", cfg ? "<loaded>" : err);
+    tdot_config_free(cfg);
+    scratch_free(&s);
+}
+
 int main(void) {
     check_local_only_settings();
     check_duration_grammar();
@@ -1819,6 +2053,8 @@ int main(void) {
     check_library_with_empty_point_list_is_rejected();
     check_stall_decision();
     check_watchdog_period();
+    check_report_merges_through_libraries_and_levels();
+    check_report_tables_are_validated_where_they_are();
 #ifdef TDOT_FEATURE_OPCUA
     check_opcua_security_config();
 #endif

@@ -21,6 +21,14 @@
 // (e.g. written by the Cloud Fieldbus import from a device type's measurementMapping), and
 // meta.measurement = false keeps the signal out of the measurements altogether (e.g. a parameter
 // whose value should reach the cloud only through its twin fragment).
+//
+// DEPRECATED: on_change, deadband, min_interval and debounce (flow params and meta.*). Use the
+// point's `report` table in the connector config instead (contract §5.3,
+// doc/reducing-data-volume.md). The SDK runtime applies it before the sample is published, so
+// every consumer sees the reduced stream, a flat signal still gets a heartbeat
+// (report.max_interval), and a rate-limited change is published when its window ends instead
+// of being dropped as it is here. The code below keeps working for existing configs; it is off
+// by default, so nothing is filtered twice unless both are configured.
 
 const decoder = new TextDecoder();
 

@@ -182,6 +182,14 @@ bit extraction in JavaScript is error-prone.
 The connector MUST NOT drop failed reads silently; it emits `bad` samples so flows/operators
 can react. Repeated identical `bad` samples MAY be rate-limited by the SDK.
 
+### 5.1 Reporting policy (`report`)
+
+The connector returns every reading; the SDK runtime applies the point's `report` table
+([contract §5.3](../contract/ot-connector-contract.md#53-reporting-policy-report-by-exception)) before a sample is published. See [Reducing data volume](../reducing-data-volume.md).
+
+Every Modbus point is polled, so a heartbeat (`max_interval`) is the point's next poll, and
+needs no extra protocol traffic. The packaged config sets `[connector] report = { max_interval = "30m" }`.
+
 ## 6. Write flow (`execute`, verb `write`)
 
 For `cmd/write/<id>` with `status: "init"`:

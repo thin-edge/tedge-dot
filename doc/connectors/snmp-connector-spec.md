@@ -217,6 +217,19 @@ Rust wraps every `AsyncSession` call in `tokio::time::timeout(request_timeout)` 
 when error-status is 0. The result echoes the value. Failures carry the SNMP error name
 (`notWritable`, `wrongType`, `noAccess`, …) in `reason`.
 
+### 5.3 Reporting policy (`report`)
+
+The SDK runtime applies the point's `report` table ([contract §5.3](../contract/ot-connector-contract.md#53-reporting-policy-report-by-exception)) to polled objects
+and to notification points before a sample is published. See [Reducing data volume](../reducing-data-volume.md).
+
+A polled object point supports a heartbeat (`max_interval`): its next poll. Trap and varbind
+points **cannot be read on demand** (Rust returns `Unsupported`, C `TDOT_READ_NO_DATA`), so
+they get no heartbeat and are published only when a notification arrives. Do not give a
+change filter or a debounce to a notification point whose event uses `meta.event.every`: two
+identical notifications are two occurrences, and the runtime warns about the combination. The
+packaged config shows `max_interval` only as a commented-out example, since without a change
+filter every polled object is already published at each poll.
+
 ## 6. Converting a value to a datatype (typed mode)
 
 Unchanged, and shared by polled objects and varbind points:

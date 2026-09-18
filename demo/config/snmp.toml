@@ -24,6 +24,13 @@ service_name  = "tedge-dot-snmp"
 poll_interval = "5s"
 log_level     = "info"
 
+# Heartbeat (reporting policy, see doc/reducing-data-volume.md). Left out on purpose: trap and
+# varbind points cannot be read on demand, so a heartbeat has no effect on them, and every
+# polled object is already published at each poll unless you give it a change filter. Set it
+# if you add one (e.g. report = { on_change = true } on a device), so a flat polled value is
+# still published every 30 minutes and Cumulocity keeps the device available.
+# report = { max_interval = "30m" }
+
 [mqtt]
 host = "127.0.0.1"
 port = 1883

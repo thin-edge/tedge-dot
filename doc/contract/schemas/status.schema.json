@@ -123,8 +123,45 @@
               "group": { "description": "meta.parameter.group as configured: a group name or a list of them." }
             }
           }
+        },
+        "reports": {
+          "type": "object",
+          "description": "The reporting policies (§5.3). `default` is [connector] report; `devices` lists each device declaring a report; `points` lists the effective (merged) policy of each point whose policy differs from its device's. A point's policy is its `points` entry if present, else its device's entry merged over `default`. Absent when no report is configured.",
+          "additionalProperties": false,
+          "properties": {
+            "default": { "$ref": "#/$defs/report" },
+            "devices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["device", "report"],
+                "additionalProperties": false,
+                "properties": {
+                  "device": { "type": "string", "minLength": 1 },
+                  "report": { "$ref": "#/$defs/report" }
+                }
+              }
+            },
+            "points": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["device", "point", "report"],
+                "additionalProperties": false,
+                "properties": {
+                  "device": { "type": "string", "minLength": 1 },
+                  "point": { "type": "string", "minLength": 1 },
+                  "report": { "$ref": "#/$defs/report" }
+                }
+              }
+            }
+          }
         }
       }
+    },
+    "report": {
+      "description": "A declared or effective reporting policy, as config.schema.json#/$defs/report defines it.",
+      "$ref": "https://thin-edge.io/ot-connector/config.schema.json#/$defs/report"
     }
   },
   "examples": [

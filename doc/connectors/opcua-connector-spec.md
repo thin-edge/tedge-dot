@@ -113,6 +113,19 @@ security_mode 'none' cannot be used with security_policy 'Basic256Sha256' …`.
 
 `{ node_id = "ns=2;s=Temperature" }` or `{ namespace = 2, identifier = "Temperature" | 1001 }`.
 
+### 3.5 Reporting policy (`report`)
+
+The SDK runtime applies the point's `report` table ([contract §5.3](../contract/ot-connector-contract.md#53-reporting-policy-report-by-exception)) to polled and
+subscribed nodes alike, before a sample is published. See [Reducing data volume](../reducing-data-volume.md).
+
+Both kinds of point support a heartbeat (`max_interval`). A polled node publishes its next
+poll. A subscribed node (monitored item) only notifies on a change, so a static node would
+otherwise go silent after its first value; once `max_interval` has passed without a publish,
+the runtime **reads the node on demand** through the ordinary read path, bounded by
+`operation_timeout`. A failed or timed-out read publishes a `bad` sample and affects the link
+status like a failed poll. The packaged config sets `[connector] report = { max_interval = "30m" }`,
+which keeps a device whose subscribed values never change available in Cumulocity.
+
 ## 4. The PKI directory
 
 ### 4.1 Layout

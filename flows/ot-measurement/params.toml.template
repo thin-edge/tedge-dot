@@ -5,6 +5,14 @@ point = ""
 # Convert boolean (coil) samples into 1/0 measurements.
 include_boolean = "true"
 
+# DEPRECATED: on_change, deadband, min_interval and debounce, and their meta.* overrides.
+# Declare the point's `report` table in the connector config instead, e.g.
+#   report = { deadband = 0.5, min_interval = "10s", max_interval = "30m" }
+# The SDK runtime then filters the samples for every consumer, not just this flow, sends a
+# heartbeat for a flat signal and publishes a held-back change when its rate-limit window ends.
+# See doc/reducing-data-volume.md. These settings still work; leave them off when `report` is
+# used, so the same samples are not filtered twice.
+
 # Only publish when the scaled value differs from the previously emitted one (per point).
 # Reduces cloud traffic for slowly-changing values. "true" or "false".
 on_change = "false"
@@ -27,6 +35,7 @@ debounce = ""
 #   [[device.point]]
 #   id = "boiler_temp"
 #   meta = { on_change = true, deadband = 0.5, min_interval = "10s" }
+# (deprecated: the equivalent today is report = { deadband = 0.5, min_interval = "10s" }).
 
 # Batch every series of a device into a single measurement message, flushed every
 # combine_interval. Reduces the number of measurements created in the cloud. "true" or "false".

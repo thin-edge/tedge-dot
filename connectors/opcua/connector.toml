@@ -80,12 +80,15 @@ default_mode     = "typed"
   # Incremented every second by the simulator; delivered via OPC-UA subscription
   # (monitored item) rather than polling — the other points opt out with subscribe = false
   # (static nodes only notify once, and bad_point would reject the device subscription).
-  # The free-form meta table is echoed verbatim in every sample envelope.
+  # The free-form meta table is echoed verbatim in every sample envelope. `report` is the
+  # reporting policy the SDK runtime applies (the value changes every second, so every push
+  # still passes); it is listed in the capability descriptor's `reports`, not in the sample.
   [[device.point]]
   id       = "ticks"
   datatype = "uint32"
   address  = { node_id = "ns=2;s=Ticks" }
-  meta     = { on_change = true, source = "sim" }
+  report   = { on_change = true }
+  meta     = { source = "sim" }
 
   # Subscribed, but pointing at the STATIC Temperature node, and it exists purely to make the
   # push tests discriminating.
@@ -102,6 +105,17 @@ default_mode     = "typed"
   datatype = "float64"
   unit     = "°C"
   address  = { node_id = "ns=2;s=Temperature" }
+
+  # The same static node, with a heartbeat (report.max_interval, contract §5.3). A subscription
+  # never pushes it again, so every sample after the first is the runtime's on-demand read of
+  # the node: what keeps a device whose values never change available in the cloud. See
+  # "A Heartbeat Keeps A Static Subscribed Node Reporting" in tests/opcua_e2e.robot.
+  [[device.point]]
+  id       = "temperature_heartbeat"
+  datatype = "float64"
+  unit     = "°C"
+  address  = { node_id = "ns=2;s=Temperature" }
+  report   = { on_change = true, max_interval = "3s" }
 
   # The Count node again, as a read-only parameter that names its own key in its set: the
   # `counters` twin fragment carries it as `count`, not as its id, and the capability descriptor

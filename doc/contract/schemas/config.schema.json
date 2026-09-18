@@ -57,6 +57,10 @@
           },
           "description": "Directories searched for the point libraries devices name in points_from (§3.4), most specific first. REPLACES the default path (/etc/tedge/plugins/ot/points.d then /usr/share/tedge-dot/points.d), so it must name at least one directory; omit the key to use the default. Relative entries resolve against this configuration file's own directory.",
           "minItems": 1
+        },
+        "report": {
+          "$ref": "#/$defs/report",
+          "description": "Default reporting policy for every point of this connector (§5.3)."
         }
       }
     },
@@ -92,6 +96,62 @@
       "type": "string",
       "pattern": "^[0-9]+(ms|s|m|h)$",
       "description": "Duration string, e.g. '500ms', '2s', '5m'."
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reporting policy (report by exception, contract §5.3), applied by the SDK runtime. Merged key by key: [connector] report, then the device's, then the point's in a point library, then the point's in the configuration. A duration of \"0\", on_change = false and deadband = 0 switch an inherited setting off.",
+      "properties": {
+        "on_change": {
+          "type": "boolean",
+          "description": "Publish only when the value differs from the last published one."
+        },
+        "deadband": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?%$"
+            }
+          ],
+          "description": "Minimum change from the last published value needed to publish: an absolute amount in the point's (transformed) units, or \"<p>%\" of the last published value's magnitude. Implies on_change; numeric values only."
+        },
+        "min_interval": {
+          "$ref": "#/$defs/report_duration",
+          "description": "Publish at most once per interval; a change arriving sooner is held and published when the interval ends."
+        },
+        "max_interval": {
+          "$ref": "#/$defs/report_duration",
+          "description": "Heartbeat: publish the next fresh reading once this long has passed since the last publish, even if unchanged. Pushed points are read on demand; points that cannot be read on demand (traps, CAN frames) get none. Must exceed min_interval when both are set in the same table."
+        },
+        "debounce": {
+          "$ref": "#/$defs/report_duration",
+          "description": "Publish a changed value only once it has stayed the same (within the deadband, if set) for this long. Implies on_change."
+        }
+      },
+      "examples": [
+        {
+          "on_change": true
+        },
+        {
+          "deadband": 0.5,
+          "min_interval": "10s"
+        },
+        {
+          "deadband": "2%"
+        },
+        {
+          "max_interval": "30m"
+        }
+      ]
+    },
+    "report_duration": {
+      "type": "string",
+      "pattern": "^([0-9]+ms|[0-9]+(\\.[0-9]+)?(s|m|h)?)$",
+      "description": "Duration string, e.g. '500ms', '10s', '30m'; \"0\" disables the setting."
     },
     "disabled_device": {
       "description": "A device switched off with enabled = false (§3.3). The connector reads nothing but its name and the names of its keys, so this schema requires nothing more of it; fields it does carry are still checked for shape.",
@@ -151,6 +211,10 @@
           "items": {
             "$ref": "#/$defs/point"
           }
+        },
+        "report": {
+          "$ref": "#/$defs/report",
+          "description": "Default reporting policy for this device's points (§5.3); merged over [connector] report."
         }
       },
       "allOf": [
@@ -305,9 +369,13 @@
             }
           }
         },
+        "report": {
+          "$ref": "#/$defs/report",
+          "description": "This point's reporting policy (§5.3); merged over the device's and [connector]'s report."
+        },
         "meta": {
           "type": "object",
-          "description": "Free-form signal metadata, echoed verbatim as 'meta' in every sample envelope for this point. Never interpreted by the connector; flows read it for per-signal behaviour (e.g. on_change, deadband, min_interval, debounce) and consumers may carry arbitrary descriptive fields."
+          "description": "Free-form signal metadata, echoed verbatim as 'meta' in every sample envelope for this point. Never interpreted by the connector; flows read it for per-signal behaviour (measurement naming, alarms, events, parameters) and consumers may carry arbitrary descriptive fields. Reporting behaviour (on change, deadband, rate limit, heartbeat) belongs in 'report', not here."
         },
         "subscribe": {
           "type": "boolean",

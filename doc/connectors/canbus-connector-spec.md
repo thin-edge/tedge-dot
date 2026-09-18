@@ -205,6 +205,20 @@ The connector implements `subscribe()` (not `read_points()`).
 The connector MUST NOT drop frames silently; bad-quality samples are emitted so flows/operators
 can react.
 
+### 5.1 Reporting policy (`report`)
+
+The connector publishes one sample per received frame; the SDK runtime applies the point's
+`report` table ([contract §5.3](../contract/ot-connector-contract.md#53-reporting-policy-report-by-exception)) before it is published. See
+[Reducing data volume](../reducing-data-volume.md).
+
+A CAN signal **cannot be read on demand**, so it gets no heartbeat: `max_interval` has no
+effect, and a signal is published only when its frame arrives. The C build's `read_point`
+returns `TDOT_READ_NO_DATA` when no new frame has arrived since the point's previous read, so a
+cached frame is never published again as a fresh reading. The change filters, `min_interval`
+and `debounce` apply as usual; for a frame the bus repeats periodically, `on_change` or a
+deadband is usually the biggest saving. The packaged config shows `max_interval` only as a
+commented-out example.
+
 ---
 
 ## 6. Write flow (`execute`, verb `write`)

@@ -23,6 +23,10 @@ protocol      = "snmp"
 service_name  = "tedge-dot"
 log_level     = "info"
 poll_interval = "1s"
+# A short heartbeat (contract §5.3), so "A Trap Point Gets No Heartbeat" can show that a point
+# the connector cannot read on demand is left alone. The polled objects publish every reading
+# anyway (no change filter), so it changes nothing for them.
+report        = { max_interval = "2s" }
 
 [mqtt]
 host = "broker"

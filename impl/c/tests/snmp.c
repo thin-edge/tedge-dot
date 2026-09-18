@@ -1169,9 +1169,9 @@ static void check_notifications(const char *vectors) {
 
     tdot_sample_t rs;
     tdot_sample_init(&rs);
-    CHECK(conn->read_point(conn, dev, &dev->points[0], &rs) == 0 &&
-              rs.quality == TDOT_Q_BAD,
-          "reading a trap point is a bad sample on a healthy transport");
+    CHECK(conn->read_point(conn, dev, &dev->points[0], &rs) == TDOT_READ_NO_DATA,
+          "a trap point has nothing to read on demand (TDOT_READ_NO_DATA), which "
+          "is neither a bad sample nor a transport failure");
     char werr[160];
     tdot_value_t wv = {.kind = TDOT_VAL_BOOL, .b = true};
     CHECK(conn->write_point(conn, dev, &dev->points[1], &wv, werr, sizeof werr) != 0,
@@ -1650,6 +1650,8 @@ static void poll_round(tdot_connector_t *conn, tdot_device_t *dev,
         tdot_sample_t s;
         tdot_sample_init(&s);
         int rc = conn->read_point(conn, dev, pt, &s);
+        if (rc == TDOT_READ_NO_DATA)
+            continue; /* the runtime publishes nothing for it */
         capture_sink(cap, dev, pt, &s);
         if (cap->n)
             cap->items[cap->n - 1].quality =

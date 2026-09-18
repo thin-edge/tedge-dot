@@ -27,9 +27,16 @@ typedef struct {
     void *discover_ctx;
 } tdot_run_opts_t;
 
-/* Build the sample envelope JSON for one read result. Caller frees. */
+/* Build the sample envelope JSON for one read result, stamped now. Caller
+ * frees. */
 char *tdot_envelope_sample(const tdot_config_t *cfg, const tdot_device_t *dev,
                            const tdot_point_t *pt, const tdot_sample_t *s);
+/* The same, stamped with the time the reading was taken (`ts` RFC 3339, `ts_ms`
+ * epoch milliseconds): a reading the reporting policy held back (§5.3) is
+ * published later with its own time. */
+char *tdot_envelope_sample_at(const tdot_config_t *cfg, const tdot_device_t *dev,
+                              const tdot_point_t *pt, const tdot_sample_t *s,
+                              const char *ts, double ts_ms);
 
 /* Monotonic clock (seconds) and wall-clock helpers. */
 double tdot_mono(void);

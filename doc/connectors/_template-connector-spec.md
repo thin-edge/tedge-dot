@@ -66,6 +66,18 @@ Specify how raw bytes map to the contract datatypes via the SDK `decode_primitiv
 Describe `read_points` (polled) and/or `subscribe` (push): batching strategy, error → `bad`
 sample behaviour, what goes in `addr`.
 
+### 5.1 Reporting policy (`report`)
+
+The connector returns every reading and never filters on its own; the SDK runtime applies the
+point's `report` table ([contract §5.3](../contract/ot-connector-contract.md#53-reporting-policy-report-by-exception)). See [Reducing data volume](../reducing-data-volume.md).
+
+State whether this protocol's points can be **read on demand**, which decides whether a
+heartbeat (`max_interval`) applies: a polled point publishes its next poll, a pushed point is
+read through `read_points` / `read_point`, and a point that cannot be read (a received frame, a
+notification) gets none. Such a point must return `Unsupported` (Rust) or `TDOT_READ_NO_DATA`
+(C), not a `bad` sample. State whether the packaged config sets
+`[connector] report = { max_interval = "30m" }`, or shows it only as a comment.
+
 ## 6. Write flow
 
 Describe `execute` for verb `write` (and any extra verbs you declare): typed vs raw encoding,

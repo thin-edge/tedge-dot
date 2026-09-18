@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,16 +25,16 @@
 static const char *const TOP_KEYS[] = {"connector", "mqtt", "connection", "device", NULL};
 static const char *const CONNECTOR_KEYS[] = {
     "protocol",          "service_name",  "poll_interval",      "log_level",
-    "operation_timeout", "stall_timeout", "point_library_path", NULL};
+    "operation_timeout", "stall_timeout", "point_library_path", "report", NULL};
 static const char *const MQTT_KEYS[] = {"host", "port", NULL};
 static const char *const DEVICE_KEYS[] = {
     "name",         "type",        "protocol_address", "poll_interval",
     "default_mode", "points_from", "point",            "enabled",
-    NULL};
+    "report",       NULL};
 static const char *const POINT_KEYS[] = {
     "id",      "mode",   "datatype", "endianness",  "word_order",
     "poll_interval", "address", "access", "unit", "name", "description",
-    "transform", "meta", "subscribe", "enabled", NULL};
+    "transform", "meta", "subscribe", "enabled", "report", NULL};
 static const char *const TRANSFORM_KEYS[] = {"multiplier", "divisor",
                                              "decimal_shift", "offset", NULL};
 static const char *const LIBRARY_TOP_KEYS[] = {"library", "point", NULL};
@@ -162,6 +163,12 @@ static int check_point_keys(toml_table_t *pt, char *err, size_t errlen) {
                  id.ok ? id.u.s : "<unnamed>");
         rc = check_keys(transform, TRANSFORM_KEYS, place, err, errlen);
     }
+    toml_table_t *report = toml_table_in(pt, "report");
+    if (rc == 0 && report) {
+        snprintf(place, sizeof place, "the report of point '%s'",
+                 id.ok ? id.u.s : "<unnamed>");
+        rc = check_keys(report, TDOT_REPORT_KEYS, place, err, errlen);
+    }
     if (id.ok)
         free(id.u.s);
     return rc;
@@ -177,6 +184,10 @@ static int check_document_keys(toml_table_t *root, char *err, size_t errlen) {
     toml_table_t *conn = toml_table_in(root, "connector");
     if (conn && check_keys(conn, CONNECTOR_KEYS, "[connector]", err, errlen) != 0)
         return -1;
+    toml_table_t *conn_report = conn ? toml_table_in(conn, "report") : NULL;
+    if (conn_report && check_keys(conn_report, TDOT_REPORT_KEYS, "the report of [connector]",
+                                  err, errlen) != 0)
+        return -1;
     toml_table_t *mqtt = toml_table_in(root, "mqtt");
     if (mqtt && check_keys(mqtt, MQTT_KEYS, "[mqtt]", err, errlen) != 0)
         return -1;
@@ -189,9 +200,16 @@ static int check_document_keys(toml_table_t *root, char *err, size_t errlen) {
         toml_datum_t name = toml_string_in(dt, "name");
         char place[256];
         snprintf(place, sizeof place, "device '%s'", name.ok ? name.u.s : "<unnamed>");
+        char report_place[300];
+        snprintf(report_place, sizeof report_place, "the report of device '%s'",
+                 name.ok ? name.u.s : "<unnamed>");
         if (name.ok)
             free(name.u.s);
         if (check_keys(dt, DEVICE_KEYS, place, err, errlen) != 0)
+            return -1;
+        toml_table_t *dev_report = toml_table_in(dt, "report");
+        if (dev_report &&
+            check_keys(dev_report, TDOT_REPORT_KEYS, report_place, err, errlen) != 0)
             return -1;
         toml_array_t *points = toml_array_in(dt, "point");
         int npoints = points ? toml_array_nelem(points) : 0;
@@ -392,6 +410,82 @@ static void merge_meta(char **dst_json, toml_table_t *meta) {
 
 static bool key_present(toml_table_t *tbl, const char *key);
 
+/* ---- report tables (contract §5.3) -----------------------------------------
+ * Kept as cJSON objects whose numbers are raw text, exactly as written: the
+ * capability descriptor echoes them (§7), and an integer must stay an integer
+ * and a float a float there, as the Rust build (serde_json) prints them. */
+
+/* The shortest text that reads back as the same double, with ".0" on a whole
+ * number so it stays a float, and a bare exponent ("1e-7", not "1e-07"). */
+static void format_float(double d, char *buf, size_t len) {
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(buf, len, "%.*g", prec, d);
+        if (strtod(buf, NULL) == d)
+            break;
+    }
+    char *e = strchr(buf, 'e');
+    if (e) {
+        char *digits = e + 1;
+        if (*digits == '+')
+            memmove(digits, digits + 1, strlen(digits));
+        if (*digits == '-')
+            digits++;
+        while (digits[0] == '0' && digits[1])
+            memmove(digits, digits + 1, strlen(digits));
+    } else if (!strchr(buf, '.') && isfinite(d)) {
+        size_t n = strlen(buf);
+        snprintf(buf + n, len - n, ".0");
+    }
+}
+
+static cJSON *report_to_json(toml_table_t *t) {
+    cJSON *obj = cJSON_CreateObject();
+    for (int i = 0;; i++) {
+        const char *key = toml_key_in(t, i);
+        if (!key)
+            break;
+        toml_datum_t d;
+        char num[64];
+        if ((d = toml_string_in(t, key)).ok) {
+            cJSON_AddItemToObject(obj, key, cJSON_CreateString(d.u.s));
+            free(d.u.s);
+        } else if ((d = toml_bool_in(t, key)).ok) {
+            cJSON_AddItemToObject(obj, key, cJSON_CreateBool(d.u.b));
+        } else if ((d = toml_int_in(t, key)).ok) {
+            snprintf(num, sizeof num, "%lld", (long long)d.u.i);
+            cJSON_AddItemToObject(obj, key, cJSON_CreateRaw(num));
+        } else if ((d = toml_double_in(t, key)).ok) {
+            format_float(d.u.d, num, sizeof num);
+            cJSON_AddItemToObject(obj, key, cJSON_CreateRaw(num));
+        }
+        /* Nothing else survives check_report_values. */
+    }
+    return obj;
+}
+
+/* Merge `over` into `*base` key by key (creating it), as a later definition
+ * of a point patches a library's `report`: DEEP_MERGED_KEYS in the Rust
+ * resolver, with `meta` and `transform`. */
+static void merge_report_json(cJSON **base, const cJSON *over) {
+    if (!over)
+        return;
+    if (!*base)
+        *base = cJSON_CreateObject();
+    const cJSON *x;
+    cJSON_ArrayForEach(x, over) {
+        if (cJSON_GetObjectItemCaseSensitive(*base, x->string))
+            cJSON_ReplaceItemInObjectCaseSensitive(*base, x->string, cJSON_Duplicate(x, 1));
+        else
+            cJSON_AddItemToObject(*base, x->string, cJSON_Duplicate(x, 1));
+    }
+}
+
+static void merge_report(cJSON **base, toml_table_t *report) {
+    cJSON *incoming = report_to_json(report);
+    merge_report_json(base, incoming);
+    cJSON_Delete(incoming);
+}
+
 /* Defaults for a point that has no definition yet. */
 static void init_point(tdot_point_t *point, double device_interval,
                        tdot_mode_t device_mode) {
@@ -502,6 +596,75 @@ static int check_shape(toml_table_t *tbl, const char *key, shape_t shape,
     return -1;
 }
 
+#define REPORT_DURATION_EXPECTED                                                         \
+    "a duration such as \"500ms\", \"2s\" or \"5m\" (\"0\" switches it off)"
+
+/* A `report` duration of `tbl`, when present: -1 with `err` filled when it is
+ * not one, else 0 with `*ns` set (0 when absent or off). */
+static int report_duration(toml_table_t *tbl, const char *key, double *secs, char *err,
+                           size_t errlen) {
+    *secs = 0;
+    if (!key_present(tbl, key))
+        return 0;
+    toml_datum_t d = toml_string_in(tbl, key);
+    *secs = d.ok ? tdot_duration_parse(d.u.s) : -1.0;
+    if (d.ok)
+        free(d.u.s);
+    if (*secs < 0) {
+        snprintf(err, errlen, "report.%s must be " REPORT_DURATION_EXPECTED, key);
+        return -1;
+    }
+    return 0;
+}
+
+/* The values of the `report` table of `owner` (a connector, device or point
+ * table), when it has one; the caller prefixes the place. Same rules and
+ * messages as report.rs `check_values`: a heartbeat at or under the rate limit
+ * is refused within ONE table, while one that arises through inheritance is
+ * the loader's to raise (tdot_report_effective). */
+static int check_report_values(toml_table_t *owner, char *err, size_t errlen) {
+    if (!key_present(owner, "report"))
+        return 0;
+    toml_table_t *report = toml_table_in(owner, "report");
+    if (!report) {
+        snprintf(err, errlen, "report must be a table");
+        return -1;
+    }
+    if (key_present(report, "on_change") && !toml_bool_in(report, "on_change").ok) {
+        snprintf(err, errlen, "report.on_change must be true or false");
+        return -1;
+    }
+    if (key_present(report, "deadband")) {
+        bool ok = false;
+        toml_datum_t d;
+        if ((d = toml_int_in(report, "deadband")).ok) {
+            ok = d.u.i >= 0;
+        } else if ((d = toml_double_in(report, "deadband")).ok) {
+            ok = isfinite(d.u.d) && d.u.d >= 0;
+        } else if ((d = toml_string_in(report, "deadband")).ok) {
+            ok = tdot_report_parse_percent(d.u.s, NULL);
+            free(d.u.s);
+        }
+        if (!ok) {
+            snprintf(err, errlen,
+                     "report.deadband must be a number >= 0 or a percentage such as \"2%%\"");
+            return -1;
+        }
+    }
+    double min, max, debounce;
+    if (report_duration(report, "min_interval", &min, err, errlen) ||
+        report_duration(report, "max_interval", &max, err, errlen) ||
+        report_duration(report, "debounce", &debounce, err, errlen))
+        return -1;
+    /* Compared as whole nanoseconds, as the Rust build compares Durations. */
+    long long min_ns = llround(min * 1e9), max_ns = llround(max * 1e9);
+    if (min_ns > 0 && max_ns > 0 && max_ns <= min_ns) {
+        snprintf(err, errlen, "report.max_interval must be longer than report.min_interval");
+        return -1;
+    }
+    return 0;
+}
+
 static int check_point_values(toml_table_t *pt, char *err, size_t errlen) {
     if (check_one_of(pt, "mode", MODES, err, errlen) ||
         check_one_of(pt, "datatype", DATATYPES, err, errlen) ||
@@ -525,7 +688,7 @@ static int check_point_values(toml_table_t *pt, char *err, size_t errlen) {
         check_shape(pt, "subscribe", SHAPE_BOOL, "", err, errlen) ||
         check_shape(pt, "enabled", SHAPE_BOOL, "", err, errlen))
         return -1;
-    return 0;
+    return check_report_values(pt, err, errlen);
 }
 
 /* The values of one point definition's contract fields. Checked on each
@@ -621,6 +784,12 @@ static void apply_point_table(toml_table_t *pt, tdot_point_t *point) {
     toml_table_t *meta = toml_table_in(pt, "meta");
     if (meta)
         merge_meta(&point->meta_json, meta);
+
+    /* `report` merges key by key too (§5.3): a site's `deadband` on a library
+     * point keeps the library's `min_interval`. */
+    toml_table_t *report = toml_table_in(pt, "report");
+    if (report)
+        merge_report(&point->report_table, report);
 
     d = toml_bool_in(pt, "subscribe");
     if (d.ok)
@@ -1050,6 +1219,11 @@ static void free_point(tdot_point_t *p) {
     free(p->meta_json);
     free(p->addr_json);
     free(p->proto);
+    cJSON_Delete(p->report_table);
+    if (p->report_state) {
+        tdot_report_free(p->report_state);
+        free(p->report_state);
+    }
 }
 
 /* Resolve `points_from` for one device: every library in order, then the
@@ -1180,6 +1354,41 @@ static int resolve_device_points(tdot_config_t *cfg, tdot_device_t *dev,
     return 0;
 }
 
+/* True when the point's `meta.event.every` is true: an event per reading. */
+static bool raises_event_per_reading(const tdot_point_t *pt) {
+    cJSON *meta = pt->meta_json ? cJSON_Parse(pt->meta_json) : NULL;
+    const cJSON *event = cJSON_GetObjectItemCaseSensitive(meta, "event");
+    bool every = cJSON_IsObject(event) &&
+                 cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(event, "every"));
+    cJSON_Delete(meta);
+    return every;
+}
+
+/* Each point's effective reporting policy (§5.3): [connector], then the
+ * device, then the point, merged key by key. A single table cannot put its
+ * heartbeat at or under its rate limit (check_report_values), but inheritance
+ * can -- a point's `min_interval = "1h"` under a connector-wide
+ * `max_interval = "30m"` -- and that config is not refused: the heartbeat is
+ * raised, with a warning naming the point. */
+static void resolve_point_reports(const tdot_config_t *cfg, tdot_device_t *dev) {
+    for (size_t j = 0; j < dev->npoints; j++) {
+        tdot_point_t *pt = &dev->points[j];
+        cJSON *merged = tdot_config_report_table(cfg, dev, pt);
+        char warning[256];
+        if (tdot_report_effective(merged, &pt->report, warning, sizeof warning))
+            fprintf(stderr, "warn  point '%s' of device '%s': %s\n", pt->id, dev->name,
+                    warning);
+        cJSON_Delete(merged);
+        /* A lint on free-form metadata only; it never changes behaviour. */
+        if (tdot_report_filters_changes(&pt->report) && raises_event_per_reading(pt))
+            fprintf(stderr,
+                    "warn  point '%s' of device '%s' raises an event for every reading "
+                    "(meta.event.every) but its report filters changes; readings it "
+                    "withholds raise no event\n",
+                    pt->id, dev->name);
+    }
+}
+
 tdot_config_t *tdot_config_load(const char *path, char *err, size_t errlen) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
@@ -1242,6 +1451,14 @@ tdot_config_t *tdot_config_load(const char *path, char *err, size_t errlen) {
         cfg->poll_interval_s = tdot_duration_parse(d.u.s);
         free(d.u.s);
     }
+    /* Before the devices, as the Rust loader checks it. */
+    if (check_report_values(conn, why, sizeof why) != 0) {
+        snprintf(err, errlen, "%s: [connector] %s", path, why);
+        goto fail;
+    }
+    toml_table_t *conn_report = toml_table_in(conn, "report");
+    if (conn_report)
+        cfg->report_table = report_to_json(conn_report);
 
     /* Liveness bounds (contract §8.1). Both are optional; an unparseable value
      * falls back to the default with a warning rather than failing the load,
@@ -1369,7 +1586,8 @@ tdot_config_t *tdot_config_load(const char *path, char *err, size_t errlen) {
         tdot_device_t *dev = &cfg->devices[cfg->ndevices++];
         dev->name = d.u.s;
         if (check_one_of(dt, "default_mode", MODES, why, sizeof why) != 0 ||
-            check_duration(dt, "poll_interval", why, sizeof why) != 0) {
+            check_duration(dt, "poll_interval", why, sizeof why) != 0 ||
+            check_report_values(dt, why, sizeof why) != 0) {
             snprintf(err, errlen, "%s: device '%s': %s", path, dev->name, why);
             goto fail;
         }
@@ -1411,6 +1629,10 @@ tdot_config_t *tdot_config_load(const char *path, char *err, size_t errlen) {
         if (resolve_device_points(cfg, dev, dt, conn, device_mode, base_dir, err,
                                   errlen) != 0)
             goto fail;
+        toml_table_t *dev_report = toml_table_in(dt, "report");
+        if (dev_report)
+            dev->report_table = report_to_json(dev_report);
+        resolve_point_reports(cfg, dev);
     }
     return cfg;
 
@@ -1479,6 +1701,7 @@ static void free_contents(tdot_config_t *cfg, bool keep_path) {
         free(dev->points_from);
         free(dev->name);
         free(dev->type);
+        cJSON_Delete(dev->report_table);
         free(dev->proto); /* connectors keep flat per-device state here and
                              release transports in disconnect_device() */
     }
@@ -1489,6 +1712,7 @@ static void free_contents(tdot_config_t *cfg, bool keep_path) {
     free(cfg->service_name);
     free(cfg->log_level);
     free(cfg->mqtt_host);
+    cJSON_Delete(cfg->report_table);
     if (cfg->root)
         toml_free(cfg->root);
     /* The point tables borrowed by dev->points[].address live in these. */
@@ -1512,4 +1736,85 @@ tdot_point_t *tdot_device_point(tdot_device_t *dev, const char *id) {
         if (strcmp(dev->points[j].id, id) == 0)
             return &dev->points[j];
     return NULL;
+}
+
+cJSON *tdot_config_report_table(const tdot_config_t *cfg, const tdot_device_t *dev,
+                                const tdot_point_t *pt) {
+    cJSON *table = cJSON_CreateObject();
+    merge_report_json(&table, cfg ? cfg->report_table : NULL);
+    merge_report_json(&table, dev ? dev->report_table : NULL);
+    merge_report_json(&table, pt ? pt->report_table : NULL);
+    return table;
+}
+
+/* `table` with its keys in the canonical order (TDOT_REPORT_KEYS), values as
+ * written, so the two builds print the same descriptor. */
+static cJSON *canonical_report(const cJSON *table) {
+    cJSON *out = cJSON_CreateObject();
+    for (const char *const *k = TDOT_REPORT_KEYS; *k; k++) {
+        const cJSON *v = cJSON_GetObjectItemCaseSensitive(table, *k);
+        if (v)
+            cJSON_AddItemToObject(out, *k, cJSON_Duplicate(v, 1));
+    }
+    return out;
+}
+
+static bool same_report(const cJSON *a, const cJSON *b) {
+    cJSON *ca = canonical_report(a), *cb = canonical_report(b);
+    char *ta = cJSON_PrintUnformatted(ca), *tb = cJSON_PrintUnformatted(cb);
+    bool same = ta && tb && strcmp(ta, tb) == 0;
+    free(ta);
+    free(tb);
+    cJSON_Delete(ca);
+    cJSON_Delete(cb);
+    return same;
+}
+
+cJSON *tdot_config_reports(const tdot_config_t *cfg) {
+    cJSON *reports = cJSON_CreateObject();
+    /* An empty table (`report = {}`) declares nothing, and is left out as the
+     * Rust build leaves it out. */
+    if (cfg->report_table && cfg->report_table->child)
+        cJSON_AddItemToObject(reports, "default", canonical_report(cfg->report_table));
+    cJSON *devices = NULL, *points = NULL;
+    for (size_t i = 0; i < cfg->ndevices; i++) {
+        const tdot_device_t *dev = &cfg->devices[i];
+        if (dev->report_table && dev->report_table->child) {
+            if (!devices)
+                devices = cJSON_CreateArray();
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddStringToObject(entry, "device", dev->name);
+            cJSON_AddItemToObject(entry, "report", canonical_report(dev->report_table));
+            cJSON_AddItemToArray(devices, entry);
+        }
+        /* A point is listed only when its own table changes what its device
+         * gives it, which keeps the retained descriptor small. */
+        cJSON *device_table = tdot_config_report_table(cfg, dev, NULL);
+        for (size_t j = 0; j < dev->npoints; j++) {
+            const tdot_point_t *pt = &dev->points[j];
+            if (!pt->report_table)
+                continue;
+            cJSON *merged = tdot_config_report_table(cfg, dev, pt);
+            if (!same_report(merged, device_table)) {
+                if (!points)
+                    points = cJSON_CreateArray();
+                cJSON *entry = cJSON_CreateObject();
+                cJSON_AddStringToObject(entry, "device", dev->name);
+                cJSON_AddStringToObject(entry, "point", pt->id);
+                cJSON_AddItemToObject(entry, "report", canonical_report(merged));
+                cJSON_AddItemToArray(points, entry);
+            }
+            cJSON_Delete(merged);
+        }
+        cJSON_Delete(device_table);
+    }
+    if (devices)
+        cJSON_AddItemToObject(reports, "devices", devices);
+    if (points)
+        cJSON_AddItemToObject(reports, "points", points);
+    if (!reports->child) {
+        cJSON_Delete(reports);
+        return NULL;
+    }
+    return reports;
 }

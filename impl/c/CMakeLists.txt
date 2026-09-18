@@ -43,6 +43,7 @@ add_library(tedge_dot_sdk STATIC
   sdk/src/config.c
   sdk/src/descriptor.c
   sdk/src/envelope.c
+  sdk/src/report.c
   sdk/src/runtime.c
   sdk/src/factory.c
 )
@@ -304,6 +305,13 @@ target_link_libraries(tedge-dot-golden PRIVATE tedge_dot_sdk)
 add_test(NAME golden-vectors
          COMMAND tedge-dot-golden
                  ${CMAKE_CURRENT_SOURCE_DIR}/../rust/crates/sdk/conformance/vectors.json)
+
+# The reporting policy (contract §5.3): the shared vectors the Rust SDK's report.rs runs too.
+add_executable(tedge-dot-report tests/report.c)
+target_link_libraries(tedge-dot-report PRIVATE tedge_dot_sdk)
+add_test(NAME report-vectors
+         COMMAND tedge-dot-report
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../../doc/contract/test-vectors/report/vectors.json)
 
 # Device parameters / `describe`: the same assertions as the Rust SDK's
 # descriptor tests (impl/rust/crates/sdk/src/descriptor.rs), over the same fixture config.

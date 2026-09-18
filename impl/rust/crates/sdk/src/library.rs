@@ -54,7 +54,7 @@ const CONNECTOR_ONLY_KEYS: [&str; 4] = ["connector", "mqtt", "connection", "devi
 /// Point fields that are merged key by key when a later definition overrides an earlier one.
 /// Everything else — `address` included — is replaced wholesale, because a partial protocol
 /// address is not a meaningful thing to inherit.
-const DEEP_MERGED_KEYS: [&str; 2] = ["meta", "transform"];
+const DEEP_MERGED_KEYS: [&str; 3] = ["meta", "transform", "report"];
 
 // The keys a contract-level table may carry (§3.3). Anything else is refused, with the nearest
 // known key suggested, so a misspelt setting — `polling_interval` for `poll_interval` — is
@@ -70,6 +70,7 @@ const CONNECTOR_KEYS: &[&str] = &[
     "operation_timeout",
     "stall_timeout",
     "point_library_path",
+    "report",
 ];
 const MQTT_KEYS: &[&str] = &["host", "port"];
 const DEVICE_KEYS: &[&str] = &[
@@ -81,6 +82,7 @@ const DEVICE_KEYS: &[&str] = &[
     "points_from",
     "point",
     "enabled",
+    "report",
 ];
 const POINT_KEYS: &[&str] = &[
     "id",
@@ -98,6 +100,7 @@ const POINT_KEYS: &[&str] = &[
     "meta",
     "subscribe",
     "enabled",
+    "report",
 ];
 const TRANSFORM_KEYS: &[&str] = &["multiplier", "divisor", "decimal_shift", "offset"];
 const LIBRARY_TOP_KEYS: &[&str] = &["library", "point"];
@@ -168,6 +171,9 @@ fn check_document(doc: &Value) -> Result<(), String> {
     check_keys(doc, TOP_KEYS, "the top level")?;
     if let Some(connector) = doc.get("connector") {
         check_keys(connector, CONNECTOR_KEYS, "[connector]")?;
+        if let Some(report) = connector.get("report") {
+            check_keys(report, crate::report::REPORT_KEYS, "the report of [connector]")?;
+        }
     }
     if let Some(mqtt) = doc.get("mqtt") {
         check_keys(mqtt, MQTT_KEYS, "[mqtt]")?;
@@ -175,6 +181,9 @@ fn check_document(doc: &Value) -> Result<(), String> {
     for device in doc.get("device").and_then(Value::as_array).into_iter().flatten() {
         let name = device.get("name").and_then(Value::as_str).unwrap_or("<unnamed>");
         check_keys(device, DEVICE_KEYS, &format!("device '{name}'"))?;
+        if let Some(report) = device.get("report") {
+            check_keys(report, crate::report::REPORT_KEYS, &format!("the report of device '{name}'"))?;
+        }
         for point in device.get("point").and_then(Value::as_array).into_iter().flatten() {
             check_point_keys(point)?;
         }
@@ -188,6 +197,9 @@ fn check_point_keys(point: &Value) -> Result<(), String> {
     check_keys(point, POINT_KEYS, &format!("point '{id}'"))?;
     if let Some(transform) = point.get("transform") {
         check_keys(transform, TRANSFORM_KEYS, &format!("the transform of point '{id}'"))?;
+    }
+    if let Some(report) = point.get("report") {
+        check_keys(report, crate::report::REPORT_KEYS, &format!("the report of point '{id}'"))?;
     }
     Ok(())
 }
@@ -287,7 +299,13 @@ fn check_point_values(point: &Value) -> Result<(), String> {
     }
     check_type(point, "meta", Value::is_table, "a table")?;
     check_type(point, "subscribe", Value::is_bool, "true or false")?;
-    check_type(point, "enabled", Value::is_bool, "true or false")
+    check_type(point, "enabled", Value::is_bool, "true or false")?;
+    check_report(point)
+}
+
+/// The `report` table of a connector, device or point (§5.3), when present.
+fn check_report(table: &Value) -> Result<(), String> {
+    table.get("report").map_or(Ok(()), crate::report::check_values)
 }
 
 /// Drop the resolved points switched off with `enabled = false` (§3.3) from a device's point
@@ -369,7 +387,9 @@ pub fn resolve(text: &str, base_dir: &Path) -> Result<ConnectorConfig, String> {
     check_document(&doc)?;
     // Before the devices, as the C loader reads it; the typed parse would only catch a non-string.
     if let Some(connector) = doc.get("connector") {
-        check_duration(connector, "poll_interval").map_err(|e| format!("[connector] {e}"))?;
+        check_duration(connector, "poll_interval")
+            .and_then(|()| check_report(connector))
+            .map_err(|e| format!("[connector] {e}"))?;
     }
     expand(&mut doc, base_dir)?;
     let mut config: ConnectorConfig = doc
@@ -431,6 +451,7 @@ fn expand(doc: &mut Value, base_dir: &Path) -> Result<(), String> {
         }
         check_one_of(device, "default_mode", MODES)
             .and_then(|()| check_duration(device, "poll_interval"))
+            .and_then(|()| check_report(device))
             .map_err(|e| format!("device '{name}': {e}"))?;
         // Checked here rather than left to the typed parse, because an empty string would
         // otherwise be accepted as a type and silently behave like an absent one — and the C
@@ -1352,6 +1373,96 @@ meta      = { on_change = true, deadband = 0.5, parameter = { title = "Flow", mi
         assert_eq!(meta["deadband"], serde_json::json!(2.0));
         assert_eq!(meta["parameter"]["title"], serde_json::json!("Flow"));
         assert_eq!(meta["parameter"]["max"], serde_json::json!(100));
+    }
+
+    /// `report` (§5.3) merges key by key through a library like `meta`, and the effective
+    /// policy layers `[connector]`, the device, then the point.
+    #[test]
+    fn report_merges_through_libraries_and_levels() {
+        let dir = Dir::new("report-merge");
+        dir.write(
+            "modbus/base.toml",
+            r#"
+[library]
+protocol = "modbus"
+
+[[point]]
+id       = "flow"
+datatype = "uint16"
+address  = { table = "holding", address = 7, count = 1 }
+report   = { deadband = 1.0, min_interval = "10s" }
+
+[[point]]
+id       = "level"
+datatype = "uint16"
+address  = { table = "holding", address = 8, count = 1 }
+"#,
+        );
+        let text = format!(
+            r#"
+[connector]
+protocol = "modbus"
+point_library_path = ["{}"]
+report   = {{ max_interval = "15m" }}
+
+[[device]]
+name             = "plc"
+protocol_address = {{ host = "127.0.0.1" }}
+points_from      = ["base"]
+report           = {{ on_change = true, deadband = 5 }}
+
+  [[device.point]]
+  id     = "flow"
+  report = {{ deadband = 0.2 }}
+"#,
+            dir.path().display()
+        );
+        let cfg = resolve(&text, dir.path()).unwrap();
+        let device = &cfg.devices[0];
+        let table = |id: &str| {
+            let point = device.points.iter().find(|p| p.id == id).unwrap();
+            serde_json::Value::Object(cfg.report_table(device, point))
+        };
+        assert_eq!(
+            table("flow"),
+            serde_json::json!({ "max_interval": "15m", "on_change": true, "deadband": 0.2, "min_interval": "10s" })
+        );
+        assert_eq!(
+            table("level"),
+            serde_json::json!({ "max_interval": "15m", "on_change": true, "deadband": 5 })
+        );
+    }
+
+    #[test]
+    fn report_tables_are_validated_where_they_are() {
+        let config = |connector: &str, device: &str, point: &str| {
+            format!(
+                "[connector]\nprotocol = \"modbus\"\n{connector}\n[[device]]\nname = \"plc\"\nprotocol_address = {{}}\n{device}\n  [[device.point]]\n  id = \"p\"\n  datatype = \"uint16\"\n  address = {{}}\n  {point}\n"
+            )
+        };
+        let err = |text: String| resolve(&text, Path::new(".")).unwrap_err();
+        assert_eq!(
+            err(config("report = { max_interval = \"soon\" }", "", "")),
+            "[connector] report.max_interval must be a duration such as \"500ms\", \"2s\" or \"5m\" (\"0\" switches it off)"
+        );
+        assert_eq!(
+            err(config("", "report = { deadband = \"-1%\" }", "")),
+            "device 'plc': report.deadband must be a number >= 0 or a percentage such as \"2%\""
+        );
+        assert_eq!(
+            err(config("", "", "report = { min_interval = \"10s\", max_interval = \"5s\" }")),
+            "device 'plc': point 'p': report.max_interval must be longer than report.min_interval"
+        );
+        assert_eq!(
+            err(config("", "", "report = { on_chnage = true }")),
+            "unknown key 'on_chnage' in the report of point 'p' (did you mean 'on_change'?)"
+        );
+        // Only within one table: a conflict through inheritance is the runtime's to resolve.
+        assert!(resolve(
+            &config("report = { max_interval = \"30m\" }", "", "report = { min_interval = \"1h\" }"),
+            Path::new(".")
+        )
+        .is_ok());
     }
 
     #[test]

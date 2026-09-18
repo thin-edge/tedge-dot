@@ -18,6 +18,13 @@ extern "C" {
 
 typedef struct tdot_connector tdot_connector_t;
 
+/* read_point's third outcome, besides 0 and -1: the point has nothing to read
+ * on demand (an SNMP trap or varbind point), or no new data since its previous
+ * read (a CAN frame not received again); *out is ignored. On a poll the
+ * runtime publishes nothing and leaves the link alone; on a heartbeat read
+ * (contract §5.3) the point gets no heartbeat until its next reset. */
+#define TDOT_READ_NO_DATA 1
+
 /* Sink a module hands pushed samples to, one call per sample. Supplied by the
  * runtime to drain_subscriptions() and only valid for the duration of that
  * call; the sample is borrowed and must not be retained past it. */
@@ -52,9 +59,11 @@ struct tdot_connector {
     int (*connect_device)(tdot_connector_t *self, tdot_device_t *dev,
                           char *err, size_t errlen);
 
-    /* Read one point. Always fills *out (bad samples carry an error reason).
-     * Returns 0 when the transport is healthy, -1 when the failure indicates
-     * the device link is down (triggers the runtime's reconnect backoff). */
+    /* Read one point. Fills *out (bad samples carry an error reason) and
+     * returns 0 when the transport is healthy, or -1 when the failure
+     * indicates the device link is down (triggers the runtime's reconnect
+     * backoff). Returns TDOT_READ_NO_DATA, leaving *out unused, when the point
+     * has nothing to read on demand or no new data since its previous read. */
     int (*read_point)(tdot_connector_t *self, tdot_device_t *dev,
                       tdot_point_t *pt, tdot_sample_t *out);
 

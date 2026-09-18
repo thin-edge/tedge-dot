@@ -156,6 +156,10 @@ check_params "measurement: point_separator remaps signal to group.series" ot-mea
   "[te/device/plc1/ot/modbus/sample/Environment.Temperature] $SDOTTED" \
   '[te/device/plc1///m/Environment] {"Environment":{"Temperature":17001},"time":"2026-05-30T10:00:00.000Z"}'
 
+# LEGACY: the on_change / deadband / min_interval / debounce tests below (flow params and
+# meta.*) cover ot-measurement's deprecated flow-level filters. They stay until the settings are
+# removed; new configs use the point's `report` table, which the SDK runtime applies and the
+# SDK and conformance tests cover (doc/reducing-data-volume.md).
 # on_change: same value twice -> only one emission (the first); assert the second is suppressed.
 check_params "measurement: on_change suppresses unchanged" ot-measurement \
   'on_change = "true"' \
