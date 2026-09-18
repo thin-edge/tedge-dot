@@ -967,6 +967,24 @@ impl Attempt<'_> {
             info["server_certificate"] = "not_verified".into();
             return Ok(false);
         }
+        // Check the key length before consulting the trust store. async-opcua's validator logs
+        // the real cause but returns a plain BadCertificateUntrusted for a key that is too
+        // short, so the reason would tell the operator to run `tedge-dot pki trust` -- which
+        // they may already have done, and which cannot help, because trusting a certificate
+        // does not make its key longer. The C build reports this as a policy check failure
+        // already (ua_pki.c); this keeps the two the same.
+        if let Some((min, max)) = self.security.policy.key_bits() {
+            if let Ok(bits) = cert.key_length() {
+                if bits < min || bits > max {
+                    return Err(format!(
+                        "{} the server certificate's key is {bits} bits, which {} does not allow (it requires {min}-{max}) (thumbprint {thumbprint}, subject {})",
+                        security::CERTIFICATE_INVALID,
+                        self.security.policy.name(),
+                        cert.subject_text()
+                    ));
+                }
+            }
+        }
         let host = security::url_host(&self.endpoint.endpoint).unwrap_or_default();
         let policy = SecurityPolicy::from_uri(&self.security.policy.uri());
         let store = CertificateStore::new(self.pki_root);
@@ -1001,30 +1019,18 @@ impl Attempt<'_> {
         server_verified: bool,
         own: Option<&OwnCertificate>,
     ) -> String {
-        let Some(status) = status else {
-            return "session failed to connect".to_string();
-        };
-        match security::category(status) {
-            // The server certificate passed our checks, so the refusal is the server's: it does
-            // not accept this connector's certificate.
-            Some(security::CERTIFICATE_UNTRUSTED) if server_verified || own.is_some() => {
-                let thumbprint = own
-                    .and_then(|o| o.certificate.to_der().ok())
-                    .map(|d| pki::thumbprint(&d))
-                    .unwrap_or_default();
-                format!(
-                    "{} the server rejected the connection ({status}); it may not trust this connector's application certificate (thumbprint {thumbprint}, export it with `tedge-dot pki export`)",
-                    security::CERTIFICATE_UNTRUSTED
-                )
-            }
-            Some(security::IDENTITY_REJECTED) => format!(
-                "{} the server rejected the {} identity ({status})",
-                security::IDENTITY_REJECTED,
-                self.security.identity.kind()
-            ),
-            Some(category) => format!("{category} {} ({status})", security::describe(status)),
-            None => format!("session failed to connect: {status}"),
-        }
+        let own_thumbprint = own
+            .and_then(|o| o.certificate.to_der().ok())
+            .map(|d| pki::thumbprint(&d));
+        // Reaching here means our own check of the server certificate is already behind us: it
+        // passed, or `trust_any_server_certificate` skipped it. Either way a distrust reported
+        // now is the server's judgement of us, not ours of it.
+        security::session_failure_reason(
+            status,
+            server_verified || own.is_some(),
+            own_thumbprint.as_deref(),
+            self.security.identity.kind(),
+        )
     }
 }
 

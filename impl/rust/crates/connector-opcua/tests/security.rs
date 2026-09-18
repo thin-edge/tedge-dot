@@ -11,12 +11,16 @@ use connector_opcua::pki::{Group, Pki};
 use connector_opcua::{security, OpcuaConnector};
 use opcua::crypto::SecurityPolicy;
 use opcua::server::diagnostics::NamespaceMetadata;
-use opcua::server::node_manager::memory::simple_node_manager;
+use opcua::nodes::VariableBuilder;
+use opcua::server::node_manager::memory::{simple_node_manager, SimpleNodeManager};
 use opcua::server::{
     ServerBuilder, ServerEndpoint, ServerHandle, ServerUserToken, ANONYMOUS_USER_TOKEN_ID,
 };
-use opcua::types::MessageSecurityMode;
-use tedge_dot_sdk::{library, Connector, LinkReport, LinkStatus};
+use opcua::types::{DataTypeId, MessageSecurityMode, NodeId, ObjectId};
+use tedge_dot_sdk::{
+    library, Access, Connector, DataType, Endianness, LinkReport, LinkStatus, Mode, PointRef,
+    Quality, WordOrder,
+};
 use tokio::net::TcpListener;
 
 const SERVER_URI: &str = "urn:tedge:opcua-sim";
@@ -42,6 +46,9 @@ struct ServerOptions<'a> {
     advertised_host: &'a str,
     /// Accept any client application certificate.
     trust_clients: bool,
+    /// Longest secure channel token the server grants, in milliseconds. `None` leaves the
+    /// library default (an hour), which no test can outlive.
+    max_token_lifetime_ms: Option<u32>,
 }
 
 impl Default for ServerOptions<'_> {
@@ -50,6 +57,7 @@ impl Default for ServerOptions<'_> {
             scenario: "pinned",
             advertised_host: "127.0.0.1",
             trust_clients: true,
+            max_token_lifetime_ms: None,
         }
     }
 }
@@ -75,7 +83,7 @@ async fn start_server(vectors: &Path, opts: ServerOptions<'_>) -> TestServer {
     none.password_security_policy = Some(SecurityPolicy::None.to_string());
     let secured = |policy, mode| ServerEndpoint::new("/", policy, mode, &all_users);
 
-    let (server, handle) = ServerBuilder::new()
+    let builder = ServerBuilder::new()
         .application_name("tedge-dot secured test server")
         .application_uri(SERVER_URI)
         .product_uri(SERVER_URI)
@@ -121,9 +129,30 @@ async fn start_server(vectors: &Path, opts: ServerOptions<'_>) -> TestServer {
                 ..Default::default()
             },
             "simple",
-        ))
-        .build()
-        .unwrap();
+        ));
+    let builder = match opts.max_token_lifetime_ms {
+        Some(ms) => builder.max_secure_channel_token_lifetime_ms(ms),
+        None => builder,
+    };
+    let (server, handle) = builder.build().unwrap();
+
+    // One readable node, so a test can tell "the channel still works" from "the read failed".
+    {
+        let nm = handle
+            .node_managers()
+            .get_of_type::<SimpleNodeManager>()
+            .unwrap();
+        let ns = handle
+            .get_namespace_index("urn:tedge-dot-opcua-test:nodes")
+            .unwrap();
+        let mut space = nm.address_space().write();
+        VariableBuilder::new(&NodeId::new(ns, "T"), "T", "T")
+            .data_type(DataTypeId::Double)
+            .value(21.5f64)
+            .organized_by(ObjectId::ObjectsFolder)
+            .insert(&mut *space);
+    }
+
     tokio::spawn(server.run_with(listener));
     TestServer { handle, port, pki }
 }
@@ -202,6 +231,21 @@ async fn connect(
 
 fn reason(report: &LinkReport) -> &str {
     report.reason.as_deref().unwrap_or("")
+}
+
+/// The point the `config()` device declares (`ns=2;s=T`).
+fn point_t() -> PointRef {
+    PointRef {
+        id: "t".to_string(),
+        mode: Mode::Typed,
+        datatype: Some(DataType::Float64),
+        endianness: Endianness::Big,
+        word_order: WordOrder::Big,
+        access: Access::Read,
+        unit: None,
+        transform: Default::default(),
+        interval: Some(Duration::from_millis(100)),
+    }
 }
 
 fn secured_connection() -> &'static str {
@@ -583,13 +627,76 @@ async fn server_that_does_not_trust_the_connector_is_reported() {
     .await;
     assert_eq!(report.status, LinkStatus::Disconnected);
     let text = reason(&report);
-    assert!(text.starts_with(security::CERTIFICATE_UNTRUSTED), "{text}");
+    // Whose distrust it is decides the category: the server certificate passed our own checks,
+    // so this is the server refusing us, not us refusing the server.
     assert!(
-        text.contains("this connector's application certificate"),
+        text.starts_with(security::APPLICATION_CERTIFICATE_REJECTED),
+        "{text}"
+    );
+    assert!(
+        !text.starts_with(security::CERTIFICATE_UNTRUSTED),
+        "the server's judgement of us must not be filed as our judgement of it: {text}"
+    );
+    assert!(
+        text.contains("this connector's application certificate")
+            && text.contains("tedge-dot pki export"),
         "{text}"
     );
     // The server quarantined the connector's certificate in its own PKI directory.
     assert_eq!(Pki::new(&server.pki).list(Group::Rejected).len(), 1);
+}
+
+/// A secured session must outlive the secure channel's security token: the client renews at 75%
+/// of the granted lifetime, and nothing above the transport should notice. Without renewal the
+/// channel would be torn down mid-run and the reads below would fail.
+#[tokio::test]
+async fn session_survives_secure_channel_token_renewal() {
+    const LIFETIME_MS: u32 = 2_000;
+    let vectors = common::genpki(&[]);
+    let server = start_server(
+        &vectors,
+        ServerOptions {
+            max_token_lifetime_ms: Some(LIFETIME_MS),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = connector_dir(&vectors, "pinned");
+    let mut connector = OpcuaConnector::default();
+    let report = connect(
+        &mut connector,
+        &config(&dir, server.port, secured_connection(), ""),
+    )
+    .await;
+    assert_eq!(report.status, LinkStatus::Connected, "{:?}", report.reason);
+
+    let device = tedge_dot_sdk::DeviceId::from("plc");
+    let points = [point_t()];
+    let value = |s: &tedge_dot_sdk::Sample| s.value.clone();
+
+    let first = connector.read_points(&device, &points).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].quality, Quality::Good, "{:?}", first[0].error);
+
+    // Three token lifetimes: the client renews at 75%, so this spans several renewals.
+    let deadline = std::time::Instant::now()
+        + Duration::from_millis(u64::from(LIFETIME_MS) * 3 + LIFETIME_MS as u64 / 2);
+    let mut reads = 0;
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let s = connector.read_points(&device, &points).await.unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(
+            s[0].quality,
+            Quality::Good,
+            "read failed after {reads} reads across token renewals: {:?}",
+            s[0].error
+        );
+        assert_eq!(value(&s[0]), value(&first[0]));
+        reads += 1;
+    }
+    assert!(reads >= 6, "expected to span several token lifetimes");
+    connector.disconnect().await.unwrap();
 }
 
 #[tokio::test]

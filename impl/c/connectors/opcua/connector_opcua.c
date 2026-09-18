@@ -767,6 +767,12 @@ static void disconnect_device(tdot_connector_t *self, tdot_device_t *dev) {
 #define R_IDENTITY_UNSUPPORTED "identity unsupported:"
 #define R_PLAINTEXT "plaintext password refused:"
 #define R_APPCERT "application certificate:"
+/* The server refused *our* certificate. Told apart from R_UNTRUSTED by
+ * ordering, not by status code: both directions of distrust arrive as
+ * BadSecurityChecksFailed / BadCertificateUntrusted, so only the fact that our
+ * own check of the server already passed (or was skipped) says whose
+ * judgement failed. */
+#define R_APPCERT_REJECTED "application certificate rejected:"
 
 static const char *reason_category(UA_StatusCode rc) {
     switch (rc & 0xFFFF0000u) {
@@ -1228,9 +1234,10 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev,
             char tp[41];
             ua_pki_thumbprint(st->own_cert.data, st->own_cert.length, tp);
             snprintf(err, errlen,
-                     R_UNTRUSTED " the server rejected the connection (%s); it may "
-                     "not trust this connector's application certificate "
-                     "(thumbprint %s, export it with `tedge-dot pki export`)",
+                     R_APPCERT_REJECTED " the server rejected the connection (%s); it "
+                     "does not trust this connector's application certificate "
+                     "(thumbprint %s, export it with `tedge-dot pki export` and "
+                     "have the server administrator trust it)",
                      UA_StatusCode_name(rc), tp);
         } else if (cat && !strcmp(cat, R_IDENTITY_REJECTED)) {
             snprintf(err, errlen,

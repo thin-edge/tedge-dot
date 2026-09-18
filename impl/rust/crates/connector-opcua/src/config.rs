@@ -276,6 +276,19 @@ impl Policy {
     pub fn is_secure(self) -> bool {
         self != Policy::None
     }
+
+    /// The RSA key sizes the policy allows, in bits (OPC UA Part 7). `None` for `Policy::None`,
+    /// which has no asymmetric key at all. The C build's `POLICIES` table holds the same
+    /// bounds, and both must reject the same certificates.
+    pub fn key_bits(self) -> Option<(usize, usize)> {
+        match self {
+            Policy::None => None,
+            Policy::Basic128Rsa15 | Policy::Basic256 => Some((1024, 2048)),
+            Policy::Basic256Sha256
+            | Policy::Aes128Sha256RsaOaep
+            | Policy::Aes256Sha256RsaPss => Some((2048, 4096)),
+        }
+    }
 }
 
 /// A message security mode (spec §3.1).
@@ -706,6 +719,32 @@ mod tests {
         }
         assert_eq!(Policy::parse("ECC_nistP256"), None);
         assert_eq!(Policy::parse("basic256sha256"), None);
+    }
+
+    /// These bounds are duplicated in the C build's `POLICIES` table
+    /// (impl/c/connectors/opcua/connector_opcua.c); the two must refuse the same certificates,
+    /// or the implementations disagree about which servers are usable. The 1024-bit case is
+    /// not hypothetical: the UA-.NETStandard reference server generates exactly that.
+    #[test]
+    fn policy_key_bits_match_the_c_table() {
+        assert_eq!(Policy::None.key_bits(), None);
+        assert_eq!(Policy::Basic128Rsa15.key_bits(), Some((1024, 2048)));
+        assert_eq!(Policy::Basic256.key_bits(), Some((1024, 2048)));
+        assert_eq!(Policy::Basic256Sha256.key_bits(), Some((2048, 4096)));
+        assert_eq!(Policy::Aes128Sha256RsaOaep.key_bits(), Some((2048, 4096)));
+        assert_eq!(Policy::Aes256Sha256RsaPss.key_bits(), Some((2048, 4096)));
+
+        // A 1024-bit key is acceptable to the deprecated policies and to nothing else.
+        for p in Policy::ALL {
+            let Some((min, max)) = p.key_bits() else { continue };
+            assert_eq!(
+                1024 >= min && 1024 <= max,
+                p.is_deprecated(),
+                "{} accepts 1024 bits?",
+                p.name()
+            );
+            assert!(2048 >= min && 2048 <= max, "{} rejects 2048 bits", p.name());
+        }
     }
 
     #[test]
