@@ -343,6 +343,21 @@
       ]
     },
     {
+      "name": "a value back at the published one drops a debounced reading held by the rate limit",
+      "policy": { "debounce": "1s", "min_interval": "10s" },
+      "pushed": true,
+      "steps": [
+        { "at": 0, "sample": { "id": "a", "num": 0 }, "publish": ["a"] },
+        { "at": 1000, "sample": { "id": "b", "num": 1 } },
+        { "at": 2000, "tick": true },
+        { "at": 3000, "sample": { "id": "c", "num": 0 } },
+        { "at": 10000, "tick": true },
+        { "at": 11000, "sample": { "id": "d", "num": 0 } },
+        { "at": 12000, "sample": { "id": "e", "num": 1 } },
+        { "at": 13000, "tick": true, "publish": ["e"] }
+      ]
+    },
+    {
       "name": "reset publishes the next reading",
       "policy": { "on_change": true, "min_interval": "1m" },
       "steps": [

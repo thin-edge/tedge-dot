@@ -306,7 +306,9 @@ impl<T> ReportState<T> {
             None => (item, obs),
             Some(debounce) => {
                 if !changed_from_last {
+                    // Back at the published value: nothing settled or held is news any more.
                     self.candidate = None;
+                    self.pending = None;
                     return None;
                 }
                 match self.candidate.take() {

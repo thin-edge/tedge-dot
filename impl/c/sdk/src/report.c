@@ -273,7 +273,10 @@ bool tdot_report_offer(tdot_report_state_t *st, const tdot_report_item_t *item,
 
     if (p->debounce > 0) {
         if (!changed_from_last) {
+            /* Back at the published value: nothing settled or held is news
+             * any more. */
             clear_candidate(st);
+            clear_pending(st);
             return false;
         }
         if (st->has_candidate && !changed(p, obs, &st->cand_first)) {

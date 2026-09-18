@@ -1546,8 +1546,8 @@ static bool stop_requested(const run_ctl_t *ctl) {
 /* A pass of the reporting policy (§5.3) over every point: publish the held
  * readings whose interval ended and the debounced ones that settled, and read
  * a pushed point on demand when its heartbeat is due -- a fresh reading, never
- * a replay. A heartbeat read counts like a poll: a failure publishes the bad
- * sample and takes the transport down, a bad reading degrades the link. */
+ * a replay. A failed heartbeat read publishes the bad sample and takes the
+ * transport down; a good one confirms the link. */
 static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
     tdot_connector_t *conn = rt->conn;
     for (size_t i = 0; i < rt->cfg->ndevices && !stop_requested(ctl); i++) {
@@ -1561,9 +1561,10 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
             if (!st)
                 continue;
             /* Only a pushed point is read on demand: a polled one's next
-             * scheduled read is its heartbeat. */
-            bool pushed = pt->subscribed && dev->link != TDOT_LINK_DISCONNECTED &&
-                          (pt->access & TDOT_ACCESS_READ);
+             * scheduled read is its heartbeat. A link drop clears `subscribed`,
+             * so during an outage the point is polled instead, as in Rust the
+             * heartbeat read reports the dead source. */
+            bool pushed = pt->subscribed && (pt->access & TDOT_ACCESS_READ);
             tdot_report_item_t held;
             bool due_read = false;
             if (tdot_report_due(st, now, pushed, &held, &due_read)) {
@@ -1590,10 +1591,13 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
             if (rc != 0)
                 transport_down = true;
         }
+        /* Only a transport failure speaks against the device, as in Rust: a
+         * heartbeat pass usually reads one point, and one unreadable node
+         * must not degrade a device whose other points deliver. */
         if (transport_down)
             mark_transport_down(rt, dev);
-        else if (read > 0)
-            publish_link(rt, dev, bad == read ? TDOT_LINK_DEGRADED : TDOT_LINK_CONNECTED);
+        else if (read > bad)
+            publish_link(rt, dev, TDOT_LINK_CONNECTED);
     }
 }
 
