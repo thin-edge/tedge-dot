@@ -103,7 +103,7 @@ can arrive is up to the source: an OPC UA server samples a subscribed node at th
 `sampling_interval` (falling back to its `poll_interval`) and sends changes at most that often.
 Set `sampling_interval` to get changes faster, and `report` to publish fewer of them. See
 [contract §3.1](contract/ot-connector-contract.md#31-common-protocol-neutral-point-fields) and the
-[OPC UA spec §3.7](connectors/opcua-connector-spec.md#37-subscription-timing-sampling_interval).
+[OPC UA spec §3.8](connectors/opcua-connector-spec.md#38-subscription-timing-sampling_interval).
 
 ### Heartbeat, and Cumulocity availability
 
