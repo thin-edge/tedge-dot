@@ -26,6 +26,8 @@ use tedge_dot_sdk::{
 use tracing::{error, info, warn, Instrument};
 use tracing_subscriber::EnvFilter;
 
+mod watch;
+
 const DEFAULT_CONFIG: &str = "/etc/tedge/plugins/ot/modbus.toml";
 const DEFAULT_CONFIG_DIR: &str = "/etc/tedge/plugins/ot";
 const DEFAULT_RESTART_DELAY_SECS: u64 = 5;
@@ -211,6 +213,10 @@ struct RunArgs {
     /// Ctrl-C/SIGTERM.
     #[arg(long, value_name = "DURATION", value_parser = parse_cli_duration)]
     duration: Option<Duration>,
+    /// Do not reload when the config files or the point libraries they reference change: apply
+    /// changes only on SIGHUP (`systemctl reload`). Overrides $TEDGE_DOT_CONFIG_WATCH_INTERVAL.
+    #[arg(long)]
+    no_watch: bool,
 }
 
 #[derive(Args)]
@@ -374,7 +380,9 @@ async fn shutdown_or_deadline(duration: Option<Duration>) {
 ///
 /// SIGHUP reloads: the config paths are discovered again, a connector starts for each new file
 /// and stops for each file that is gone, and every other one re-reads its own file and applies
-/// what changed (see `runtime::run_until_reloadable`).
+/// what changed (see `runtime::run_until_reloadable`). A detected change to the config files or
+/// the point libraries they reference runs the same reload (see `watch`), unless
+/// TEDGE_DOT_CONFIG_WATCH_INTERVAL=0.
 async fn run(args: RunArgs) -> ExitCode {
     // First of all, so a SIGHUP that arrives while the service is still starting is a reload
     // request rather than the signal's default action, which terminates the process.
@@ -405,7 +413,7 @@ async fn run(args: RunArgs) -> ExitCode {
     if configs.is_empty() {
         warn!(
             "no connector configs found in {:?} — idle; add configs, then reload (SIGHUP) or \
-             restart the service",
+             let the change be detected",
             config_args
         );
     }
@@ -417,6 +425,19 @@ async fn run(args: RunArgs) -> ExitCode {
         connectors.start(path);
     }
 
+    let (watch_interval, watch_warning) = if args.no_watch {
+        info!("config file watching is off (--no-watch): changes are applied on SIGHUP only");
+        (None, None)
+    } else {
+        watch::interval_from(std::env::var(watch::INTERVAL_ENV).ok().as_deref())
+    };
+    if let Some(warning) = watch_warning {
+        warn!("{warning}");
+    }
+    let mut watcher = watch_interval.map(|_| watch::Watcher::new(config_args.clone()));
+    let mut ticks = tokio::time::interval(watch_interval.unwrap_or(watch::DEFAULT_INTERVAL));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     // Ctrl-C / SIGTERM, or --duration elapsing, stops every connector.
     let stop = shutdown_or_deadline(args.duration);
     tokio::pin!(stop);
@@ -425,25 +446,51 @@ async fn run(args: RunArgs) -> ExitCode {
             _ = &mut stop => break,
             Some(()) = next_hangup(&mut hangups) => {
                 info!("SIGHUP: reloading the connector configs");
-                match discover_configs(&config_args) {
-                    Ok(configs) => {
-                        warn_duplicate_service_names(&configs);
-                        warn_duplicate_devices(&configs);
-                        // Stopping the removed connectors can take up to STOP_GRACE; a shutdown
-                        // must not wait behind it (`connectors` keeps what is still stopping).
-                        tokio::select! {
-                            _ = connectors.reconcile(configs) => {}
-                            _ = &mut stop => break,
-                        }
-                    }
-                    Err(e) => error!("reload failed: {e}; the running connectors are unchanged"),
+            }
+            changed = poll_watcher(&mut watcher, &mut ticks) => {
+                let names: Vec<String> = changed.iter().map(|p| p.display().to_string()).collect();
+                info!("config change detected ({}): reloading the connector configs", names.join(", "));
+            }
+        }
+        // One reload path for both triggers.
+        match discover_configs(&config_args) {
+            Ok(configs) => {
+                warn_duplicate_service_names(&configs);
+                warn_duplicate_devices(&configs);
+                // Stopping the removed connectors can take up to STOP_GRACE; a shutdown must not
+                // wait behind it (`connectors` keeps what is still stopping).
+                tokio::select! {
+                    _ = connectors.reconcile(configs) => {}
+                    _ = &mut stop => break,
                 }
             }
+            Err(e) => error!("reload failed: {e}; the running connectors are unchanged"),
+        }
+        // The configs may now reference other point libraries.
+        if let Some(watcher) = watcher.as_mut() {
+            watcher.rebuild();
         }
     }
     info!("shutdown requested; stopping all connectors");
     connectors.stop_all().await;
     ExitCode::SUCCESS
+}
+
+/// Resolves with the changed paths once the watcher sees a settled change; never when watching
+/// is off.
+async fn poll_watcher(
+    watcher: &mut Option<watch::Watcher>,
+    ticks: &mut tokio::time::Interval,
+) -> Vec<PathBuf> {
+    let Some(watcher) = watcher.as_mut() else {
+        return std::future::pending().await;
+    };
+    loop {
+        ticks.tick().await;
+        if let Some(changed) = watcher.poll() {
+            return changed;
+        }
+    }
 }
 
 /// SIGHUP, the conventional "reload your configuration" signal (what `systemctl reload` sends
@@ -1848,6 +1895,7 @@ protocol_address = { host = "127.0.0.2" }
             config: vec!["b.toml".into()],
             output: Output::Mqtt,
             duration: None,
+            no_watch: false,
         };
         assert_eq!(
             combined_config_args(&args.configs, &args.config),
@@ -1877,6 +1925,17 @@ protocol_address = { host = "127.0.0.2" }
             combined_config_args(&args.configs, &args.config),
             vec![DEFAULT_CONFIG_DIR]
         );
+    }
+
+    /// `--no-watch` turns config file watching off for `run`; it is off unless given.
+    #[test]
+    fn run_accepts_no_watch() {
+        let parse = |args: &[&str]| match Cli::try_parse_from(args).expect("parses").command {
+            Command::Run(run) => run.no_watch,
+            _ => panic!("not run"),
+        };
+        assert!(parse(&["tedge-dot", "run", "/etc/ot", "--no-watch"]));
+        assert!(!parse(&["tedge-dot", "run", "/etc/ot"]));
     }
 
     #[test]
