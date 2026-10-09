@@ -317,13 +317,30 @@ protocol is documented in [connectors/README.md](connectors/README.md) and
 
 ## Releasing
 
-Push a tag (e.g. `v0.1.0`) and the [release workflow](.github/workflows/release.yaml)
+Releases are automated with [release-please](https://github.com/googleapis/release-please).
+On every push to `main` it updates a `chore: release X.Y.Z` pull request whose version
+and [CHANGELOG.md](CHANGELOG.md) entry come from the
+[conventional commits](https://www.conventionalcommits.org/) merged since the last
+release: `fix:` bumps the patch, and while below 1.0 so does `feat:`; a breaking change
+(`feat!:` or a `BREAKING CHANGE:` footer) bumps the minor. Only `feat`, `fix`, `perf` and
+`revert` appear in the changelog. So the squash-merge title of each PR matters.
+
+Merging the release PR tags the release (no `v` prefix, e.g. `0.0.14`) and creates the
+GitHub release, then runs the [release workflow](.github/workflows/release.yaml), which
 builds **both** implementations — `tedge-dot-rs` with goreleaser/cargo-zigbuild,
 `tedge-dot-c` with the zig + Debian multiarch image in
-[impl/c/cross/](impl/c/cross/) and nfpm — then assembles one GitHub release, one
-`SHA256SUMS` over every asset, and one Cloudsmith push. Run the workflow
-manually for a snapshot build; it can also refresh the rolling `snapshot`
-pre-release.
+[impl/c/cross/](impl/c/cross/) and nfpm — and attaches them to that release with one
+`SHA256SUMS` over every asset, then does one Cloudsmith push.
+
+Run the release workflow manually for a snapshot build (it can also refresh the rolling
+`snapshot` pre-release), or give it an existing tag to retry a failed release. The
+configuration lives in [release-please-config.json](release-please-config.json) and
+[.release-please-manifest.json](.release-please-manifest.json); to force a specific
+version, add a `Release-As: X.Y.Z` footer to a commit. The release PR also bumps the
+version in `impl/rust/Cargo.toml`, `Cargo.lock` and `impl/c/CMakeLists.txt`, which is what
+both builds report as each connector's capability `version`; `just check-release-versions`
+keeps them in step (a new workspace crate must be added to the `Cargo.lock` filter in
+release-please-config.json).
 
 ## License
 

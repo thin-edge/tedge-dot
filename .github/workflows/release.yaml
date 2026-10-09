@@ -14,22 +14,32 @@ name: Release
 # the two build jobs; `publish` then assembles a single GitHub release (and a single Cloudsmith
 # push) from both sets of assets, with one SHA256SUMS covering everything.
 #
-#   * push a v* tag       -> GitHub release with deb/rpm/apk + tarballs for both packages
+#   * called by release-please.yaml with the tag it just created
+#                         -> deb/rpm/apk + tarballs for both packages attached to the GitHub
+#                            release release-please made, plus the Cloudsmith push
 #   * run manually        -> builds both and uploads them to the run; optionally refreshes the
 #                            rolling `snapshot` pre-release so the latest build is one download
-#                            away.
+#                            away. Given an existing `tag`, it (re)builds and publishes that
+#                            release instead -- the way to retry a failed release.
+#
+# There is deliberately no tag-push trigger: release-please creates the tags, and a tag made
+# with a personal token would then release twice (the push and the call).
 
 on:
-  push:
-    # Both conventions: this repository's existing release tags carry no prefix
-    # (0.0.1-alpha.1, 0.0.1-alpha.2) and a `v*` pattern alone would turn a tag push into a
-    # silent no-op -- no release, no publish, no error anywhere. `c-v*` is gone with
-    # release-c.yaml; a stray one must not trigger a full release.
-    tags: ["v*", "[0-9]*", "!c-v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build and publish"
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
+      tag:
+        description: "Existing release tag to (re)build and publish; empty for a snapshot build"
+        type: string
+        default: ""
       publish_snapshot:
-        description: "Refresh the rolling `snapshot` pre-release"
+        description: "Refresh the rolling `snapshot` pre-release (ignored when a tag is given)"
         type: boolean
         default: false
 
@@ -53,28 +63,44 @@ jobs:
   version:
     name: Resolve version
     runs-on: ubuntu-latest
+    # Every later job keys off these outputs, never off github.event_name/ref: in a called
+    # workflow those describe the CALLER's event (a push to main), not the release.
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      release: ${{ steps.ver.outputs.release }}
+      tag: ${{ steps.ver.outputs.tag }}
+      ref: ${{ steps.ver.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
       - id: ver
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          # Must use the SAME condition as the rust job's --snapshot decision below. Keying on
-          # ref_type alone would, for a manual run started from a tag, version the C packages
-          # after the tag while goreleaser still stamped a snapshot -- the exact mismatch the
-          # snapshot template exists to prevent.
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
-            v="${{ github.ref_name }}"; v="${v#v}"
+          set -eu
+          if [ -n "$TAG" ]; then
+            # Fail here, not 30 minutes later in goreleaser, on a tag that does not exist.
+            git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null \
+              || { echo "::error::tag $TAG not found"; exit 1; }
+            v="${TAG#v}"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
             # Must match .goreleaser.yaml's `snapshot.version_template`, or one `snapshot`
             # pre-release carries the two packages at what look like different versions.
             v="0.0.0-pre.$(git rev-parse --short HEAD)"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Releasing version $v"
 
   rust:
     name: Build tedge-dot-rs (Rust)
+    needs: version
     # macOS, not ubuntu: the darwin targets link Apple frameworks (IOKit, Security,
     # CoreFoundation) that zig cannot find without the macOS SDK, which failed the 0.0.1 tag
     # run on ubuntu. zig cross-compiles the Linux and Windows targets from here just the same.
@@ -82,6 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.ref }}
           # goreleaser derives the changelog from the full tag history
           fetch-depth: 0
 
@@ -113,9 +140,11 @@ jobs:
           version: "~> v2"
           args: >-
             release --clean --skip=publish,announce
-            ${{ !(github.event_name == 'push' && github.ref_type == 'tag') && '--snapshot' || '' }}
+            ${{ needs.version.outputs.release != 'true' && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pin the tag rather than let goreleaser pick one of several pointing at HEAD.
+          GORELEASER_CURRENT_TAG: ${{ needs.version.outputs.tag }}
 
       # The connector is a dumb driver: without the flows nothing it publishes
       # reaches the thin-edge data model, so the package must deploy the core
@@ -164,6 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.ref }}
           fetch-depth: 0
 
       # Needed to *run* the arm64/armhf binaries in the verify step below.
@@ -293,12 +323,14 @@ jobs:
   publish:
     name: Publish release
     needs: [version, rust, c]
-    # `github.ref_type` is 'tag' for a MANUAL run started from a tag too, which would turn
-    # "Run workflow" into a full production release + Cloudsmith push. Only a tag PUSH counts.
-    if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.publish_snapshot
+    # A production release + Cloudsmith push needs an explicit tag (release-please's, or one
+    # typed into "Run workflow"); a manual run merely started FROM a tag stays a snapshot.
+    if: needs.version.outputs.release == 'true' || inputs.publish_snapshot
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
 
       # Both implementations' assets land in the same directory, so the release and the
       # Cloudsmith push each happen once and carry everything.
@@ -323,10 +355,12 @@ jobs:
 
       - name: Resolve release tag
         id: rel
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            echo "title=tedge-dot ${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ needs.version.outputs.release }}" = "true" ]; then
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "title=tedge-dot $TAG" >> "$GITHUB_OUTPUT"
             echo "prerelease=" >> "$GITHUB_OUTPUT"
           else
             echo "tag=snapshot" >> "$GITHUB_OUTPUT"
@@ -335,21 +369,30 @@ jobs:
           fi
 
       # The handwritten preamble (which package do I want, how do I install it) followed by
-      # GitHub's generated changelog. `gh release create` takes only one notes source, so the
-      # changelog is fetched separately and the two are concatenated.
+      # the changelog: release-please's CHANGELOG.md section when it already created the
+      # release, GitHub's generated notes otherwise (a snapshot). A re-run must not stack a
+      # second preamble on top of the first, so an existing body is cut at the marker.
       - name: Assemble release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.rel.outputs.tag }}
         run: |
           set -eu
+          marker='<!-- changelog -->'
           cp packaging/release-notes.md notes.md
-          {
-            printf '\n---\n\n'
+          printf '\n---\n\n%s\n\n' "$marker" >> notes.md
+          if [ "$TAG" != "snapshot" ] \
+             && body=$(gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq .body 2>/dev/null) \
+             && [ -n "$body" ]; then
+            printf '%s\n' "$body" | awk -v m="$marker" 'found {print} $0 == m {found=1}' > changelog.md
+            # No marker: the body is release-please's changelog section as created.
+            [ -s changelog.md ] || printf '%s\n' "$body" > changelog.md
+            cat changelog.md >> notes.md
+          else
             gh api "repos/${{ github.repository }}/releases/generate-notes" \
-              -f tag_name="$TAG" -f target_commitish="${{ github.sha }}" \
-              --jq .body || echo "_No changelog available._"
-          } >> notes.md
+              -f tag_name="$TAG" -f target_commitish="${{ needs.version.outputs.ref }}" \
+              --jq .body >> notes.md || echo "_No changelog available._" >> notes.md
+          fi
 
       - name: Publish GitHub release
         env:
@@ -363,19 +406,24 @@ jobs:
           if [ "$TAG" = "snapshot" ]; then
             gh release delete "$TAG" --yes --cleanup-tag || true
           fi
-          # Re-runnable: if a previous attempt created the release and then failed (a flaky
-          # asset upload, the Cloudsmith step below), `create` would die with "already exists"
-          # and need a manual cleanup. Fall back to replacing the assets on the existing one.
-          gh release create "$TAG" dist/* \
-            --repo "${{ github.repository }}" \
-            --target "${{ github.sha }}" \
-            --title "$TITLE" \
-            --notes-file notes.md \
-            $PRERELEASE \
-          || gh release upload "$TAG" dist/* --repo "${{ github.repository }}" --clobber
+          # release-please has normally created the release already; a re-run (a flaky asset
+          # upload, the Cloudsmith step below) finds it too. Either way, fill in the existing
+          # release rather than dying with "already exists".
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "${{ github.repository }}" \
+              --title "$TITLE" --notes-file notes.md
+            gh release upload "$TAG" dist/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "${{ github.repository }}" \
+              --target "${{ needs.version.outputs.ref }}" \
+              --title "$TITLE" \
+              --notes-file notes.md \
+              $PRERELEASE
+          fi
 
       - name: Publish packages to Cloudsmith
-        if: github.event_name == 'push' && github.ref_type == 'tag'
+        if: needs.version.outputs.release == 'true'
         env:
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
           PUBLISH_OWNER: thinedge
