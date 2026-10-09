@@ -89,6 +89,15 @@ returns a stream the runtime selects on, the C vtable splits the job in two:
 once per loop tick to hand over what arrived. The samples are published from the
 runtime loop either way, so a module never touches MQTT.
 
+The loop waits for the MQTT socket between ticks, not for the protocol's socket.
+So a pushed value can sit unread until the next tick. The wait therefore follows
+the fastest effective `sampling_interval` among the connector's pushed points,
+kept between 10 ms and 200 ms (`sampling_interval = "0"` gives 10 ms). A connector
+without pushed points keeps the 200 ms tick. A tick visits only the points that
+have work: the polled points and the points with a `report` policy
+(`sdk/include/tedge_dot/schedule.h`). Its cost follows what is published, not
+how many points are configured.
+
 Push delivery has a failure mode worth naming, because it is invisible by
 construction: a subscribed point is off the polling schedule, so if push stops
 the device simply goes quiet behind a retained `connected` link. open62541 does
@@ -120,7 +129,8 @@ The **SNMP** notification listener has no transport of its own to wait on, so it
 receives on the runtime thread (the device's object points are polled as usual): each `drain_subscriptions()` reads every pending
 datagram from the connector's one UDP socket, routes it by source address to its
 device's queue (at most 256 notifications, oldest dropped) and hands the drained
-device its queue. A sample can therefore be up to one tick (200 ms) later than in
+device its queue. A sample can therefore be up to one tick (200 ms, or the
+fastest pushed point's sampling interval if that is shorter) later than in
 Rust, and its `ts` is when it was handed over rather than when the datagram
 arrived. An inform is acknowledged as its datagram is read, so the
 acknowledgement shares that delay.

@@ -14,9 +14,10 @@
 
 #include "cjson/cJSON.h"
 #include "mosquitto.h"
+#include "tedge_dot/schedule.h"
 #include "tedge_dot/watch.h"
 
-#define TICK_MS 200
+#define TICK_MS TDOT_TICK_MAX_MS
 #define BACKOFF_INITIAL_S 1.0
 #define BACKOFF_MAX_S 60.0
 /* Retry interval while the MQTT broker is unreachable (the Rust runtime's too). */
@@ -86,6 +87,10 @@ typedef struct {
     bool mqtt_up;         /* false from a failed loop until the next CONNACK */
     bool mqtt_resume;     /* the next CONNACK is a reconnect: restore the session */
     double mqtt_retry_at; /* tdot_mono() of the next reconnect attempt */
+    /* The wait between two passes of the main loop: follows the fastest pushed
+     * point (tdot_schedule_tick_ms), so a pushed value does not sit in the
+     * protocol socket for a whole 200 ms tick. */
+    int tick_ms;
 } rt_t;
 
 static void logmsg(const char *level, const char *fmt, ...) {
@@ -259,13 +264,21 @@ static void publish_health(rt_t *rt, const char *status) {
     publish(rt, topic, payload, true);
 }
 
+/* Bring the device's pass lists and the loop's wait up to date after its
+ * points' push state changed (schedule.h). */
+static void reschedule(rt_t *rt, tdot_device_t *dev) {
+    tdot_schedule_rebuild(dev);
+    rt->tick_ms = tdot_schedule_tick_ms(rt->cfg);
+}
+
 /* Drop every push subscription flag, putting the device's points back on the
  * polling schedule. Called whenever the link goes down: the module's
  * subscription died with the transport, and subscribe_device() will re-arm on
  * the next successful connect. */
-static void clear_subscriptions(tdot_device_t *dev) {
+static void clear_subscriptions(rt_t *rt, tdot_device_t *dev) {
     for (size_t j = 0; j < dev->npoints; j++)
         dev->points[j].subscribed = false;
+    reschedule(rt, dev);
 }
 
 /* Ask the module for push delivery on a freshly connected device. Failure is
@@ -273,7 +286,7 @@ static void clear_subscriptions(tdot_device_t *dev) {
  * contract's own fallback (§4.2) and keeps a subscription-hostile server
  * working. */
 static void arm_subscriptions(rt_t *rt, tdot_device_t *dev) {
-    clear_subscriptions(dev);
+    clear_subscriptions(rt, dev);
     if (!rt->conn->subscribe_device || !rt->conn->drain_subscriptions)
         return;
     char err[TDOT_ERR_MAX];
@@ -281,16 +294,13 @@ static void arm_subscriptions(rt_t *rt, tdot_device_t *dev) {
         logmsg("warn",
                "device %s: push delivery unavailable (%s); polling every point",
                dev->name, err);
-        clear_subscriptions(dev);
+        clear_subscriptions(rt, dev);
         return;
     }
-    size_t pushed = 0;
-    for (size_t j = 0; j < dev->npoints; j++)
-        if (dev->points[j].subscribed)
-            pushed++;
-    if (pushed > 0)
+    reschedule(rt, dev);
+    if (dev->npushed > 0)
         logmsg("info", "device %s: %zu point(s) delivered by subscription",
-               dev->name, pushed);
+               dev->name, dev->npushed);
 }
 
 static void connect_device(rt_t *rt, tdot_device_t *dev) {
@@ -303,7 +313,7 @@ static void connect_device(rt_t *rt, tdot_device_t *dev) {
         arm_subscriptions(rt, dev);
         publish_link(rt, dev, TDOT_LINK_CONNECTED);
     } else {
-        clear_subscriptions(dev);
+        clear_subscriptions(rt, dev);
         logmsg("warn", "device %s: connect failed: %s", dev->name, err);
         snprintf(dev->link_reason, sizeof dev->link_reason, "%s", err);
         publish_link(rt, dev, TDOT_LINK_DISCONNECTED);
@@ -319,7 +329,7 @@ static void connect_device(rt_t *rt, tdot_device_t *dev) {
 }
 
 static void mark_transport_down(rt_t *rt, tdot_device_t *dev) {
-    clear_subscriptions(dev);
+    clear_subscriptions(rt, dev);
     rt->conn->disconnect_device(rt->conn, dev);
     publish_link(rt, dev, TDOT_LINK_DISCONNECTED);
     dev->backoff_s = BACKOFF_INITIAL_S;
@@ -828,7 +838,7 @@ static void on_connect(struct mosquitto *mosq, void *ud, int rc) {
 
 /* Drive the MQTT client for one tick, reconnecting while the broker is gone. */
 static void mqtt_service(rt_t *rt) {
-    int rc = mosquitto_loop(rt->mosq, TICK_MS, 1);
+    int rc = mosquitto_loop(rt->mosq, rt->tick_ms, 1);
     if (rc == MOSQ_ERR_SUCCESS)
         return;
     if (rt->mqtt_up) {
@@ -848,7 +858,7 @@ static void mqtt_service(rt_t *rt) {
     /* Without a connection mosquitto_loop returns at once instead of waiting
      * out its timeout, so sleep the tick here: otherwise the poll loop spins a
      * core for as long as the broker is away. */
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = TICK_MS * 1000000L};
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = rt->tick_ms * 1000000L};
     nanosleep(&ts, NULL);
 }
 
@@ -1578,13 +1588,18 @@ static bool stop_requested(const run_ctl_t *ctl) {
  * transport down; a good one confirms the link. */
 static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
     tdot_connector_t *conn = rt->conn;
+    /* One clock read per pass: the policy's intervals are milliseconds and up,
+     * a pass over the policy points takes microseconds. */
+    int64_t now = mono_ns();
     for (size_t i = 0; i < rt->cfg->ndevices && !stop_requested(ctl); i++) {
         tdot_device_t *dev = &rt->cfg->devices[i];
         bool transport_down = false;
         size_t bad = 0, read = 0;
-        for (size_t j = 0; j < dev->npoints && !transport_down; j++) {
-            tdot_point_t *pt = &dev->points[j];
-            int64_t now = mono_ns();
+        /* Only the points with a policy (schedule.h): the others publish every
+         * reading as it comes and have nothing to do here. */
+        size_t n = dev->reported ? dev->nreported : dev->npoints;
+        for (size_t k = 0; k < n && !transport_down; k++) {
+            tdot_point_t *pt = &dev->points[dev->reported ? dev->reported[k] : k];
             tdot_report_state_t *st = report_state(pt, now);
             if (!st)
                 continue;
@@ -1637,7 +1652,8 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
 static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                          const tdot_run_opts_t *opts, progress_t *progress,
                          run_ctl_t *ctl) {
-    rt_t rt = {.conn = conn,
+    rt_t rt = {.tick_ms = TICK_MS,
+               .conn = conn,
                .cfg = cfg,
                .output = opts->output,
                .progress = progress};
@@ -1744,8 +1760,10 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
             }
             bool transport_down = false;
             size_t bad = 0, polled = 0;
-            for (size_t j = 0; j < dev->npoints && !transport_down; j++) {
-                tdot_point_t *pt = &dev->points[j];
+            /* Only the polled points (schedule.h), not every point. */
+            size_t n = dev->polled ? dev->npolled : dev->npoints;
+            for (size_t k = 0; k < n && !transport_down; k++) {
+                tdot_point_t *pt = &dev->points[dev->polled ? dev->polled[k] : k];
                 /* A subscribed point is delivered by the module's drain below;
                  * polling it too would double-publish. */
                 if (pt->subscribed)
@@ -1787,10 +1805,7 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
              * about the link (a quiet signal is normal), which is why they do
              * not drive the degraded/connected transitions above. */
             if (rt.conn->drain_subscriptions) {
-                bool any = false;
-                for (size_t j = 0; j < dev->npoints && !any; j++)
-                    any = dev->points[j].subscribed;
-                if (any) {
+                if (dev->npushed > 0) {
                     sink_ctx_t sink = {.rt = &rt};
                     if (rt.conn->drain_subscriptions(rt.conn, dev, push_sink,
                                                      &sink) != 0)
@@ -1804,7 +1819,7 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
         if (rt.output == TDOT_OUTPUT_MQTT)
             mqtt_service(&rt);
         else {
-            struct timespec ts = {.tv_sec = 0, .tv_nsec = TICK_MS * 1000000L};
+            struct timespec ts = {.tv_sec = 0, .tv_nsec = rt.tick_ms * 1000000L};
             nanosleep(&ts, NULL);
         }
     }

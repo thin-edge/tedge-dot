@@ -67,6 +67,8 @@ struct OpcuaPoint {
     field: Option<Vec<structure::Segment>>,
     /// `address.index`: one element of an array value.
     index: Option<u32>,
+    /// The effective monitored-item queue size: point, device, `[connection]`, then 16.
+    queue_size: u32,
     mode: Mode,
     datatype: Option<DataType>,
     access: Access,
@@ -284,6 +286,8 @@ pub fn factory() -> Box<dyn Connector> {
 impl Connector for OpcuaConnector {
     fn configure(&mut self, config: &ConnectorConfig) -> Result<(), ConfigError> {
         self.conn = OpcuaConnection::from_value(&config.connection).map_err(ConfigError::Invalid)?;
+        let conn_queue_size = config::queue_size(&self.conn.queue_size)
+            .map_err(|e| ConfigError::Invalid(format!("[connection]: {e}")))?;
         let base_dir = config.base_dir.as_deref();
         self.pki_root = self.conn.pki_dir(base_dir);
         self.devices.clear();
@@ -295,6 +299,9 @@ impl Connector for OpcuaConnector {
                 .map_err(|e| {
                     ConfigError::Invalid(format!("device '{}' protocol_address: {e}", d.name))
                 })?;
+            let device_queue_size = config::queue_size(&endpoint.queue_size).map_err(|e| {
+                ConfigError::Invalid(format!("device '{}' protocol_address: {e}", d.name))
+            })?;
             let security = config::device_security(&self.conn, &endpoint, base_dir)
                 .map_err(|e| ConfigError::Invalid(format!("device '{}': {e}", d.name)))?;
             let user_x509 = match &security.identity {
@@ -313,6 +320,11 @@ impl Connector for OpcuaConnector {
                 let node_id = node_id_from(&addr).map_err(|e| {
                     ConfigError::Invalid(format!("point '{}' address: {e}", p.id))
                 })?;
+                let queue_size = config::queue_size(&addr.queue_size)
+                    .map_err(|e| ConfigError::Invalid(format!("point '{}' address: {e}", p.id)))?
+                    .or(device_queue_size)
+                    .or(conn_queue_size)
+                    .unwrap_or(config::DEFAULT_QUEUE_SIZE);
                 let mode = p.resolved_mode(d.default_mode);
                 if mode == Mode::Typed && p.datatype.is_none() {
                     return Err(ConfigError::Invalid(format!(
@@ -345,6 +357,7 @@ impl Connector for OpcuaConnector {
                         node_id,
                         field,
                         index: addr.index,
+                        queue_size,
                         mode,
                         datatype: p.datatype,
                         access,
@@ -547,15 +560,17 @@ impl Connector for OpcuaConnector {
         // Notifications are matched back to points by node id and element: several points may
         // share one monitored item (design D5).
         let mut by_node: HashMap<(NodeId, Option<u32>), Vec<(String, OpcuaPoint)>> = HashMap::new();
-        let mut monitored: Vec<(NodeId, Option<u32>, Duration)> = Vec::new();
-        for (id, model, interval) in &items {
-            let key = (model.node_id.clone(), model.index);
-            match monitored.iter_mut().find(|(n, i, _)| (n, i) == (&key.0, &key.1)) {
-                Some(item) => item.2 = item.2.min(*interval),
-                None => monitored.push((key.0.clone(), key.1, *interval)),
-            }
-            by_node.entry(key).or_default().push((id.clone(), model.clone()));
+        let monitored = group_monitored(
+            items.iter().map(|(_, model, interval)| (model.node_id.clone(), model.index, *interval, model.queue_size)),
+        );
+        for (id, model, _) in &items {
+            by_node.entry((model.node_id.clone(), model.index)).or_default().push((id.clone(), model.clone()));
         }
+        // The point ids per item, for log lines and errors (`by_node` moves into the callback).
+        let names: HashMap<(NodeId, Option<u32>), Vec<String>> = by_node
+            .iter()
+            .map(|(key, points)| (key.clone(), points.iter().map(|(id, _)| id.clone()).collect()))
+            .collect();
 
         // The data-change callback is synchronous, so it forwards through an unbounded channel
         // to a spawned task that awaits the runtime's (bounded) sink.
@@ -590,27 +605,28 @@ impl Connector for OpcuaConnector {
             .map_err(|s| ConnectorError::Transport(format!("create_subscription failed: {s}")))?;
 
         // One monitored item per node and element, sampled at the fastest effective sampling
-        // interval of its points.
+        // interval of its points, queueing as many values as the largest queue size among them.
         let requests: Vec<MonitoredItemCreateRequest> = monitored
             .iter()
-            .map(|(node_id, index, interval)| {
-                let mut watch: ReadValueId = node_id.clone().into();
-                watch.index_range = index_range(*index);
+            .map(|item| {
+                let mut watch: ReadValueId = item.node_id.clone().into();
+                watch.index_range = index_range(item.index);
                 MonitoredItemCreateRequest::new(
                     watch,
                     MonitoringMode::Reporting,
                     MonitoringParameters {
-                        sampling_interval: interval.as_millis() as f64,
-                        queue_size: 1,
+                        sampling_interval: item.interval.as_millis() as f64,
+                        queue_size: item.queue_size,
                         discard_oldest: true,
                         ..Default::default()
                     },
                 )
             })
             .collect();
-        let results = match session
-            .create_monitored_items(subscription_id, TimestampsToReturn::Both, requests)
-            .await
+        let results = match create_in_batches(requests, MONITORED_ITEMS_PER_REQUEST, |batch| {
+            session.create_monitored_items(subscription_id, TimestampsToReturn::Both, batch)
+        })
+        .await
         {
             Ok(results) => results,
             Err(status) => {
@@ -626,14 +642,7 @@ impl Connector for OpcuaConnector {
             .iter()
             .zip(&results)
             .filter(|(_, r)| !r.result.status_code.is_good())
-            .map(|((node, index, _), r)| {
-                let ids: Vec<&str> = items
-                    .iter()
-                    .filter(|(_, m, _)| (&m.node_id, &m.index) == (node, index))
-                    .map(|(id, _, _)| id.as_str())
-                    .collect();
-                format!("{}: {}", ids.join(", "), r.result.status_code)
-            })
+            .map(|(item, r)| format!("{}: {}", point_ids(&names, item).join(", "), r.result.status_code))
             .collect();
         if !failed.is_empty() {
             let _ = session.delete_subscription(subscription_id).await;
@@ -654,16 +663,19 @@ impl Connector for OpcuaConnector {
                 "the server revised the subscription's publishing interval"
             );
         }
-        for ((node, index, interval), r) in monitored.iter().zip(&results) {
-            if let Some(revised) = revised(*interval, r.result.revised_sampling_interval) {
-                let ids: Vec<&str> = items
-                    .iter()
-                    .filter(|(_, m, _)| (&m.node_id, &m.index) == (node, index))
-                    .map(|(id, _, _)| id.as_str())
-                    .collect();
+        for (item, r) in monitored.iter().zip(&results) {
+            if let Some(revised) = revised(item.interval, r.result.revised_sampling_interval) {
                 tracing::info!(
-                    device = %device, point = %ids.join(", "), requested = ?interval, revised = ?revised,
+                    device = %device, point = %point_ids(&names, item).join(", "),
+                    requested = ?item.interval, revised = ?revised,
                     "the server revised the point's sampling interval"
+                );
+            }
+            if r.result.revised_queue_size != item.queue_size {
+                tracing::info!(
+                    device = %device, point = %point_ids(&names, item).join(", "),
+                    requested = item.queue_size, revised = r.result.revised_queue_size,
+                    "the server revised the point's queue size"
                 );
             }
         }
@@ -934,6 +946,7 @@ impl Attempt<'_> {
             .pki_dir(self.pki_root)
             .trust_server_certs(security.trust_any_server_certificate)
             .create_sample_keypair(false)
+            .max_array_length(MAX_ARRAY_LENGTH)
             .session_retry_limit(3);
         if let Some(own) = own {
             builder = builder
@@ -1356,6 +1369,71 @@ fn publishing_interval_for(sampling: impl Iterator<Item = Duration>) -> Duration
 /// The interval the server granted, when it is not the one requested. Both travel as whole
 /// milliseconds here (the client floors a revised publishing interval), so a difference under a
 /// millisecond is not a revision.
+/// The most monitored items one `CreateMonitoredItems` request carries. async-opcua refuses a
+/// reply array longer than its `max_array_length` (1000 by default), and servers often cap
+/// `MaxMonitoredItemsPerCall` at 1000; 500 stays under both.
+const MONITORED_ITEMS_PER_REQUEST: usize = 500;
+
+/// The client's decoding limit for arrays, raised from async-opcua's default of 1000 so that a
+/// device with thousands of points is not refused with `BadDecodingError`.
+const MAX_ARRAY_LENGTH: usize = 65_535;
+
+/// One monitored item: the node and element it watches, and what it requests.
+#[derive(Debug, Clone, PartialEq)]
+struct MonitoredItem {
+    node_id: NodeId,
+    index: Option<u32>,
+    /// The fastest effective sampling interval of the item's points.
+    interval: Duration,
+    /// The largest effective queue size of the item's points.
+    queue_size: u32,
+}
+
+/// Group points `(node, element, sampling interval, queue size)` into monitored items, one per
+/// node and element, in the order first seen. Linear in the number of points.
+fn group_monitored(points: impl Iterator<Item = (NodeId, Option<u32>, Duration, u32)>) -> Vec<MonitoredItem> {
+    let mut monitored: Vec<MonitoredItem> = Vec::new();
+    let mut at: HashMap<(NodeId, Option<u32>), usize> = HashMap::new();
+    for (node_id, index, interval, queue_size) in points {
+        match at.get(&(node_id.clone(), index)) {
+            Some(&i) => {
+                let item = &mut monitored[i];
+                item.interval = item.interval.min(interval);
+                item.queue_size = item.queue_size.max(queue_size);
+            }
+            None => {
+                at.insert((node_id.clone(), index), monitored.len());
+                monitored.push(MonitoredItem { node_id, index, interval, queue_size });
+            }
+        }
+    }
+    monitored
+}
+
+/// The ids of the points an item serves, for log lines and errors.
+fn point_ids<'a>(names: &'a HashMap<(NodeId, Option<u32>), Vec<String>>, item: &MonitoredItem) -> Vec<&'a str> {
+    names
+        .get(&(item.node_id.clone(), item.index))
+        .map(|ids| ids.iter().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// Send `requests` through `create` in batches of at most `batch` and return the results in
+/// order. The first failed batch ends it: its error is returned, and nothing after it is sent.
+async fn create_in_batches<T, R, E, F, Fut>(requests: Vec<T>, batch: usize, mut create: F) -> Result<Vec<R>, E>
+where
+    F: FnMut(Vec<T>) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<R>, E>>,
+{
+    let mut results = Vec::with_capacity(requests.len());
+    let mut requests = requests.into_iter().peekable();
+    while requests.peek().is_some() {
+        let chunk: Vec<T> = requests.by_ref().take(batch).collect();
+        results.extend(create(chunk).await?);
+    }
+    Ok(results)
+}
+
 fn revised(requested: Duration, revised_ms: f64) -> Option<Duration> {
     let requested_ms = requested.as_secs_f64() * 1000.0;
     (revised_ms.is_finite() && (revised_ms - requested_ms).abs() >= 1.0)
@@ -1610,6 +1688,7 @@ mod tests {
             identifier: None,
                    field: None,
             index: None,
+            queue_size: None,
         };
         let nid = node_id_from(&addr).unwrap();
         assert_eq!(nid.namespace, 2);
@@ -1623,6 +1702,7 @@ mod tests {
             identifier: Some(serde_json::json!(1001)),
                    field: None,
             index: None,
+            queue_size: None,
         };
         let nid = node_id_from(&addr).unwrap();
         assert_eq!(nid.namespace, 3);
@@ -1634,6 +1714,128 @@ mod tests {
         assert_eq!(v, Value::Number(17001.0));
         assert_eq!(dt, DataType::Uint16);
         assert_eq!(raw, 17001u16.to_be_bytes().to_vec());
+    }
+
+    fn configure(toml: &str) -> Result<OpcuaConnector, ConfigError> {
+        let config: ConnectorConfig = toml::from_str(toml).unwrap();
+        let mut connector = OpcuaConnector::default();
+        connector.configure(&config).map(|()| connector)
+    }
+
+    /// `[connection]`, the device and the point, each optionally setting `queue_size`.
+    fn queue_config(connection: &str, device: &str, point: &str) -> String {
+        format!(
+            r#"
+            [connector]
+            protocol = "opcua"
+            [connection]
+            {connection}
+            [[device]]
+            name = "plc"
+            protocol_address = {{ endpoint = "opc.tcp://127.0.0.1:4840" {device} }}
+              [[device.point]]
+              id = "own"
+              datatype = "float64"
+              address = {{ node_id = "ns=2;s=A" {point} }}
+              [[device.point]]
+              id = "inherited"
+              datatype = "float64"
+              address = {{ node_id = "ns=2;s=B" }}
+            "#
+        )
+    }
+
+    fn queue_sizes(connector: &OpcuaConnector) -> (u32, u32) {
+        let points = &connector.devices["plc"].points;
+        (points["own"].queue_size, points["inherited"].queue_size)
+    }
+
+    /// Point, then device, then `[connection]`, then 16 (spec §3.8).
+    #[test]
+    fn queue_size_precedence() {
+        let c = configure(&queue_config("", "", "")).unwrap();
+        assert_eq!(queue_sizes(&c), (16, 16));
+        let c = configure(&queue_config("queue_size = 2", "", "")).unwrap();
+        assert_eq!(queue_sizes(&c), (2, 2));
+        let c = configure(&queue_config("queue_size = 2", ", queue_size = 4", "")).unwrap();
+        assert_eq!(queue_sizes(&c), (4, 4));
+        let c = configure(&queue_config("queue_size = 2", ", queue_size = 4", ", queue_size = 1")).unwrap();
+        assert_eq!(queue_sizes(&c), (1, 4));
+    }
+
+    /// The messages are the C build's too (impl/c/tests/config.c `check_opcua_queue_size`).
+    #[test]
+    fn queue_size_is_validated_where_it_is() {
+        let err = |toml: String| configure(&toml).err().expect("refused").to_string();
+        assert!(err(queue_config("queue_size = \"16\"", "", ""))
+            .contains("[connection]: queue_size must be an integer from 1 to 65535"));
+        assert!(err(queue_config("", ", queue_size = 65536", ""))
+            .contains("device 'plc' protocol_address: queue_size must be an integer from 1 to 65535"));
+        assert!(err(queue_config("", "", ", queue_size = 0"))
+            .contains("point 'own' address: queue_size must be an integer from 1 to 65535"));
+        assert!(err(queue_config("", "", ", queue_size = 1.5")).contains("queue_size must be"));
+        assert!(configure(&queue_config("queue_size = 65535", ", queue_size = 1", "")).is_ok());
+    }
+
+    /// One item per node and element, at the fastest interval and the largest queue size of its
+    /// points, in the order first seen.
+    #[test]
+    fn grouping_merges_points_on_one_node() {
+        let ms = Duration::from_millis;
+        let a = NodeId::new(2, "A");
+        let b = NodeId::new(2, "B");
+        let items = group_monitored(
+            [
+                (a.clone(), None, ms(1000), 1),
+                (b.clone(), None, ms(500), 16),
+                (a.clone(), None, ms(200), 4),
+                (a.clone(), Some(3), ms(100), 2),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            items,
+            vec![
+                MonitoredItem { node_id: a.clone(), index: None, interval: ms(200), queue_size: 4 },
+                MonitoredItem { node_id: b, index: None, interval: ms(500), queue_size: 16 },
+                MonitoredItem { node_id: a, index: Some(3), interval: ms(100), queue_size: 2 },
+            ]
+        );
+    }
+
+    #[test]
+    fn grouping_is_linear() {
+        // 30,000 distinct nodes: quadratic grouping took seconds here, linear takes milliseconds.
+        let started = std::time::Instant::now();
+        let items = group_monitored(
+            (0..30_000u32).map(|i| (NodeId::new(2, i), None, Duration::from_millis(100), 16)),
+        );
+        assert_eq!(items.len(), 30_000);
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    /// Batches of at most `batch`, results in order; the first failed batch ends it.
+    #[tokio::test]
+    async fn batches_keep_order_and_stop_at_a_failure() {
+        let mut sizes = Vec::new();
+        let results: Result<Vec<u32>, &str> =
+            create_in_batches((0..1200).collect(), 500, |batch: Vec<u32>| {
+                sizes.push(batch.len());
+                async move { Ok(batch) }
+            })
+            .await;
+        assert_eq!(sizes, vec![500, 500, 200]);
+        assert_eq!(results.unwrap(), (0..1200).collect::<Vec<_>>());
+
+        let mut calls = 0;
+        let failed: Result<Vec<u32>, &str> = create_in_batches((0..1200).collect(), 500, |batch: Vec<u32>| {
+            calls += 1;
+            let n = calls;
+            async move { if n == 2 { Err("BadTooManyOperations") } else { Ok(batch) } }
+        })
+        .await;
+        assert_eq!(failed, Err("BadTooManyOperations"));
+        assert_eq!(calls, 2, "nothing is sent after a failed batch");
     }
 
     #[test]
