@@ -124,6 +124,11 @@ check-capability-tags:
 check-manifest-parity:
     ./packaging/check-manifest-parity.sh
 
+# Check that the versions release-please stamps (version.txt, Cargo.toml/Cargo.lock,
+# CMakeLists.txt) agree with its manifest, and that its Cargo.lock filter covers every crate.
+check-release-versions:
+    ./ci/check-release-versions.sh
+
 # Validate the thin-edge flows offline with `tedge flows test` (no broker/device/cloud).
 test-flows:
     ./flows/test-flows.sh

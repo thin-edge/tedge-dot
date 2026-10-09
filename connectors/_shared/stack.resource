@@ -117,7 +117,7 @@ Connector Implementation Should Be
     ...    (cloud/_shared/device.resource); the connector suites had only a Log line.
     ...
     ...    The two are told apart by linkage rather than by version — both deliberately report
-    ...    the same capability `version`, because they implement the same contract revision.
+    ...    the same capability `version`, because they are released together.
     ...    The C build dynamically links libcjson (see impl/c/README.md); the Rust build is
     ...    self-contained.
     [Arguments]    ${impl}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-v-in-tag": false,
+  "include-component-in-tag": false,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "pull-request-title-pattern": "chore: release ${version}",
+  "changelog-sections": [
+    {
+      "type": "feat",
+      "section": "Features"
+    },
+    {
+      "type": "fix",
+      "section": "Bug Fixes"
+    },
+    {
+      "type": "perf",
+      "section": "Performance"
+    },
+    {
+      "type": "revert",
+      "section": "Reverts"
+    },
+    {
+      "type": "docs",
+      "section": "Documentation",
+      "hidden": true
+    },
+    {
+      "type": "test",
+      "section": "Tests",
+      "hidden": true
+    },
+    {
+      "type": "ci",
+      "section": "CI",
+      "hidden": true
+    },
+    {
+      "type": "build",
+      "section": "Build",
+      "hidden": true
+    },
+    {
+      "type": "refactor",
+      "section": "Refactoring",
+      "hidden": true
+    },
+    {
+      "type": "chore",
+      "section": "Chores",
+      "hidden": true
+    }
+  ],
+  "packages": {
+    ".": {
+      "package-name": "tedge-dot",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "impl/rust/Cargo.toml",
+          "jsonpath": "$.workspace.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "impl/rust/Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value == 'tedge-dot' || @.name.value == 'tedge-dot-sdk' || @.name.value == 'connector-modbus' || @.name.value == 'connector-opcua' || @.name.value == 'connector-canbus' || @.name.value == 'connector-canopen' || @.name.value == 'connector-profibus' || @.name.value == 'connector-snmp' || @.name.value == 'ot-conformance')].version"
+        },
+        {
+          "type": "generic",
+          "path": "impl/c/CMakeLists.txt"
+        }
+      ]
+    }
+  }
+}

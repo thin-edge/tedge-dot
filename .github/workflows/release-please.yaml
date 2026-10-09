@@ -1,0 +1,54 @@
+name: Release Please
+
+# Keeps a "chore: release X.Y.Z" pull request open on main, its version and CHANGELOG.md
+# derived from the conventional commits merged since the last release
+# (release-please-config.json, .release-please-manifest.json). Merging that pull request tags
+# the release, creates the GitHub release with the changelog section as its notes, and then
+# runs the release workflow on the new tag to build, attach and publish both packages.
+#
+# The release workflow is CALLED here rather than left to a tag-push trigger: a tag created
+# with the default GITHUB_TOKEN never triggers another workflow, and one created with the
+# personal token used here would otherwise trigger it a second time alongside this call.
+#
+# COMMUNITY_ACTIONS_PAT, not GITHUB_TOKEN: pull requests opened with GITHUB_TOKEN do not run
+# CI, so the release PR would show no checks. It needs contents and pull-requests write.
+#
+# Besides version.txt and CHANGELOG.md, the release PR bumps impl/rust/Cargo.toml, the
+# workspace crates in impl/rust/Cargo.lock and impl/c/CMakeLists.txt (`extra-files`).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release PR / tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          token: ${{ secrets.COMMUNITY_ACTIONS_PAT }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  release:
+    name: Build and publish
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/release.yaml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit

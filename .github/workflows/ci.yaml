@@ -60,6 +60,16 @@ jobs:
       - uses: extractions/setup-just@v2
       - run: just check-manifest-parity
 
+  # release-please stamps the version into several files, and only warns when its Cargo.lock
+  # filter misses a crate -- which would then fail the release build's `cargo fetch --locked`.
+  release-versions:
+    name: Release version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - run: just check-release-versions
+
   flows:
     name: Flow tests (tedge flows test)
     runs-on: ubuntu-latest
