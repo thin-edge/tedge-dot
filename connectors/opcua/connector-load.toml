@@ -1,0 +1,53 @@
+# The devices of the OPC UA e2e harness that need the load-simulator (docker-compose.yaml,
+# OPCUA_SIM_BULK=5000; openspec change load-test-performance). Its own connector instance, so a
+# 5000-point subscribe cannot delay the devices of connector.toml in the C build.
+#
+#   opc4  Burst, the default queue size (16): every one of the five writes per second arrives
+#   opc5  Burst, queue_size = 1: only the latest value per publish arrives
+#   opc6  5000 subscribed points (Bulk0 .. Bulk4999), appended by entrypoint.sh: subscribed in
+#         batches of 500 monitored items, and every start value arrives
+
+[connector]
+protocol      = "opcua"
+service_name  = "tedge-dot-load"
+poll_interval = "1h"
+log_level     = "info"
+operation_timeout = "5s"
+
+[mqtt]
+host = "broker"
+port = 1883
+
+[connection]
+application_name = "tedge-dot-load"
+security_policy  = "None"
+security_mode    = "none"
+
+[[device]]
+name              = "opc4"
+protocol_address  = { endpoint = "opc.tcp://load-simulator:4840/" }
+default_mode      = "typed"
+sampling_interval = "1s"
+
+  [[device.point]]
+  id       = "burst"
+  datatype = "uint32"
+  address  = { node_id = "ns=2;s=Burst" }
+
+[[device]]
+name              = "opc5"
+protocol_address  = { endpoint = "opc.tcp://load-simulator:4840/", queue_size = 1 }
+default_mode      = "typed"
+sampling_interval = "1s"
+
+  [[device.point]]
+  id       = "burst"
+  datatype = "uint32"
+  address  = { node_id = "ns=2;s=Burst" }
+
+[[device]]
+name              = "opc6"
+protocol_address  = { endpoint = "opc.tcp://load-simulator:4840/" }
+default_mode      = "typed"
+sampling_interval = "1s"
+# Points: appended by entrypoint.sh.

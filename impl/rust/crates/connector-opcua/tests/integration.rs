@@ -41,7 +41,7 @@ async fn start_server_on(port: u16) -> (ServerHandle, Arc<SimpleNodeManager>, u1
     let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
 
-    let (server, handle) = ServerBuilder::new_anonymous("tedge-dot-test")
+    let mut builder = ServerBuilder::new_anonymous("tedge-dot-test")
         .application_uri("urn:tedge-dot-opcua-test")
         .product_uri("urn:tedge-dot-opcua-test")
         .host("127.0.0.1")
@@ -53,9 +53,11 @@ async fn start_server_on(port: u16) -> (ServerHandle, Arc<SimpleNodeManager>, u1
                 ..Default::default()
             },
             "simple",
-        ))
-        .build()
-        .unwrap();
+        ));
+    // No cap on monitored items per subscription (async-opcua's default is 1000), so a test
+    // can subscribe a device with thousands of points.
+    builder.limits_mut().subscriptions.max_monitored_items_per_sub = 0;
+    let (server, handle) = builder.build().unwrap();
 
     let nm = handle
         .node_managers()
@@ -302,6 +304,68 @@ async fn subscribe_unknown_point_is_rejected() {
         )
         .await;
     assert!(err.is_err(), "unknown point must fail the subscribe call");
+
+    connector.disconnect().await.unwrap();
+    handle.cancel();
+}
+
+/// More than 1000 points on one device subscribe: the items are created in batches, and the
+/// client decodes replies longer than async-opcua's default array limit of 1000
+/// (openspec `opcua-large-subscriptions`).
+#[tokio::test]
+async fn a_device_with_thousands_of_points_subscribes() {
+    const POINTS: usize = 5000;
+    let (handle, nm, ns, port) = start_server().await;
+    {
+        let mut space = nm.address_space().write();
+        for i in 0..POINTS {
+            let name = format!("Tag{i}");
+            VariableBuilder::new(&NodeId::new(ns, name.as_str()), name.as_str(), name.as_str())
+                .data_type(DataTypeId::Double)
+                .value(i as f64)
+                .organized_by(ObjectId::ObjectsFolder)
+                .insert(&mut *space);
+        }
+    }
+    let mut toml = format!(
+        r#"
+        [connector]
+        protocol = "opcua"
+
+        [[device]]
+        name = "plc-1"
+        protocol_address = {{ endpoint = "opc.tcp://127.0.0.1:{port}" }}
+        default_mode = "typed"
+        "#
+    );
+    for i in 0..POINTS {
+        toml.push_str(&format!(
+            "\n[[device.point]]\nid = \"tag{i}\"\ndatatype = \"float64\"\naddress = {{ namespace = {ns}, identifier = \"Tag{i}\" }}\n"
+        ));
+    }
+    let config: ConnectorConfig = toml::from_str(&toml).unwrap();
+    let mut connector = OpcuaConnector::default();
+    connector.configure(&config).unwrap();
+    let reports = connector.connect().await.unwrap();
+    assert_eq!(reports[0].status.as_str(), "connected", "{:?}", reports[0].reason);
+
+    let points: Vec<PointRef> =
+        (0..POINTS).map(|i| pref(&format!("tag{i}"), DataType::Float64, 100)).collect();
+    let (tx, mut rx) = mpsc::channel::<Sample>(POINTS * 2);
+    connector.subscribe(&"plc-1".to_string(), &points, tx).await.unwrap();
+
+    // Every monitored item reports its current value once it exists.
+    let mut seen = std::collections::HashSet::new();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while seen.len() < POINTS {
+            let sample = rx.recv().await.expect("sample channel closed");
+            assert_eq!(sample.quality, Quality::Good, "{sample:?}");
+            seen.insert(sample.point);
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("only {} of {POINTS} start values arrived", seen.len()));
+    connector.check_subscription(&"plc-1".to_string()).await.unwrap();
 
     connector.disconnect().await.unwrap();
     handle.cancel();

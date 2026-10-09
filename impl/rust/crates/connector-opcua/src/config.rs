@@ -74,6 +74,9 @@ pub struct OpcuaConnection {
     /// Allow a password to be sent unencrypted.
     #[serde(default)]
     pub allow_plaintext_password: bool,
+    /// Default monitored-item queue size of every device; see [`queue_size`].
+    #[serde(default)]
+    pub queue_size: Option<serde_json::Value>,
 }
 
 impl Default for OpcuaConnection {
@@ -92,6 +95,7 @@ impl Default for OpcuaConnection {
             trust_any_server_certificate: false,
             allow_deprecated_security: false,
             allow_plaintext_password: false,
+            queue_size: None,
         }
     }
 }
@@ -140,6 +144,9 @@ pub struct OpcuaEndpoint {
     pub allow_deprecated_security: Option<bool>,
     #[serde(default)]
     pub allow_plaintext_password: Option<bool>,
+    /// The device's monitored-item queue size; overrides `[connection]`.
+    #[serde(default)]
+    pub queue_size: Option<serde_json::Value>,
 }
 
 /// `point.address` — how to address one OPC-UA node. Either give the standard textual
@@ -159,6 +166,24 @@ pub struct NodeAddress {
     /// One element of an array value, selected on the server through `IndexRange`.
     #[serde(default)]
     pub index: Option<u32>,
+    /// The point's monitored-item queue size; overrides the device's.
+    #[serde(default)]
+    pub queue_size: Option<serde_json::Value>,
+}
+
+/// A monitored item's queue size when no level sets one (spec §3.8).
+pub const DEFAULT_QUEUE_SIZE: u32 = 16;
+
+/// Validate a `queue_size` as written: an integer from 1 to 65535. The message is the C
+/// build's too.
+pub fn queue_size(value: &Option<serde_json::Value>) -> Result<Option<u32>, String> {
+    match value {
+        None => Ok(None),
+        Some(v) => match v.as_u64() {
+            Some(n @ 1..=65535) => Ok(Some(n as u32)),
+            _ => Err("queue_size must be an integer from 1 to 65535".to_string()),
+        },
+    }
 }
 
 /// A password. Its `Debug` is redacted, it has no `Display`, a wrong type is reported without

@@ -14,6 +14,7 @@
 
 #include "cjson/cJSON.h"
 #include "tedge_dot/map.h"
+#include "tedge_dot/schedule.h"
 
 /* ---- known keys (contract §3.3) -------------------------------------------
  * The keys a contract-level table may carry. Anything else is refused, with the
@@ -1896,6 +1897,7 @@ static void free_contents(tdot_config_t *cfg, bool keep_path) {
         free(dev->name);
         free(dev->type);
         cJSON_Delete(dev->report_table);
+        tdot_schedule_free(dev);
         free(dev->proto); /* connectors keep flat per-device state here and
                              release transports in disconnect_device() */
     }

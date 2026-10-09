@@ -100,8 +100,11 @@ for a pushed point (an OPC UA subscription, an SNMP trap) that receives nothing 
 
 The report policy only filters the readings that arrive. For a pushed point, how often a reading
 can arrive is up to the source: an OPC UA server samples a subscribed node at the point's
-`sampling_interval` (falling back to its `poll_interval`) and sends changes at most that often.
-Set `sampling_interval` to get changes faster, and `report` to publish fewer of them. See
+`sampling_interval` (falling back to its `poll_interval`). It queues up to `queue_size` changes
+(default 16) between two publishes and sends them all. Set `sampling_interval` to get changes
+faster, and `report` to publish fewer of them. Prefer `report` to `queue_size = 1` for cutting
+volume: `report` decides per point which readings matter, while a queue of 1 drops whichever
+changes happen to fall between two publishes. See
 [contract §3.1](contract/ot-connector-contract.md#31-common-protocol-neutral-point-fields) and the
 [OPC UA spec §3.8](connectors/opcua-connector-spec.md#38-subscription-timing-sampling_interval).
 

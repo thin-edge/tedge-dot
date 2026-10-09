@@ -20,6 +20,11 @@ on change, so with static values a push-delivered device goes silent after its f
 notification and the cloud marks it unavailable. Off by default because the e2e and
 smoke tests assert the static values above.
 
+OPCUA_SIM_BULK=<n> (the load-simulator of docker-compose.yaml) adds n static Double nodes
+ns=2;s=Bulk0 .. Bulk<n-1> (value = i), for a device with thousands of subscribed points, and
+ns=2;s=Burst, a UInt32 written five times in a row every second (10n .. 10n + 4): faster than
+any publishing interval, so the monitored item's queue size decides how many arrive.
+
 SECURED MODE (connectors/opcua/docker-compose.secure.yaml): with OPCUA_SECURE_SERVERS set,
 the container instead serves one server per PKI scenario, each on its own port, all with the
 address space above:
@@ -50,6 +55,7 @@ from asyncua.crypto.permission_rules import User, UserRole
 
 ENDPOINT_HOST = os.environ.get("OPCUA_ENDPOINT_HOST", "0.0.0.0")
 DYNAMIC = os.environ.get("OPCUA_SIM_DYNAMIC", "").strip().lower() in ("1", "true", "yes", "on")
+BULK = int(os.environ.get("OPCUA_SIM_BULK", "0") or 0)
 NS_URI = "urn:tedge:opcua-sim"
 # The application URI of a secured server (its certificate's URI SAN). Distinct from NS_URI,
 # which would otherwise take namespace index 1 and move the nodes off ns=2.
@@ -133,6 +139,14 @@ async def build_server(port, policies, user_manager=None, cert=None, key=None):
         ua.Variant(0, ua.VariantType.UInt32),
     )
     nodes = {"idx": idx, "temperature": temperature, "count": count, "ticks": ticks}
+    if BULK:
+        for i in range(BULK):
+            await plc.add_variable(ua.NodeId(f"Bulk{i}", idx), ua.QualifiedName(f"Bulk{i}", idx), float(i))
+        nodes["burst"] = await plc.add_variable(
+            ua.NodeId("Burst", idx),
+            ua.QualifiedName("Burst", idx),
+            ua.Variant(0, ua.VariantType.UInt32),
+        )
     nodes.update(await add_structures(server, plc, idx))
     return server, nodes
 
@@ -267,6 +281,9 @@ async def main():
                     ua.Variant(ua.SimMotor(Current=float(n), Temp=40.0), ua.VariantType.ExtensionObject)
                 )
                 await nodes["levels"].write_value(ua.Variant([0.0, float(n), 0.0], ua.VariantType.Double))
+                if "burst" in nodes:
+                    for k in range(5):
+                        await nodes["burst"].write_value(ua.Variant(10 * n + k, ua.VariantType.UInt32))
                 if DYNAMIC:
                     drift = 2.5 * math.sin(2 * math.pi * n / 300)
                     await nodes["temperature"].write_value(round(TEMPERATURE + drift, 2))

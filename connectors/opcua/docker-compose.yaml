@@ -40,6 +40,16 @@ services:
     environment:
       OPCUA_ENDPOINT_HOST: sampling-simulator
 
+  # A third simulator for connector-load.toml: 5000 extra nodes for a device with thousands of
+  # subscribed points, and a node that changes five times per publishing interval (queue_size).
+  load-simulator:
+    build:
+      context: ../..
+      dockerfile: connectors/opcua/sim/Dockerfile
+    environment:
+      OPCUA_ENDPOINT_HOST: load-simulator
+      OPCUA_SIM_BULK: "5000"
+
   connector:
     # Stable image name so every (randomly named) project reuses the built image instead of
     # rebuilding it. IMPL/CONNECTOR_DOCKERFILE select the implementation under test:
@@ -58,6 +68,7 @@ services:
       - broker
       - simulator
       - sampling-simulator
+      - load-simulator
 
   # thin-edge flows engine (user-defined mapper, no cloud) running this repo's flows against
   # the same broker, so the suite can drive the device-side command/parameter bridge end to end.

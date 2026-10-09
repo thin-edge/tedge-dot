@@ -1704,8 +1704,9 @@ static void check_bytes_datatype(void) {
  * config lives in its own directory `dir`, with `connection` spliced into
  * [connection] and `address` into the device's protocol_address. Returns the
  * configure() result; `err` holds its message. */
-static int opcua_configure(const char *dir, const char *connection,
-                           const char *address, char *err, size_t errlen) {
+static int opcua_configure_point(const char *dir, const char *connection,
+                                 const char *address, const char *point_address,
+                                 char *err, size_t errlen) {
     char path[512];
     snprintf(path, sizeof path, "%s/opcua.toml", dir);
     FILE *fp = fopen(path, "w");
@@ -1714,8 +1715,9 @@ static int opcua_configure(const char *dir, const char *connection,
             "[[device]]\nname = \"plc\"\n"
             "protocol_address = { endpoint = \"opc.tcp://127.0.0.1:4840\"%s%s }\n"
             "  [[device.point]]\n  id = \"t\"\n  datatype = \"float64\"\n"
-            "  address = { node_id = \"ns=2;s=T\" }\n",
-            connection, *address ? ", " : "", address);
+            "  address = { node_id = \"ns=2;s=T\"%s%s }\n",
+            connection, *address ? ", " : "", address,
+            *point_address ? ", " : "", point_address);
     fclose(fp);
     err[0] = '\0';
     tdot_config_t *cfg = tdot_config_load(path, err, errlen);
@@ -1730,10 +1732,39 @@ static int opcua_configure(const char *dir, const char *connection,
     return rc;
 }
 
+static int opcua_configure(const char *dir, const char *connection,
+                           const char *address, char *err, size_t errlen) {
+    return opcua_configure_point(dir, connection, address, "", err, errlen);
+}
+
 static char *scratch_dir(void) {
     char template[] = "/tmp/tdot-opcua-config-XXXXXX";
     char *dir = mkdtemp(template);
     return dir ? strdup(dir) : NULL;
+}
+
+/* `queue_size` at each level: the messages are the Rust module's too
+ * (impl/rust/crates/connector-opcua/src/lib.rs `queue_size_is_validated_where_it_is`). */
+static void check_opcua_queue_size(void) {
+    char *dir = scratch_dir();
+    char err[512];
+    const char *msg = "queue_size must be an integer from 1 to 65535";
+    CHECK(opcua_configure_point(dir, "queue_size = 65535", "queue_size = 1",
+                                "queue_size = 16", err, sizeof err) == 0,
+          "valid at every level: %s", err);
+    CHECK(opcua_configure(dir, "queue_size = \"16\"", "", err, sizeof err) != 0 &&
+              strstr(err, "[connection]: ") && strstr(err, msg),
+          "connection wrong type: %s", err);
+    CHECK(opcua_configure(dir, "", "queue_size = 65536", err, sizeof err) != 0 &&
+              strstr(err, "device 'plc' protocol_address: ") && strstr(err, msg),
+          "device out of range: %s", err);
+    CHECK(opcua_configure_point(dir, "", "", "queue_size = 0", err, sizeof err) != 0 &&
+              strstr(err, "point 't' address: ") && strstr(err, msg),
+          "point zero: %s", err);
+    CHECK(opcua_configure_point(dir, "", "", "queue_size = 1.5", err, sizeof err) != 0 &&
+              strstr(err, msg),
+          "point float: %s", err);
+    free(dir);
 }
 
 static void check_opcua_security_config(void) {
@@ -2185,6 +2216,7 @@ int main(void) {
     check_report_tables_are_validated_where_they_are();
 #ifdef TDOT_FEATURE_OPCUA
     check_opcua_security_config();
+    check_opcua_queue_size();
 #endif
 
     if (failures) {

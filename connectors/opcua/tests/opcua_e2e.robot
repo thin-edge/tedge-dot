@@ -56,6 +56,12 @@ ${LONG_OUTAGE}              20s
 # A device that polls hourly but samples its pushed point every 200 ms (sampling_interval).
 ${SAMPLING_DEVICE}          opc3
 ${SAMPLING_SAMPLE_PREFIX}   te/device/${SAMPLING_DEVICE}/ot/${PROTOCOL}/sample
+# connector-load.toml (openspec load-test-performance): Burst is written five times a second,
+# read with the default queue size (opc4) and with queue_size = 1 (opc5); opc6 has 5000 points.
+${BURST_TOPIC}              te/device/opc4/ot/${PROTOCOL}/sample/burst
+${BURST_LATEST_TOPIC}       te/device/opc5/ot/${PROTOCOL}/sample/burst
+${BULK_PREFIX}              te/device/opc6/ot/${PROTOCOL}/sample
+${BULK_LINK_TOPIC}          te/device/opc6/ot/${PROTOCOL}/status/link
 
 
 *** Test Cases ***
@@ -175,6 +181,45 @@ Sampling Interval Outpaces A Slow Poll Interval
         ${value}=    Get Json Field    ${next}    value
         Should Be True    ${value} > ${previous}    each tick arrives as its own sample: ${value} after ${previous}
         ${previous}=    Set Variable    ${value}
+    END
+
+Every Change Of A Fast Node Arrives With The Default Queue Size
+    [Documentation]    The simulator writes Burst five times in a row every second (10n .. 10n + 4),
+    ...                faster than opc4's one-second publishing interval. With the default
+    ...                `queue_size` of 16 the server queues every value, so all five of a burst
+    ...                arrive as their own samples, in order.
+    [Tags]    requires:subscribe
+    Wait For Sample    ${BURST_TOPIC}    timeout=${READY_TIMEOUT}
+    Wait Until Keyword Succeeds    15s    1s    A Whole Burst Should Have Arrived    ${BURST_TOPIC}
+
+Only The Latest Value Arrives With Queue Size One
+    [Documentation]    opc5 reads the same node with `queue_size = 1`: the server keeps only the
+    ...                latest value per publish, so no burst arrives whole. It shows that the
+    ...                setting reaches the monitored item.
+    [Tags]    requires:subscribe
+    Wait For Sample    ${BURST_LATEST_TOPIC}    timeout=${READY_TIMEOUT}
+    Sleep    5s    let several bursts pass
+    ${values}=    Burst Values    ${BURST_LATEST_TOPIC}
+    ${whole}=    Whole Bursts    ${values}
+    Should Be Empty    ${whole}    with queue_size = 1 a burst must not arrive whole: ${values}
+
+A Device With Thousands Of Points Subscribes
+    [Documentation]    opc6 subscribes 5000 points. The connector creates the monitored items in
+    ...                batches of 500. A single request of 5000 failed with the Rust build
+    ...                (BadDecodingError past async-opcua's 1000-entry limit), and in the C build
+    ...                most start values were dropped from a fixed 256-slot queue. Every monitored
+    ...                item reports its value when it is created, so the first, a middle and the
+    ...                last point all publish.
+    [Tags]    requires:subscribe
+    ${link}=    Wait For Retained    ${BULK_LINK_TOPIC}    timeout=${READY_TIMEOUT}
+    Should Contain    ${link}    connected
+    FOR    ${i}    IN    0    2500    4999
+        Wait Until Keyword Succeeds    ${READY_TIMEOUT}s    1s
+        ...    Get Message    ${BULK_PREFIX}/bulk${i}
+        ${sample}=    Get Message    ${BULK_PREFIX}/bulk${i}
+        Sample Should Be Good    ${sample}
+        ${value}=    Get Json Field    ${sample}    value
+        Should Be Equal As Numbers    ${value}    ${i}
     END
 
 Subscribed Static Node Falls Silent After Its First Value
@@ -640,6 +685,27 @@ Structure Fields Recover After The Server Restarts
 
 
 *** Keywords ***
+Burst Values
+    [Documentation]    The values of every sample seen on a Burst topic, in arrival order.
+    [Arguments]    ${topic}
+    ${payloads}=    Get Messages    ${topic}
+    ${values}=    Evaluate    [json.loads(p)["value"] for p in $payloads]    modules=json
+    RETURN    ${values}
+
+A Whole Burst Should Have Arrived
+    [Documentation]    Some burst n arrived whole, its five values in order.
+    [Arguments]    ${topic}
+    ${values}=    Burst Values    ${topic}
+    ${whole}=    Whole Bursts    ${values}
+    Should Not Be Empty    ${whole}    no burst arrived whole: ${values}
+
+Whole Bursts
+    [Documentation]    The bursts n whose five values 10n .. 10n + 4 all arrived, in order.
+    [Arguments]    ${values}
+    ${whole}=    Evaluate
+    ...    (lambda vs: sorted(n for n in {v // 10 for v in vs} if [v for v in vs if v // 10 == n] == [10 * n + k for k in range(5)]))($values)
+    RETURN    ${whole}
+
 Struct Point Should Be
     [Documentation]    The next sample of an opc3 point is good, with this value and datatype.
     [Arguments]    ${point}    ${expected}    ${datatype}

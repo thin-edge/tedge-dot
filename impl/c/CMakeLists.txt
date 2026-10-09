@@ -46,6 +46,7 @@ add_library(tedge_dot_sdk STATIC
   sdk/src/report.c
   sdk/src/map.c
   sdk/src/runtime.c
+  sdk/src/schedule.c
   sdk/src/watch.c
   sdk/src/factory.c
 )
@@ -339,6 +340,11 @@ add_executable(tedge-dot-watch tests/watch.c)
 target_link_libraries(tedge-dot-watch PRIVATE tedge_dot_sdk)
 add_test(NAME watch COMMAND tedge-dot-watch)
 
+# Which points a pass of the main loop visits, and how long it waits (schedule.h).
+add_executable(tedge-dot-schedule tests/schedule.c)
+target_link_libraries(tedge-dot-schedule PRIVATE tedge_dot_sdk)
+add_test(NAME schedule COMMAND tedge-dot-schedule)
+
 # The write direction of the per-point transform (contract §4.2): the inverse math and the
 # one write path every command and the CLI take.
 add_executable(tedge-dot-write tests/write.c)
@@ -352,6 +358,11 @@ if(TDOT_OPCUA)
   target_include_directories(tedge-dot-opcua-sampling PRIVATE connectors/opcua)
   target_link_libraries(tedge-dot-opcua-sampling PRIVATE tedge_dot_sdk)
   add_test(NAME opcua-sampling COMMAND tedge-dot-opcua-sampling)
+
+  add_executable(tedge-dot-opcua-ring tests/opcua_ring.c)
+  target_include_directories(tedge-dot-opcua-ring PRIVATE connectors/opcua)
+  target_link_libraries(tedge-dot-opcua-ring PRIVATE tedge_dot_sdk)
+  add_test(NAME opcua-ring COMMAND tedge-dot-opcua-ring)
 
   add_executable(tedge-dot-opcua-pki tests/opcua_pki.c)
   target_include_directories(tedge-dot-opcua-pki PRIVATE connectors/opcua)

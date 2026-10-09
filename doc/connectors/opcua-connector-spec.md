@@ -71,6 +71,7 @@ allowed.
 | `trust_any_server_certificate` | `false` | Accept any server certificate (§5.4). Devices may override. |
 | `allow_deprecated_security` | `false` | Allow `Basic128Rsa15` and `Basic256`. Devices may override. |
 | `allow_plaintext_password` | `false` | Allow a password to travel unencrypted (§6.2). Devices may override. |
+| `queue_size` | `16` | How many values a monitored item queues between two publishes (§3.8). Devices and points may override. |
 
 A value of the wrong type is a configuration error naming `[connection]` and the key.
 
@@ -84,6 +85,7 @@ A value of the wrong type is a configuration error naming `[connection]` and the
 | `password` \| `password_file` | no | At most one. A `password_file` is read at configure: its first line, without the line ending. A user without either has an empty password. |
 | `user_certificate`, `user_private_key` | together | X.509 user identity (certificate DER or PEM, key PEM). The key must match the certificate and must not be readable by group or others. |
 | `trust_any_server_certificate`, `allow_deprecated_security`, `allow_plaintext_password` | no | Per-device overrides of the `[connection]` switches. |
+| `queue_size` | no | The device's monitored-item queue size (§3.8); overrides `[connection]`. |
 
 Exactly one identity: anonymous (no identity key), username, or X.509. Mixing them, a password
 without `user`, both `password` and `password_file`, or only one of the two certificate keys is
@@ -119,6 +121,12 @@ Two optional keys select one value out of a structured or array value (§3.7):
 | --- | --- |
 | `field` | A dotted path into a structure: `"Speed"`, `"Motor.Current"`, `"Items[1].Value"`. A segment may carry one zero-based element index `[n]`. |
 | `index` | One zero-based element of an array variable, selected on the server through `IndexRange`. May be combined with `field` when the elements are structures. |
+
+One more optional key applies to subscribed points:
+
+| Key | Meaning |
+| --- | --- |
+| `queue_size` | The point's monitored-item queue size (§3.8); overrides the device's. |
 
 Points with either key are read-only (`access = "write"` or `"read_write"` is a configuration
 error). `field` needs `mode = "typed"`: a raw point reads the whole structure body.
@@ -222,8 +230,8 @@ A subscribed node is not sent the moment it changes. The server runs two timers:
   connector requests the point's effective `sampling_interval`
   ([contract §3.1](../contract/ot-connector-contract.md#31-common-protocol-neutral-point-fields)):
   the point's, else its device's, else `[connector]`'s, else the point's effective
-  `poll_interval`. Each item has `queueSize = 1` and `discardOldest = true`, so only the
-  latest value per publish is sent.
+  `poll_interval`. Each item queues up to the point's effective `queue_size` values between
+  two publishes, with `discardOldest = true` (see "Queue size" below).
 - **Publishing**, per subscription (one per device): how often the server sends the queued
   changes. It is not configurable. The connector requests the fastest effective sampling
   interval among the device's subscribed points.
@@ -244,6 +252,43 @@ sampling_interval = "200ms"   # subscribed nodes: sampled and published about ev
 means; it can be far more traffic, and more load on whatever the server reads the value from.
 One point at `"0"` also makes the whole device's subscription publish at the server's fastest
 rate. Use it only when you need it.
+
+**Queue size.** A node that changes more often than the publishing interval produces several
+values per publish. The monitored item keeps up to `queue_size` of them and drops the oldest
+beyond that, so every change arrives as its own sample as long as no more than `queue_size`
+happen between two publishes. The effective queue size is the point's `address.queue_size`,
+else the device's `protocol_address.queue_size`, else `[connection] queue_size`, else **16**. It
+must be an integer from 1 to 65535. Anything else is refused with `<place>: queue_size must be an
+integer from 1 to 65535`, the same in both builds.
+
+`queue_size = 1` sends only the latest value per publish. That was the fixed behaviour before
+the queue size could be set: **the default changed from 1 to 16**. Set `[connection]
+queue_size = 1` to keep the previous behaviour. To publish fewer readings, prefer
+`report.min_interval` or a deadband (§3.5), which act per point after the values have arrived.
+
+The server may revise the queue size (python-asyncua grants what is asked; an async-opcua server caps it
+at 10). When it does, both builds log an `info` line naming the device, the point, the requested
+and the revised size, and keep what was granted.
+
+**Shared nodes.** The Rust build creates one monitored item for all points on the same node and
+array element, with the fastest sampling interval and the largest queue size among them. The C
+build creates one item per point, with that point's own values.
+
+**Many points.** Both builds create a device's monitored items in requests of at most 500, so a
+device with thousands of subscribed points subscribes. The Rust client also decodes arrays of up
+to 65535 elements, where async-opcua's default limit of 1000 used to refuse such a device with
+`BadDecodingError`. A refused item has a different effect in each build:
+
+- Rust: any refused item, or any failed request, deletes the device's subscription, and all of
+  its points are polled.
+- C: only the refused points are polled. The subscription is dropped only when the server
+  accepted no item at all.
+
+The C build buffers pushed values between two runtime ticks in a queue per device. The queue
+starts with room for twice the device's subscribed points, so every point's initial value
+fits. It doubles when a burst fills it, up to 65536 entries or four times the points, whichever
+is larger. Past that it drops the newest value and logs a `warn` line naming the device and the
+bound.
 
 The server may grant other rates than requested. When the revised sampling interval of an item,
 or the revised publishing interval of a subscription, differs from the requested one, both

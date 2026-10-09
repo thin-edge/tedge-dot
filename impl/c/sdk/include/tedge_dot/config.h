@@ -140,6 +140,15 @@ typedef struct tdot_device {
     char link_reason[TDOT_REASON_MAX];
     double backoff_s;     /* current reconnect backoff */
     double reconnect_at;  /* monotonic deadline for next reconnect attempt */
+    /* Which points a pass of the main loop visits (schedule.h), rebuilt by the
+     * runtime whenever a point's push state changes. NULL lists: walk every
+     * point. */
+    size_t *polled;   /* readable points not delivered by push */
+    size_t npolled;
+    size_t *reported; /* points with a non-passthrough report policy */
+    size_t nreported;
+    size_t npushed;        /* points delivered by push */
+    double fastest_push_s; /* their fastest sampling interval; <0: none */
 } tdot_device_t;
 
 typedef struct tdot_config {

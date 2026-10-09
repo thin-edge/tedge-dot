@@ -22,13 +22,25 @@
 #include "cjson/cJSON.h"
 #include "tedge_dot/connector.h"
 #include "tedge_dot/decode.h"
+#include "push_ring.h"
 #include "ua_pki.h"
 #include "ua_sampling.h"
 
 /* Per-point parsed address (pt->proto, flat). */
 typedef struct {
     char node_id[160]; /* textual "ns=2;s=Temperature" */
+    /* The effective monitored-item queue size: the point's, the device's,
+     * [connection]'s, then UA_QUEUE_SIZE_DEFAULT. */
+    UA_UInt32 queue_size;
 } ua_point_t;
+
+/* A monitored item's queue size when no level sets one (spec §3.8). */
+#define UA_QUEUE_SIZE_DEFAULT 16
+
+/* The most monitored items one CreateMonitoredItems request carries: what the
+ * Rust module sends too (async-opcua refuses replies of more than 1000, and
+ * servers often cap MaxMonitoredItemsPerCall at 1000). */
+#define UA_ITEMS_PER_REQUEST 500
 
 /* Samples that arrived by subscription since the last drain.
  *
@@ -37,13 +49,8 @@ typedef struct {
  * thread -- so producer and consumer are the same thread and the queue needs no
  * locking. It is a ring rather than a single slot per point so that a burst of
  * changes between two ticks is delivered as the separate value changes it was,
- * not collapsed into the latest one. */
-#define UA_PUSH_QUEUE_LEN 256
-
-typedef struct {
-    tdot_point_t *pt;
-    tdot_sample_t sample;
-} ua_pending_t;
+ * not collapsed into the latest one. Sized per device when it subscribes and
+ * grown on demand (push_ring.h). */
 
 /* Security policies (spec §3.1). The key-length window is the one
  * async-opcua applies, so both builds accept the same server certificates. */
@@ -122,10 +129,7 @@ typedef struct {
      * schedule and the device goes silent for good behind a healthy-looking
      * `connected` link. */
     bool sub_lost;
-    ua_pending_t queue[UA_PUSH_QUEUE_LEN];
-    size_t head; /* next slot to write */
-    size_t tail; /* next slot to read */
-    unsigned long dropped; /* overruns since the last warning */
+    ua_ring_t queue; /* pushed values not yet handed to the runtime */
 } ua_device_t;
 
 typedef struct {
@@ -150,6 +154,8 @@ typedef struct {
 
     ua_secret_t *secrets;
     size_t nsecrets;
+
+    UA_UInt32 queue_size; /* [connection] queue_size; 0: unset */
 } ua_state_t;
 
 /* Settings a management command may not add or change (spec §3): they name
@@ -257,6 +263,23 @@ static int get_string(toml_table_t *tab, const char *key, char *out,
     }
     snprintf(out, outlen, "%s", d.u.s);
     free(d.u.s);
+    return 1;
+}
+
+/* `queue_size` as written: an integer from 1 to 65535, with the message the
+ * Rust module gives. 0 when the key is absent. */
+static int get_queue_size(toml_table_t *tab, UA_UInt32 *out, const char *where,
+                          char *err, size_t errlen) {
+    *out = 0;
+    if (!tab || !toml_key_exists(tab, "queue_size"))
+        return 0;
+    toml_datum_t d = toml_int_in(tab, "queue_size");
+    if (!d.ok || d.u.i < 1 || d.u.i > 65535) {
+        snprintf(err, errlen,
+                 "%squeue_size must be an integer from 1 to 65535", where);
+        return -1;
+    }
+    *out = (UA_UInt32)d.u.i;
     return 1;
 }
 
@@ -626,6 +649,8 @@ static int configure(tdot_connector_t *self, tdot_config_t *cfg, char *err,
         if ((d = toml_int_in(c, "request_timeout_s")).ok)
             st->request_timeout_s = (int)d.u.i;
     }
+    if (get_queue_size(c, &st->queue_size, "[connection]: ", err, errlen) < 0)
+        return -1;
     resolve_path(base, pki_dir, st->pki_root, sizeof st->pki_root);
     st->explicit_cert = *cert || *key;
     if (*cert && *key) {
@@ -653,6 +678,13 @@ static int configure(tdot_connector_t *self, tdot_config_t *cfg, char *err,
         }
         snprintf(ua->endpoint, sizeof ua->endpoint, "%s", d.u.s);
         free(d.u.s);
+
+        char where[256];
+        snprintf(where, sizeof where, "device '%s' protocol_address: ", dev->name);
+        UA_UInt32 device_queue_size;
+        if (get_queue_size(dev->protocol_address, &device_queue_size, where,
+                           err, errlen) < 0)
+            return -1;
 
         if (configure_security(st, &def, dev, ua, base, err, errlen) != 0)
             return -1;
@@ -691,6 +723,15 @@ static int configure(tdot_connector_t *self, tdot_config_t *cfg, char *err,
                              (int)ns.u.i, (long long)iid.u.i);
                 }
             }
+
+            snprintf(where, sizeof where, "point '%s' address: ", pt->id);
+            if (get_queue_size(pt->address, &up->queue_size, where, err,
+                               errlen) < 0)
+                return -1;
+            if (!up->queue_size)
+                up->queue_size = device_queue_size  ? device_queue_size
+                                 : st->queue_size   ? st->queue_size
+                                                    : UA_QUEUE_SIZE_DEFAULT;
 
             cJSON *addr = cJSON_CreateObject();
             cJSON_AddStringToObject(addr, "node_id", up->node_id);
@@ -748,12 +789,13 @@ static void disconnect_device(tdot_connector_t *self, tdot_device_t *dev) {
         /* The subscription died with the session. Drop the id and anything
          * still queued so a reconnect cannot deliver samples belonging to the
          * previous session, or reuse its subscription id. The runtime has
-         * already cleared pt->subscribed for every point. */
+         * already cleared pt->subscribed for every point. The ring is freed:
+         * the runtime releases ua_device_t with a plain free(), always after
+         * a disconnect, and the next subscribe sizes a new one. */
         ua->sub_id = 0;
         ua->subscribed = false;
         ua->sub_lost = false;
-        ua->head = ua->tail = 0;
-        ua->dropped = 0;
+        ua_ring_free(&ua->queue);
     }
 }
 
@@ -1663,16 +1705,12 @@ static void on_data_change(UA_Client *client, UA_UInt32 sub_id,
         return;
     ua_device_t *ua = dev->proto;
 
-    size_t next = (ua->head + 1) % UA_PUSH_QUEUE_LEN;
-    if (next == ua->tail) {
-        /* Ring full: the runtime has not drained for a while. Drop the NEWEST
-         * change rather than overwriting the oldest, so the samples that are
-         * already queued keep their order and none is silently replaced. */
-        ua->dropped++;
+    /* A full ring grows. Only past its bound is the NEWEST change dropped
+     * (and counted), so the queued samples keep their order and none is
+     * silently replaced. */
+    ua_pending_t *slot = ua_ring_slot(&ua->queue);
+    if (!slot)
         return;
-    }
-
-    ua_pending_t *slot = &ua->queue[ua->head];
     slot->pt = pt;
     tdot_sample_init(&slot->sample);
     if (!value->hasValue || !UA_Variant_isScalar(&value->value)) {
@@ -1683,7 +1721,7 @@ static void on_data_change(UA_Client *client, UA_UInt32 sub_id,
     } else {
         variant_to_sample(&value->value, pt, &slot->sample);
     }
-    ua->head = next;
+    ua_ring_commit(&ua->queue);
 }
 
 /* The subscription is gone. All three hooks below mean the same thing to us --
@@ -1738,13 +1776,14 @@ static int subscribe_device(tdot_connector_t *self, tdot_device_t *dev,
     ua->sub_id = 0;
     ua->subscribed = false;
     ua->sub_lost = false;
-    ua->head = ua->tail = 0;
-    ua->dropped = 0;
 
     size_t wanted = 0;
     double fastest = tdot_ua_publishing_interval_ms(dev, &wanted);
     if (wanted == 0)
         return 0; /* nothing to push: armed, with no points */
+    /* Before any item exists: creating them runs the client, which can
+     * already deliver the first start values. */
+    ua_ring_reserve(&ua->queue, wanted);
 
     /* One subscription per device, publishing at the fastest requested
      * sampling rate -- the same parameters the Rust module uses. */
@@ -1776,45 +1815,105 @@ static int subscribe_device(tdot_connector_t *self, tdot_device_t *dev,
      * a flapping link re-subscribes often enough for that to add up. */
     UA_CreateSubscriptionResponse_clear(&resp);
 
-    size_t armed = 0;
-    for (size_t j = 0; j < dev->npoints; j++) {
-        tdot_point_t *pt = &dev->points[j];
-        if (!pt->subscribe || !(pt->access & TDOT_ACCESS_READ))
-            continue;
-        ua_point_t *up = pt->proto;
-        UA_NodeId node;
-        if (UA_NodeId_parse(&node, UA_STRING(up->node_id)) !=
-            UA_STATUSCODE_GOOD) {
-            UA_NodeId_clear(&node);
-            continue; /* the polling path reports this as a bad sample */
-        }
-
-        UA_MonitoredItemCreateRequest mreq =
-            UA_MonitoredItemCreateRequest_default(node);
-        mreq.requestedParameters.samplingInterval = tdot_ua_sampling_interval_ms(pt);
-        mreq.requestedParameters.queueSize = 1;
-        mreq.requestedParameters.discardOldest = true;
-        UA_MonitoredItemCreateResult mres =
-            UA_Client_MonitoredItems_createDataChange(
-                ua->client, ua->sub_id, UA_TIMESTAMPSTORETURN_BOTH, mreq,
-                pt /*monContext*/, on_data_change, NULL);
-        UA_NodeId_clear(&node);
-        if (mres.statusCode == UA_STATUSCODE_GOOD) {
-            /* Telling the runtime this point is pushed is what takes it off the
-             * polling schedule. A node the server refuses to monitor simply
-             * stays polled. */
-            pt->subscribed = true;
-            armed++;
-            if (tdot_ua_revised(mreq.requestedParameters.samplingInterval,
-                                mres.revisedSamplingInterval))
-                fprintf(stderr,
-                        "info  device %s: point %s: the server revised the point's "
-                        "sampling interval: requested %.0fms, revised %.0fms\n",
-                        dev->name, pt->id, mreq.requestedParameters.samplingInterval,
-                        mres.revisedSamplingInterval);
-        }
-        UA_MonitoredItemCreateResult_clear(&mres); /* filterResult may be heap */
+    /* The items go out in batches of at most UA_ITEMS_PER_REQUEST: one round
+     * trip per batch rather than per point, which is what makes subscribing
+     * tens of thousands of points practical. A refused item, or a whole batch
+     * the server faults, leaves just those points on the polling schedule. */
+    size_t cap = wanted < UA_ITEMS_PER_REQUEST ? wanted : UA_ITEMS_PER_REQUEST;
+    UA_MonitoredItemCreateRequest *items = calloc(cap, sizeof *items);
+    void **contexts = calloc(cap, sizeof *contexts);
+    UA_Client_DataChangeNotificationCallback *callbacks =
+        calloc(cap, sizeof *callbacks);
+    if (!items || !contexts || !callbacks) {
+        free(items);
+        free(contexts);
+        free(callbacks);
+        snprintf(err, errlen, "out of memory arming %zu monitored item(s)", wanted);
+        UA_Client_Subscriptions_deleteSingle(ua->client, ua->sub_id);
+        ua->sub_id = 0;
+        ua->subscribed = false;
+        ua->sub_lost = false;
+        return -1;
     }
+
+    size_t armed = 0;
+    size_t j = 0;
+    while (j < dev->npoints) {
+        size_t n = 0;
+        for (; j < dev->npoints && n < cap; j++) {
+            tdot_point_t *pt = &dev->points[j];
+            if (!pt->subscribe || !(pt->access & TDOT_ACCESS_READ))
+                continue;
+            ua_point_t *up = pt->proto;
+            UA_NodeId node;
+            if (UA_NodeId_parse(&node, UA_STRING(up->node_id)) !=
+                UA_STATUSCODE_GOOD) {
+                UA_NodeId_clear(&node);
+                continue; /* the polling path reports this as a bad sample */
+            }
+            items[n] = UA_MonitoredItemCreateRequest_default(node); /* owns node */
+            items[n].requestedParameters.samplingInterval =
+                tdot_ua_sampling_interval_ms(pt);
+            items[n].requestedParameters.queueSize = up->queue_size;
+            items[n].requestedParameters.discardOldest = true;
+            contexts[n] = pt;
+            callbacks[n] = on_data_change;
+            n++;
+        }
+        if (n == 0)
+            break;
+
+        UA_CreateMonitoredItemsRequest req;
+        UA_CreateMonitoredItemsRequest_init(&req);
+        req.subscriptionId = ua->sub_id;
+        req.timestampsToReturn = UA_TIMESTAMPSTORETURN_BOTH;
+        req.itemsToCreate = items;
+        req.itemsToCreateSize = n;
+        UA_CreateMonitoredItemsResponse resp =
+            UA_Client_MonitoredItems_createDataChanges(ua->client, req, contexts,
+                                                       callbacks, NULL);
+        if (resp.responseHeader.serviceResult != UA_STATUSCODE_GOOD ||
+            resp.resultsSize != n) {
+            fprintf(stderr,
+                    "warn  device %s: creating %zu monitored item(s) failed: %s; "
+                    "they stay polled\n",
+                    dev->name, n,
+                    UA_StatusCode_name(resp.responseHeader.serviceResult));
+        } else {
+            for (size_t k = 0; k < n; k++) {
+                tdot_point_t *pt = contexts[k];
+                const UA_MonitoredItemCreateResult *mres = &resp.results[k];
+                if (mres->statusCode != UA_STATUSCODE_GOOD)
+                    continue;
+                /* Telling the runtime this point is pushed is what takes it
+                 * off the polling schedule. A node the server refuses to
+                 * monitor simply stays polled. */
+                pt->subscribed = true;
+                armed++;
+                const UA_MonitoringParameters *asked = &items[k].requestedParameters;
+                if (tdot_ua_revised(asked->samplingInterval,
+                                    mres->revisedSamplingInterval))
+                    fprintf(stderr,
+                            "info  device %s: point %s: the server revised the point's "
+                            "sampling interval: requested %.0fms, revised %.0fms\n",
+                            dev->name, pt->id, asked->samplingInterval,
+                            mres->revisedSamplingInterval);
+                if (mres->revisedQueueSize != asked->queueSize)
+                    fprintf(stderr,
+                            "info  device %s: point %s: the server revised the point's "
+                            "queue size: requested %u, revised %u\n",
+                            dev->name, pt->id, (unsigned)asked->queueSize,
+                            (unsigned)mres->revisedQueueSize);
+            }
+        }
+        /* The response's results can carry heap-allocated filter results. */
+        UA_CreateMonitoredItemsResponse_clear(&resp);
+        for (size_t k = 0; k < n; k++)
+            UA_MonitoredItemCreateRequest_clear(&items[k]);
+    }
+    free(items);
+    free(contexts);
+    free(callbacks);
     if (armed == 0) {
         /* The subscription exists but carries nothing: tear it down rather than
          * leaving an idle one on the server. */
@@ -1872,18 +1971,24 @@ static int drain_subscriptions(tdot_connector_t *self, tdot_device_t *dev,
         connect_status != UA_STATUSCODE_GOOD)
         return -1;
 
-    while (ua->tail != ua->head) {
-        ua_pending_t *slot = &ua->queue[ua->tail];
+    ua_pending_t *slot;
+    while ((slot = ua_ring_peek(&ua->queue))) {
         sink(sink_ctx, dev, slot->pt, &slot->sample);
-        ua->tail = (ua->tail + 1) % UA_PUSH_QUEUE_LEN;
+        ua_ring_pop(&ua->queue);
     }
-    if (ua->dropped) {
+    if (ua->queue.nomem) {
         fprintf(stderr,
-                "warn  device %s: dropped %lu pushed sample(s); the queue of "
-                "%d filled between two runtime ticks\n",
-                dev->name, ua->dropped, UA_PUSH_QUEUE_LEN);
-        ua->dropped = 0;
+                "warn  device %s: dropped %lu pushed sample(s); out of memory "
+                "growing the queue beyond %zu entries\n",
+                dev->name, ua->queue.nomem, ua->queue.cap);
     }
+    if (ua->queue.dropped > ua->queue.nomem) {
+        fprintf(stderr,
+                "warn  device %s: dropped %lu pushed sample(s); the queue "
+                "reached its bound of %zu between two runtime ticks\n",
+                dev->name, ua->queue.dropped - ua->queue.nomem, ua->queue.bound);
+    }
+    ua->queue.dropped = ua->queue.nomem = 0;
     return 0;
 }
 
