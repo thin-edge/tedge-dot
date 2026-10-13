@@ -29,6 +29,12 @@ describe('package picker', () => {
     expect(r.alternative).toContain('--features profibus');
   });
 
+  it('builds Rust from source for PROFIBUS on a serial line', () => {
+    const r = recommend(data, { ...base, features: ['profibus-serial'] });
+    expect(r.pick).toBe('tedge-dot-rs');
+    expect(r.alternative).toContain('--features profibus');
+  });
+
   it('recommends tedge-dot-rs for SNMPv3 SHA-2', () => {
     const r = recommend(data, { ...base, protocols: ['snmp'], features: ['snmpv3-sha2'] });
     expect(r.pick).toBe('tedge-dot-rs');

@@ -26,6 +26,8 @@ export default defineConfig({
   site: 'https://thin-edge.github.io',
   base: '/tedge-dot',
   trailingSlash: 'ignore',
+  // The tools import the contract schemas and test vectors from the repository (../doc).
+  vite: { server: { fs: { allow: ['..'] } } },
   integrations: [
     starlight({
       title: 'tedge-dot',

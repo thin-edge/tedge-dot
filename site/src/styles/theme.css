@@ -173,3 +173,8 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Pages with an interactive tool use the full width next to the sidebar. */
+.main-pane:has(.td-tool) {
+  --sl-content-width: 76rem;
+}

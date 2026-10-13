@@ -45,7 +45,11 @@ function versionLess(a: string, b: string): boolean {
   return false;
 }
 
-export function recommend(data: PackageData, a: Answers): Recommendation {
+export function recommend(data: PackageData, input: Answers): Recommendation {
+  // A serial PROFIBUS line is still PROFIBUS: it needs the protocol as well.
+  const a = input.features.includes('profibus-serial') && !input.protocols.includes('profibus')
+    ? { ...input, protocols: [...input.protocols, 'profibus'] }
+    : input;
   const rs = data.packages.find((p) => p.id === 'tedge-dot-rs')!;
   const c = data.packages.find((p) => p.id === 'tedge-dot-c')!;
   const distro = data.distributions.find((d) => d.id === a.distribution);

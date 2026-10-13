@@ -1,0 +1,176 @@
+{
+  "$comment": "Protocol-specific shapes for the config builder. config.schema.json leaves `connection`, `protocol_address` and a point's `address` to each connector spec (doc/connectors/*); these schemas give the builder the types of the keys it knows, and allow any other key. tests/config-builder.test.ts checks every config in demo/config and packaging/config, and every library in demo/points.d, against them, so a key or type a shipped config uses cannot be refused here.",
+  "modbus": {
+    "label": "Modbus",
+    "spec": "/tedge-dot/reference/connectors/modbus/",
+    "protocol_address": {
+      "type": "object",
+      "required": ["transport"],
+      "properties": {
+        "transport": { "enum": ["tcp", "rtu"], "description": "TCP or serial RTU." },
+        "host": { "type": "string", "description": "TCP: the device's address." },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP: usually 502." },
+        "unit_id": { "type": "integer", "minimum": 0, "maximum": 255, "description": "The Modbus unit (slave) id." },
+        "serial_port": { "type": "string", "description": "RTU: e.g. /dev/ttyRS485." },
+        "baudrate": { "type": "integer" },
+        "parity": { "enum": ["N", "E", "O"] },
+        "stopbits": { "type": "integer" },
+        "databits": { "type": "integer" }
+      }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "table": { "enum": ["coil", "discrete_input", "holding", "input"] },
+        "address": { "type": "integer", "minimum": 0, "description": "0-based register or coil address." },
+        "count": { "type": "integer", "minimum": 1 },
+        "start_bit": { "type": "integer", "minimum": 0 },
+        "bit_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "connection": { "type": "object", "properties": { "serial": { "type": "object" } } },
+    "newDevice": { "name": "plc1", "protocol_address": { "transport": "tcp", "host": "192.168.0.10", "port": 502, "unit_id": 1 } },
+    "newPoint": { "id": "temperature", "datatype": "uint16", "access": "read", "address": { "table": "holding", "address": 0, "count": 1 } }
+  },
+  "opcua": {
+    "label": "OPC UA",
+    "spec": "/tedge-dot/reference/connectors/opcua/",
+    "protocol_address": {
+      "type": "object",
+      "required": ["endpoint"],
+      "properties": {
+        "endpoint": { "type": "string", "pattern": "^opc\\.tcp://", "description": "e.g. opc.tcp://192.168.0.20:4840/" },
+        "security_policy": { "type": "string" },
+        "security_mode": { "type": "string" },
+        "user": { "type": "string" },
+        "password": { "type": "string" },
+        "password_file": { "type": "string" },
+        "user_certificate": { "type": "string" },
+        "user_private_key": { "type": "string" },
+        "allow_plaintext_password": { "type": "boolean" },
+        "allow_deprecated_security": { "type": "boolean" },
+        "trust_any_server_certificate": { "type": "boolean" },
+        "namespaces": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "node_id": { "type": "string", "description": "e.g. ns=2;s=Temperature" },
+        "namespace": { "type": "integer", "minimum": 0 },
+        "identifier": { "type": "string" },
+        "field": { "type": "string" },
+        "index": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "properties": {
+        "application_name": { "type": "string" },
+        "application_uri": { "type": "string" },
+        "security_policy": { "type": "string" },
+        "security_mode": { "type": "string" },
+        "connect_timeout_s": { "type": "integer", "minimum": 0 },
+        "request_timeout_s": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "newDevice": { "name": "opc1", "protocol_address": { "endpoint": "opc.tcp://192.168.0.20:4840/" } },
+    "newPoint": { "id": "temperature", "datatype": "float64", "access": "read", "address": { "node_id": "ns=2;s=Temperature" } }
+  },
+  "canbus": {
+    "label": "CAN bus",
+    "spec": "/tedge-dot/reference/connectors/canbus/",
+    "protocol_address": {
+      "type": "object",
+      "properties": {
+        "interface": { "type": "string", "description": "SocketCAN interface, e.g. can0." },
+        "dbc_file": { "type": "string", "description": "Path to the DBC file." }
+      }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "message_name": { "type": "string" },
+        "signal_name": { "type": "string" }
+      }
+    },
+    "connection": { "type": "object" },
+    "newDevice": { "name": "ecu1", "protocol_address": { "interface": "can0", "dbc_file": "/etc/tedge/plugins/ot/ecu.dbc" } },
+    "newPoint": { "id": "engine_speed", "datatype": "float64", "access": "read", "address": { "message_name": "EngineData", "signal_name": "EngineSpeed" } }
+  },
+  "canopen": {
+    "label": "CANopen",
+    "spec": "/tedge-dot/guides/canbus-canopen/",
+    "protocol_address": {
+      "type": "object",
+      "properties": { "node_id": { "type": "integer", "minimum": 1, "maximum": 127 } }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "subindex": { "type": "integer", "minimum": 0, "maximum": 255 }
+      }
+    },
+    "connection": { "type": "object", "properties": { "interface": { "type": "string" } } },
+    "newDevice": { "name": "drive1", "protocol_address": { "node_id": 5 } },
+    "newPoint": { "id": "status_word", "datatype": "uint16", "access": "read", "address": { "index": 24641, "subindex": 0 } }
+  },
+  "snmp": {
+    "label": "SNMP",
+    "spec": "/tedge-dot/reference/connectors/snmp/",
+    "protocol_address": {
+      "type": "object",
+      "properties": {
+        "host": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Usually 161." },
+        "version": { "type": "string" },
+        "community": { "type": "string" },
+        "write_community": { "type": "string" }
+      }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "oid": { "type": "string", "pattern": "^\\.?[0-9]+(\\.[0-9]+)*$" },
+        "trap": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
+      }
+    },
+    "connection": { "type": "object", "properties": { "community": { "type": "string" }, "listen": { "type": "string" } } },
+    "newDevice": { "name": "switch1", "protocol_address": { "host": "192.168.0.30", "port": 161, "version": "v2c", "community": "public" } },
+    "newPoint": { "id": "uptime", "datatype": "uint32", "access": "read", "address": { "oid": "1.3.6.1.2.1.1.3.0" } }
+  },
+  "profibus": {
+    "label": "PROFIBUS-DP",
+    "spec": "/tedge-dot/guides/small-gateways/",
+    "protocol_address": {
+      "type": "object",
+      "properties": {
+        "station_address": { "type": "integer", "minimum": 0, "maximum": 126 },
+        "ident_number": { "type": "integer", "minimum": 0 },
+        "input_bytes": { "type": "integer", "minimum": 0 },
+        "output_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "direction": { "type": "string" },
+        "byte_offset": { "type": "integer", "minimum": 0 },
+        "bit_offset": { "type": "integer", "minimum": 0 },
+        "bit_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "string" },
+        "baudrate": { "type": "integer" },
+        "master_address": { "type": "integer" },
+        "slot_bits": { "type": "integer" }
+      }
+    },
+    "newDevice": { "name": "io1", "protocol_address": { "station_address": 3, "input_bytes": 2, "output_bytes": 2 } },
+    "newPoint": { "id": "input_word", "datatype": "uint16", "access": "read", "address": { "direction": "input", "byte_offset": 0 } }
+  }
+}
