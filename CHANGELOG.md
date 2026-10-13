@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.17](https://github.com/thin-edge/tedge-dot/compare/0.0.16...0.0.17) (2026-10-13)
+
+
+### Bug Fixes
+
+* **sdk:** log link changes, failed writes and unreadable points ([#74](https://github.com/thin-edge/tedge-dot/issues/74)) ([2d6efe4](https://github.com/thin-edge/tedge-dot/commit/2d6efe423b5a320b2fb79345caca20cbf30451b3))
+
 ## [0.0.16](https://github.com/thin-edge/tedge-dot/compare/0.0.15...0.0.16) (2026-10-12)
 
 
