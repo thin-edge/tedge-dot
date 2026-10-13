@@ -143,7 +143,7 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
               <List ctx={ctx} path={`/device/${d}/points_from`} label="points_from" hint="Point libraries, comma-separated (e.g. demo-sim)" />
               <Shape ctx={ctx} base={`/device/${d}/protocol_address`} schema={info?.protocol_address} legend="protocol_address" />
 
-              <h4 class="cb-points-title">Points</h4>
+              <p class="cb-points-title">Points</p>
               {(device.point ?? []).map((_: any, p: number) => (
                 <div class="cb-point">
                   <div class="cb-row">

@@ -10,6 +10,16 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { betweenMarkers, convertPage, renderPackageTable, replaceBetweenMarkers } from './lib/sync.mjs';
 import { renderConfigReference } from './lib/schema-reference.mjs';
+import { rewriteLinks } from './lib/sync.mjs';
+import {
+  groupByRelease,
+  isShallow,
+  readBackfill,
+  readFragments,
+  readPublished,
+  readTags,
+  renderWhatsNew,
+} from './lib/whats-new.mjs';
 
 const site = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(site, '..');
@@ -44,7 +54,7 @@ const TRANSFORMS = {
   },
 };
 
-function main() {
+async function main() {
   const map = loadMap();
   const slugs = new Map(map.pages.map((p) => [p.source, p.slug]));
   const ctx = {
@@ -85,9 +95,31 @@ function main() {
   mkdirSync(dirname(configRef), { recursive: true });
   writeFileSync(configRef, renderConfigReference(schema));
 
-  console.log(`sync-docs: ${map.pages.length} pages from the repository`);
+  // What's new, from changes/ and the release tags.
+  if (isShallow(repo)) {
+    console.warn("sync-docs: shallow clone; What's new needs the full history and tags (fetch-depth: 0)");
+  }
+  const { tags, dates } = readTags(repo);
+  const isPublished = await readPublished(map.repository, tags);
+  const grouped = groupByRelease(readFragments(repo), tags, isPublished);
+  writeFileSync(
+    join(docsDir, 'whats-new.md'),
+    renderWhatsNew(grouped, {
+      repository: map.repository,
+      dates,
+      backfill: readBackfill(join(site, 'src/data/backfill')),
+      rewrite: (markdown, sourcePath) => rewriteLinks(markdown, { ...ctx, sourcePath }).markdown,
+    }),
+  );
+
+  console.log(`sync-docs: ${map.pages.length} pages from the repository, What's new for ${tags.length} tags`);
 }
 
 export { betweenMarkers };
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    console.error(e.message ?? e);
+    process.exit(1);
+  });
+}

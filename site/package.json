@@ -13,7 +13,8 @@
     "build": "npm run sync && astro build",
     "preview": "astro preview",
     "test": "vitest run",
-    "check": "npm run test && npm run build"
+    "check": "npm run test && npm run build && npm run check:budget",
+    "check:budget": "node scripts/check-budget.mjs"
   },
   "dependencies": {
     "@astrojs/preact": "^6.0.6",
