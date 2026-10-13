@@ -1,5 +1,21 @@
 ---
 title: Package picker
+description: Answer a few questions about your gateway and get a recommendation between tedge-dot-rs and tedge-dot-c, with the reasons.
 ---
 
-Coming soon.
+import { readFileSync } from 'node:fs';
+import YAML from 'yaml';
+import PackagePicker from '../../../components/tools/PackagePicker.tsx';
+
+export const data = YAML.parse(readFileSync('src/data/packages.yaml', 'utf8'));
+
+tedge-dot ships as two interchangeable packages that install the same `/usr/bin/tedge-dot`:
+**`tedge-dot-rs`** (Rust) and **`tedge-dot-c`** (C). A config, a flow or a cloud integration
+built against one works unchanged with the other. Tell the picker about your gateway.
+
+<PackagePicker client:visible data={data} />
+
+The picker reads the same data as the package table in the
+[install guide](/tedge-dot/get-started/install/), and the full list of differences is the
+[parity table](/tedge-dot/reference/sdk/c/#parity-with-the-rust-implementation) of the C
+implementation.

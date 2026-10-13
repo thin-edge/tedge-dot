@@ -1,0 +1,96 @@
+---
+// tedge-dot-rs and tedge-dot-c side by side, from src/data/packages.yaml.
+import { readFileSync } from 'node:fs';
+import YAML from 'yaml';
+
+const data = YAML.parse(readFileSync('src/data/packages.yaml', 'utf8'));
+const blurb: Record<string, string> = {
+  'tedge-dot-rs': 'The default. The richest protocol support, in one static binary with no shared-library dependencies.',
+  'tedge-dot-c': 'For small or old gateways: about 25 times smaller, runs down to glibc 2.17, and ships PROFIBUS-DP.',
+};
+---
+
+<div class="td-packages">
+  {
+    data.packages.map((p: any) => (
+      <article class:list={['pkg', p.id]}>
+        <header>
+          <code>{p.id}</code>
+          <span class="impl">{p.implementation}</span>
+        </header>
+        <p>{blurb[p.id]}</p>
+        <dl>
+          <div><dt>Binary</dt><dd>{p.binary_size}</dd></div>
+          <div><dt>glibc floor</dt><dd>{p.glibc_min ?? 'not pinned'}</dd></div>
+          <div><dt>Architectures</dt><dd>{p.architectures.join(' · ')}</dd></div>
+          <div><dt>Protocols</dt><dd>{p.protocols.length}</dd></div>
+        </dl>
+      </article>
+    ))
+  }
+  <a class="td-packages-cta" href="/tedge-dot/tools/package-picker/">Not sure which? Ask the package picker →</a>
+</div>
+
+<style>
+  .td-packages {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  }
+  .pkg {
+    padding: 1.25rem 1.4rem;
+    border-radius: var(--td-radius);
+    border: 1px solid var(--td-border);
+    background: var(--td-surface);
+    margin: 0 !important;
+  }
+  .pkg.tedge-dot-rs {
+    border-top: 3px solid var(--td-orange);
+  }
+  .pkg.tedge-dot-c {
+    border-top: 3px solid var(--td-signal);
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  header code {
+    font-size: var(--sl-text-xl);
+    font-weight: 700;
+    background: none;
+    padding: 0;
+    color: var(--sl-color-white);
+  }
+  .impl {
+    font-size: var(--sl-text-xs);
+    color: var(--td-muted);
+  }
+  p {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+  }
+  dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+  dl > div {
+    margin: 0 !important;
+  }
+  dt {
+    font-size: var(--sl-text-xs);
+    color: var(--td-muted);
+  }
+  dd {
+    margin: 0;
+    font-weight: 700;
+    color: var(--sl-color-white);
+  }
+  .td-packages-cta {
+    grid-column: 1 / -1;
+    font-weight: 600;
+    margin: 0 !important;
+  }
+</style>

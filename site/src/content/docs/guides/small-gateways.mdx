@@ -1,0 +1,137 @@
+---
+title: Small and old gateways with tedge-dot-c
+description: Run tedge-dot on armhf boards and distributions as old as Debian 8 or RHEL 7 with the C package, and know where it differs from the Rust one.
+sidebar:
+  order: 8
+---
+
+import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Many OT gateways in the field run an old distribution on a 32-bit ARM board with little storage.
+A binary built on a current distribution will not even start there: a native build on
+`ubuntu-24.04` hard-requires glibc 2.39 on the target.
+
+**What you'll build:** a `tedge-dot-c` install on such a gateway, with the same configs, flows
+and cloud integration as the default `tedge-dot-rs` package, and a clear picture of the few
+features it does not have.
+
+<Aside type="tip" title="Not sure which package you need?">
+The [package picker](/tedge-dot/tools/package-picker/) asks about your architecture,
+distribution and protocols, and explains its recommendation.
+</Aside>
+
+## What the C package gives you
+
+`tedge-dot-c` is a maintained peer of the Rust implementation, not a prototype. It ships from
+the same release, runs the same e2e, cloud and conformance suites, and is held to the same
+[OT Connector Contract](/tedge-dot/reference/contract/ot-connector-contract/).
+
+| | `tedge-dot-rs` | `tedge-dot-c` |
+| --- | --- | --- |
+| Architectures | amd64, arm64 | amd64, arm64, **armhf** |
+| Minimum glibc | not pinned | **2.17** (Debian 8 / RHEL 7 era) |
+| Binary size, all protocols | about 12 MB, static | about 457 KB (open62541 statically linked) |
+| Protocols | Modbus, OPC UA, CAN bus, CANopen, SNMP | the same, plus **PROFIBUS-DP** |
+
+The glibc floor comes from the build: every architecture is cross-compiled with zig, which
+supplies the compiler and a libc pinned to 2.17, against Debian's multiarch libraries. See
+[Cross-compilation](/tedge-dot/reference/sdk/c/#cross-compilation) for the details.
+
+Both packages install the same `/usr/bin/tedge-dot`, the same `tedge-dot.service` and the same
+`/etc/tedge/plugins/ot/` layout, so a config, a flow or a cloud integration built against one
+works unchanged against the other. They conflict with each other: a host runs one or the other.
+
+## Install
+
+<Steps>
+
+1. **Set up the thin-edge.io community repository**
+   ([instructions](https://thin-edge.github.io/thin-edge.io/install/#community-plugins)). It
+   carries `tedge-dot-c` and its `tedge-parameter-plugin` dependency, so set it up even when you
+   install a downloaded package.
+
+2. **Install the package.**
+
+   <Tabs>
+     <TabItem label="Debian / Ubuntu">
+
+     ```sh
+     sudo apt-get install -y tedge-dot-c
+     sudo systemctl status tedge-dot
+     ```
+
+     </TabItem>
+     <TabItem label="RPM distros">
+
+     ```sh
+     sudo dnf install tedge-dot-c
+     ```
+
+     </TabItem>
+     <TabItem label="Downloaded package">
+
+     Every [release](https://github.com/thin-edge/tedge-dot/releases) attaches `.deb`, `.rpm`
+     and `.apk` packages and tarballs for amd64, arm64 and armhf, with one `SHA256SUMS`:
+
+     ```sh
+     sudo apt-get install -y ./tedge-dot-c_*_amd64.deb
+     ```
+
+     </TabItem>
+   </Tabs>
+
+   The package depends on `libmodbus5`, `libmosquitto1` and `libcjson1` (Debian/Ubuntu names);
+   open62541 is statically linked.
+
+3. **Add devices.** The service starts with no devices configured. Add `[[device]]` sections to
+   the configs in `/etc/tedge/plugins/ot/`, or copy a demo config from
+   `/usr/share/tedge-dot/demo/`. The change is applied within a few seconds, without a restart.
+
+</Steps>
+
+<Aside type="caution" title="Alpine">
+The attached `.apk` files carry a version string that apk-tools rejects, so use the tarball on
+Alpine for now. The tarball holds the binary (which doubles as a one-shot `read`/`write` CLI),
+the default configs in `config-defaults/` and the device-side flows:
+
+```sh
+./tedge-dot read -c config-defaults/modbus.toml --json
+```
+
+</Aside>
+
+## Where it differs
+
+The parity table in the [C implementation reference](/tedge-dot/reference/sdk/c/#parity-with-the-rust-implementation)
+is the single source of truth. Each gap is declared in the build and enforced by test tags, so a
+test that needs a missing capability is reported as skipped for the C build rather than quietly
+passing. In short, `tedge-dot-c` does not have:
+
+- **SNMPv3 with SHA-2 authentication or AES-192/256 privacy.** MD5/SHA with DES/AES works. A
+  device configured with one of the others stays `disconnected` with a reason naming the
+  capability, while every other device keeps working.
+- **OPC UA structured values** (ExtensionObject fields, array elements by `address.index`).
+  Such points are reported as unsupported; the configuration still loads.
+- **The deprecated Basic128Rsa15 OPC UA policy.** `Basic256` and the current policies work.
+- **CAN FD** frames: classic CAN only.
+- **PROFIBUS-DP on a serial line.** It speaks `tcp://` to a device server or the simulator.
+
+Two behaviours differ as well: a wedged protocol call (`stall_timeout`) restarts the whole
+process rather than one connector, and string values are capped at 255 bytes and raw values at
+256 bytes. See [Liveness](/tedge-dot/reference/sdk/c/#liveness) and
+[Known limitations](/tedge-dot/reference/sdk/c/#known-limitations).
+
+<Aside type="note" title="Need PROFIBUS-DP?">
+The C package is the one that ships the PROFIBUS-DP connector. The Rust package omits it,
+because its serial dependency does not cross-compile; build `tedge-dot-rs` from source with
+`--features profibus` on Linux if you need it there.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Install" description="Every install route, upgrading, and moving from the old package name." href="/tedge-dot/get-started/install/" />
+  <LinkCard title="Package picker" description="A recommendation for your gateway, with the reasons." href="/tedge-dot/tools/package-picker/" />
+  <LinkCard title="C implementation" description="Parity table, cross-compilation, size comparison and licensing." href="/tedge-dot/reference/sdk/c/" />
+  <LinkCard title="Reducing data volume" description="Small gateways often sit on metered links too." href="/tedge-dot/guides/reducing-data-volume/" />
+</CardGrid>

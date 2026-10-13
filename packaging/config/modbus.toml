@@ -20,7 +20,9 @@ log_level     = "info"
 # polled point without a change filter already publishes every reading, so this matters for
 # points you give `on_change`, `deadband`, `min_interval` or `debounce`. Those keys can be set
 # here, on a device or on a point; "0" switches an inherited setting off.
+# site:start heartbeat
 report = { max_interval = "30m" }
+# site:end heartbeat
 
 # Liveness (optional, shown with their defaults). A protocol call that never returns — what a
 # half-open socket gives you: no answer, no error, no reset — would otherwise block the loop that
@@ -64,6 +66,7 @@ databits = 8
 #   name        = "Boiler temp"
 #   description = "Outlet temperature after the heat exchanger"
 #
+# site:start library-instance
 # ...or, when several devices share one device type's point list, keep that list
 # in a POINT LIBRARY and give the instance only its address:
 #
@@ -78,6 +81,7 @@ databits = 8
 #   [[device.point]]
 #   id   = "boiler_temp"
 #   unit = "K"
+# site:end library-instance
 #
 # Libraries live in /etc/tedge/plugins/ot/points.d/<protocol>/ (yours; these
 # shadow packaged ones of the same name) or /usr/share/tedge-dot/points.d/<protocol>/

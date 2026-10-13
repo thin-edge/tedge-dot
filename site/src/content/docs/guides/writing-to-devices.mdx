@@ -1,0 +1,170 @@
+---
+title: Writing to devices from the cloud
+description: Make writable points Cumulocity device parameters, edit them in the Parameters tab, show codes as labels with a value map, and publish a point as a fragment of its own.
+sidebar:
+  order: 7
+---
+
+import { Aside, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
+
+## What you'll build
+
+An OT device whose setpoints and switches an operator changes from the device's *Parameters* tab
+in Cumulocity. Each edit is written to the device as one command with one result, the tab shows
+the device's current values, and a state code shows up as a readable label that can be picked
+from a list.
+
+The guide continues the [Modbus guide](/tedge-dot/guides/modbus-to-cumulocity/) with the demo's
+**`modbus-sim`** service, whose point library already has two writable points: `temp_u16` and
+`coil_rw`. It works the same way for every protocol.
+
+## How a write travels
+
+A point whose `access` is `read_write` or `write` is a **device parameter**. The packaged flows
+do the rest:
+
+- `ot-parameter-state` keeps one retained twin fragment per *parameter set* current, from the
+  samples and from acknowledged writes. The thin-edge.io mapper mirrors it into the device's
+  managed object, which is what the Parameters tab shows.
+- An edit in the tab is a `c8y_ParameterUpdate` operation. Its template comes from
+  [tedge-parameter-plugin](https://github.com/thin-edge/tedge-parameter-plugin), a dependency of
+  the package, and `ot-command-forward` turns it into **one** `write-batch` command for the
+  connector.
+- The connector writes the points in order and reports one result; `ot-command-result` completes
+  the operation.
+
+Writes never open a second session to the device and never go through the `tedge-dot write`
+CLI: they are thin-edge.io commands that the running connector carries out.
+
+## Parameter sets
+
+Parameters are grouped into sets. One set is one twin fragment and one Cumulocity definition, and
+its name is a tenant-wide identifier, so it is derived from what the device **is**:
+
+```text
+<device type, else the protocol>_<group, default "control">_parameters
+```
+
+The demo's library declares `type = "modbus-demo-sim"`, so `temp_u16` lands in
+`modbus_demo_sim_control_parameters`. `coil_rw` names two groups with
+`meta.parameter = { group = ["control", "commissioning"] }`, so it is also in
+`modbus_demo_sim_commissioning_parameters`, and an edit through either set keeps both in step.
+
+Give every device type its own `type` (on the `[[device]]`, or once in its point library).
+Without it, every device of a protocol shares one set name, and two device types with different
+points collide in the tenant. `meta.parameter.set` names a set outright, when a tenant already
+has one. The rules are in [contract §5.2](/tedge-dot/reference/contract/ot-connector-contract/#52-parameters-writable-points-as-device-state)
+and the reasoning in [RFC 0005](/tedge-dot/reference/design/rfc-0005/).
+
+## Make the parameters editable
+
+<Steps>
+
+1. **Declare the points writable.** Set `access = "read_write"` (or `"write"` for a point the
+   device cannot read back) on the point. `meta.parameter` enriches the parameter's schema with
+   `title`, `description`, `min`, `max`, `enum`, `default` and `order`; the demo's `temp_u16`
+   has `meta = { parameter = { min = 0, max = 30000 } }`. A read-only point can opt in with
+   `meta.parameter` and is shown read-only next to the controls, and `meta.parameter = false`
+   keeps a writable point out.
+
+2. **Register the definitions once per tenant.** The Parameters tab only lets you edit fragments
+   that match a Digital Twin Manager definition. `tedge-dot describe` renders them from the same
+   configuration the service runs (by default every config in `/etc/tedge/plugins/ot`), so a
+   tenant admin registers them, for example with [go-c8y-cli](https://goc8ycli.netlify.app/):
+
+   ```sh
+   defs=$(mktemp) one=$(mktemp)
+   trap 'rm -f "$defs" "$one"' EXIT
+   tedge-dot describe --compact > "$defs"     # one definition per line
+   while read -r definition; do
+       printf '%s' "$definition" > "$one"
+       C8Y_SETTINGS_CI=true c8y api POST /service/dtm/definitions/properties --data "@$one" </dev/null ||
+           exit 1
+   done < "$defs"
+   ```
+
+   The device never pushes definitions itself: device users do not hold the roles for it, and
+   what a fleet may edit is a tenant decision. Without a definition the values are still in the
+   device's inventory, just not editable.
+
+3. **Edit.** Open the child device's *Parameters* tab, change a value and save. The operation
+   goes to the device as one `write-batch`, and the twin shows the new value once the write is
+   acknowledged and the next sample confirms it.
+
+</Steps>
+
+<Aside type="note" title="Write-only points">
+A point with `access = "write"` never produces samples, so its parameter shows the last
+**acknowledged** write, and stays empty until the first one after the mapper started. The device
+cannot tell you more.
+</Aside>
+
+## Labels instead of codes
+
+A value map (`map`) converts between the device's code and a readable value, in both directions.
+On a writable point it becomes a choice: with
+`map = { cases = [{ eq = 0, to = "off" }, { eq = 1, to = "auto" }, { eq = 2, to = "manual" }] }`
+the twin shows `"auto"`, `tedge-dot describe` renders the property as an `enum` of the three
+labels, and an operator who picks `"manual"` writes `2` to the register.
+
+A write is refused, and nothing reaches the device, when the value is not one of the labels,
+when the label belongs only to `default` or to a range without a `write` code, or when it has
+the wrong type. The reason lists the accepted values. Parameter values are in engineering
+units: the SDK applies the map, then inverts the point's `transform`, before the connector
+encodes the value.
+
+See [Mapping values](/tedge-dot/reference/configuration/mapping-values/#an-operators-choice-an-enumerated-device-parameter)
+for ranges, catch-alls and numeric text.
+
+## A parameter of its own: literal parameters
+
+A point that belongs to no set can be published as a fragment by itself.
+`meta.parameter = { fragment = "pump_speed" }` makes the managed object hold
+`"pump_speed": 42` rather than an object around one value, and its definition is a primitive
+schema. An edit of that fragment becomes a `write-batch` of one write to the point.
+
+The fragment name is used verbatim, so it cannot be combined with `set`, `group` or `key`, and
+one name is either a literal or a set: the first point to claim it keeps it, and
+`tedge-dot describe` refuses the configuration.
+
+To keep a set but choose a point's key in it, use `meta.parameter.key`: `key = "firmware.version"`
+publishes the point as `version` in a set called `firmware`. Keys are plain identifiers
+(`[A-Za-z0-9_]`) and unique per set on a device.
+
+## Writing from the gateway
+
+The same commands are available on the broker, for local automation or testing. One point (the
+contract's `write` verb), or several in order with one result (`write-batch`):
+
+```sh
+tedge mqtt pub -r te/device/plc1/ot/modbus/cmd/write/w1 '{"status":"init","point":"temp_u16","value":4242}'
+tedge mqtt pub -r te/device/plc1/ot/modbus/cmd/write-batch/b1 '{"status":"init","writes":[{"point":"temp_u16","value":4242},{"point":"coil_rw","value":true}]}'
+```
+
+The connector moves each command through `executing` to `successful` or `failed` on the same
+topic. See [contract §6.4](/tedge-dot/reference/contract/ot-connector-contract/#64-the-write-batch-verb-standard-sdk-provided).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="RFC 0003: Parameter writes"
+    description="Why parameters, where the definitions come from, write-only points."
+    href="/tedge-dot/reference/design/rfc-0003/"
+  />
+  <LinkCard
+    title="Device-side flows"
+    description="ot-parameter-state, the command flows and their settings."
+    href="/tedge-dot/reference/flows/flows/"
+  />
+  <LinkCard
+    title="A fleet of identical devices"
+    description="Declare the device type once, in a point library."
+    href="/tedge-dot/guides/fleet-point-libraries/"
+  />
+  <LinkCard
+    title="Config builder"
+    description="Write a config with writable points and check it against the schema."
+    href="/tedge-dot/tools/config-builder/"
+  />
+</CardGrid>

@@ -1,5 +1,97 @@
 ---
 title: Overview
+description: What tedge-dot is, how it fits thin-edge.io, and which of its two packages to run.
 ---
 
-Coming soon.
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+**tedge-dot** connects industrial (OT) equipment to [thin-edge.io](https://thin-edge.io). One
+`tedge-dot` binary reads and writes Modbus, OPC UA, CAN bus, CANopen, SNMP and PROFIBUS-DP
+devices, and publishes what it reads to the thin-edge.io MQTT broker in one protocol-neutral
+format. From there, thin-edge.io [flows](https://thin-edge.github.io/thin-edge.io/extend/flows/)
+turn it into measurements, child devices, alarms, events and device parameters in the cloud.
+
+:::caution[Alpha]
+The MQTT contract, the configuration format and the packaging may still change between releases.
+Check [What's new](/tedge-dot/whats-new/) before you upgrade.
+:::
+
+## How it fits thin-edge.io
+
+<ArchitectureDiagram />
+
+The connector is a *dumb driver*. It talks the protocol, decodes primitive values, and applies
+what each point declares about itself: scaling and unit (`transform`), a value map (`map`) and a
+reporting policy (`report`). It then publishes generic `sample`, `status` and `cmd` envelopes on
+`te/device/<device>/ot/<protocol>/...`.
+
+Everything else lives in flows: small JavaScript modules that run inside the thin-edge.io mapper
+and are hot-reloaded without a restart. The packaged flows register each OT device as a child
+device, turn samples into measurements, raise alarms and events declared on a point, keep device
+parameters in the digital twin, and carry writes from the cloud back to the connector. Because
+every connector speaks the same [OT Connector Contract](/tedge-dot/reference/contract/ot-connector-contract/),
+the same flows work for every protocol.
+
+Writes never open a second protocol session. A write, or an edit in the Cumulocity
+*Parameters* tab, becomes a thin-edge.io command that the connector carries out and acknowledges.
+
+## What you configure
+
+A connector is one TOML file per protocol in `/etc/tedge/plugins/ot/`:
+
+- `[connector]`: the protocol, the poll interval and defaults such as a heartbeat;
+- one `[[device]]` per device, with its address;
+- the device's points, either inline (`[[device.point]]`) or from a **point library** that the
+  device references by name with `points_from`, so that a fleet of identical devices shares one
+  point list.
+
+The service applies a changed file within a few seconds, without a restart. Every key is listed in
+the [configuration reference](/tedge-dot/reference/configuration/config-file/), and the
+[config builder](/tedge-dot/tools/config-builder/) writes a file for you.
+
+## Two packages, one contract
+
+tedge-dot is built twice, from two maintained implementations that run the same test suites.
+Both packages install the same `/usr/bin/tedge-dot`, the same systemd service and the same
+configuration layout, so a config or a flow works unchanged with either. A host runs one or the
+other.
+
+<CardGrid>
+  <Card title="tedge-dot-rs" icon="rocket">
+    The default. The Rust build: richest protocol support, one static binary, no shared-library
+    dependencies.
+  </Card>
+  <Card title="tedge-dot-c" icon="setting">
+    For small or old gateways. The C build: about 25x smaller, a glibc 2.17 floor (Debian 8 /
+    RHEL 7 era), armhf packages, and the PROFIBUS-DP connector.
+  </Card>
+</CardGrid>
+
+The [package picker](/tedge-dot/tools/package-picker/) recommends one for your gateway, and the
+[install guide](/tedge-dot/get-started/install/) lists the differences.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Your first device in 5 minutes"
+    description="Read a simulated Modbus PLC from your laptop, no broker or cloud needed."
+    href="/tedge-dot/get-started/first-device/"
+  />
+  <LinkCard
+    title="Install"
+    description="Pick a package and install it on a gateway."
+    href="/tedge-dot/get-started/install/"
+  />
+  <LinkCard
+    title="Modbus TCP PLC to Cumulocity"
+    description="The whole path, from a register to a measurement in the cloud."
+    href="/tedge-dot/guides/modbus-to-cumulocity/"
+  />
+  <LinkCard
+    title="The OT Connector Contract"
+    description="The topics, envelopes and rules every connector follows."
+    href="/tedge-dot/reference/contract/ot-connector-contract/"
+  />
+</CardGrid>

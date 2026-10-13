@@ -24,6 +24,7 @@
 # for bits. (Coil 48 would be bit 0 of holding 3, so writing temp_u16 would
 # overwrite the coil, and writing the coil would change temp_u16.)
 
+# site:start library
 [library]
 protocol    = "modbus"
 # The device *type* this list describes (§3.1): it names the parameter sets of every
@@ -32,6 +33,7 @@ protocol    = "modbus"
 type        = "modbus-demo-sim"
 description = "pymodbus simulator, as seeded by demo/docker-compose.yaml's modbus-sim"
 version     = "1"
+# site:end library
 
 # uint16 holding register -> 17001. Writable, so it shows up as a Cumulocity
 # device parameter (see RFC 0003); meta.parameter enriches that schema.
@@ -56,6 +58,7 @@ meta        = { parameter = { min = 0, max = 30000 } }
 # heartbeat (`[connector] report.max_interval`) still sends it now and then when it is
 # flat. A site can override any key on its own point, e.g. `report = { deadband = 0.2 }`.
 # See doc/reducing-data-volume.md.
+# site:start temp-scaled
 [[point]]
 id          = "temp_scaled"
 name        = "Boiler temperature"
@@ -65,6 +68,7 @@ address     = { table = "holding", address = 3, count = 1 }
 transform   = { decimal_shift = -3 }
 unit        = "°C"
 report      = { deadband = 0.5, min_interval = "10s" }
+# site:end temp-scaled
 
 # Reading this address makes the simulator return an exception -> quality "bad".
 # Kept deliberately: it shows quality propagating end to end.

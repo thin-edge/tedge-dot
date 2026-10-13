@@ -1,4 +1,389 @@
 ---
-import Default from '@astrojs/starlight/components/Hero.astro';
+// Replaces Starlight's Hero (only the landing page has one): the title, tagline and actions
+// from the page's `hero` front matter, beside an animated SVG of data flowing from field
+// devices through tedge-dot and the flows into thin-edge.io and the cloud.
+//
+// The animation is CSS only (moving dashes along the paths): no script, and it stops for
+// visitors who prefer reduced motion.
+import { LinkButton } from '@astrojs/starlight/components';
+
+// Starlight's page-title id (PAGE_TITLE_ID), which its skip link targets.
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+
+const devices = [
+  { label: 'Modbus', y: 44 },
+  { label: 'OPC UA', y: 112 },
+  { label: 'CAN / CANopen', y: 180 },
+  { label: 'SNMP', y: 248 },
+  { label: 'PROFIBUS-DP', y: 316 },
+];
+// Each device's path into tedge-dot (the node at x 236..324, y 150..210).
+const inPath = (y: number) => `M128 ${y} C 180 ${y}, 180 ${180 + (y - 180) * 0.25}, 236 ${180 + (y - 180) * 0.25}`;
 ---
-<Default />
+
+<div class="td-hero">
+  <div class="td-hero-copy">
+    <p class="td-hero-kicker"><span class="td-hero-dot" aria-hidden="true"></span>OT connectors for thin-edge.io</p>
+    <h1 id="_top" data-page-title set:html={title} />
+    {tagline && <p class="td-hero-tagline" set:html={tagline} />}
+    {
+      actions.length > 0 && (
+        <div class="td-hero-actions">
+          {actions.map(({ link: href, text, variant, icon }) => (
+            <LinkButton href={href} variant={variant} icon={icon?.name}>
+              {text}
+            </LinkButton>
+          ))}
+        </div>
+      )
+    }
+  </div>
+
+  <figure class="td-flow">
+    <svg class="td-flow-wide" viewBox="0 0 712 360" role="img" aria-labelledby="td-flow-title td-flow-desc">
+      <title id="td-flow-title">How data flows through tedge-dot</title>
+      <desc id="td-flow-desc">
+        Readings from Modbus, OPC UA, CAN and CANopen, SNMP and PROFIBUS-DP devices flow into
+        tedge-dot, which publishes protocol-neutral samples over MQTT. thin-edge.io flows turn
+        them into measurements, alarms and device parameters, and thin-edge.io sends them to the
+        cloud. Writes travel the other way.
+      </desc>
+
+      <defs>
+        <linearGradient id="td-core" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="var(--td-orange)" />
+          <stop offset="1" stop-color="#ff4d6d" />
+        </linearGradient>
+        <filter id="td-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" />
+        </filter>
+      </defs>
+
+      <!-- wires: a faint base and moving packets on top -->
+      {devices.map((d, i) => (
+        <g>
+          <path d={inPath(d.y)} class="wire" />
+          <path d={inPath(d.y)} class="packet" style={`animation-delay: ${-i * 0.37}s`} />
+        </g>
+      ))}
+      <path d="M324 180 H 384" class="wire" />
+      <path d="M324 180 H 384" class="packet packet-short" />
+      <path d="M484 180 H 528" class="wire" />
+      <path d="M484 180 H 528" class="packet packet-short" style="animation-delay:-0.6s" />
+      <path d="M612 162 C 640 140, 640 110, 652 96" class="wire" />
+      <path d="M612 162 C 640 140, 640 110, 652 96" class="packet packet-out" />
+      <!-- a write coming back down -->
+      <path d="M528 196 C 440 300, 330 300, 280 214" class="wire wire-back" />
+      <path d="M528 196 C 440 300, 330 300, 280 214" class="packet packet-back" />
+
+      <!-- devices -->
+      {devices.map((d) => (
+        <g class="device">
+          <rect x="4" y={d.y - 18} width="124" height="36" rx="10" />
+          <circle cx="20" cy={d.y} r="4" class="led" />
+          <text x="31" y={d.y} dominant-baseline="central">{d.label}</text>
+        </g>
+      ))}
+
+      <!-- tedge-dot -->
+      <circle cx="280" cy="180" r="46" fill="url(#td-core)" filter="url(#td-glow)" class="core-glow" />
+      <rect x="236" y="146" width="88" height="68" rx="16" fill="url(#td-core)" />
+      <text x="280" y="174" text-anchor="middle" class="core-label">tedge</text>
+      <text x="280" y="194" text-anchor="middle" class="core-label">-dot</text>
+
+      <!-- flows -->
+      <g class="node">
+        <rect x="384" y="150" width="100" height="60" rx="12" />
+        <text x="434" y="174" text-anchor="middle" class="node-title">flows</text>
+        <text x="434" y="194" text-anchor="middle" class="node-sub">scale · alarm · map</text>
+      </g>
+
+      <!-- thin-edge.io -->
+      <g class="node">
+        <rect x="528" y="150" width="84" height="60" rx="12" />
+        <text x="570" y="174" text-anchor="middle" class="node-title">thin-edge</text>
+        <text x="570" y="194" text-anchor="middle" class="node-sub">MQTT · mapper</text>
+      </g>
+
+      <!-- cloud -->
+      <g class="cloud">
+        <path d="M630 96 a 22 22 0 0 1 4 -43 a 28 28 0 0 1 52 6 a 18 18 0 0 1 4 37 z" />
+        <text x="660" y="80" text-anchor="middle" class="node-sub">cloud</text>
+      </g>
+
+      <text x="356" y="168" text-anchor="middle" class="wire-label">sample</text>
+      <text x="404" y="292" text-anchor="middle" class="wire-label">write</text>
+    </svg>
+    <!-- Phone width: the same chain, top to bottom, at a readable size. -->
+    <ol class="td-flow-narrow" aria-hidden="true">
+      <li class="chips">{devices.map((d) => <span>{d.label}</span>)}</li>
+      <li class="core">tedge-dot</li>
+      <li>flows</li>
+      <li>thin-edge.io</li>
+      <li>cloud</li>
+    </ol>
+  </figure>
+</div>
+
+<style>
+  .td-hero {
+    display: grid;
+    gap: 2rem;
+    align-items: center;
+    padding-block: 1rem 2.5rem;
+  }
+  @media (min-width: 50rem) {
+    .td-hero {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+      padding-block: 3rem 4rem;
+    }
+  }
+  .td-hero-copy {
+    display: grid;
+    gap: 1.25rem;
+  }
+  .td-hero-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--sl-color-accent-high);
+  }
+  .td-hero-dot {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: var(--td-orange);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--td-orange) 25%, transparent);
+  }
+  h1 {
+    font-size: clamp(2.4rem, 5vw, 3.4rem);
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+    font-weight: 800;
+    color: var(--sl-color-white);
+  }
+  .td-hero-tagline {
+    font-size: clamp(var(--sl-text-base), 2vw, var(--sl-text-xl));
+    color: var(--sl-color-gray-2);
+    max-width: 34rem;
+  }
+  .td-hero-tagline :global(a) {
+    color: var(--sl-color-accent-high);
+  }
+  .td-hero-actions :global(.sl-link-button.primary) {
+    background: var(--td-orange);
+    border-color: var(--td-orange);
+    color: #1b0d03;
+  }
+  :global([data-theme='light']) .td-hero-actions :global(.sl-link-button.primary) {
+    background: var(--sl-color-accent);
+    border-color: var(--sl-color-accent);
+    color: #fff;
+  }
+  .td-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1rem;
+  }
+  .td-flow {
+    margin: 0;
+    min-width: 0;
+  }
+  .td-flow-narrow {
+    display: none;
+  }
+  @media (max-width: 40rem) {
+    .td-flow-wide {
+      display: none !important;
+    }
+    .td-flow-narrow {
+      display: grid;
+      justify-items: center;
+      gap: 1.6rem;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .td-flow-narrow li {
+      position: relative;
+      margin: 0;
+      padding: 0.45rem 1rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--sl-color-gray-5);
+      background: var(--td-surface-raised);
+      font-weight: 700;
+      font-size: var(--sl-text-sm);
+      color: var(--sl-color-white);
+    }
+    .td-flow-narrow li + li::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: -1.6rem;
+      height: 1.6rem;
+      border-left: 2px dashed var(--td-signal);
+      animation: td-drop 0.9s linear infinite;
+    }
+    .td-flow-narrow .chips {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.4rem;
+      border: 0;
+      background: none;
+      padding: 0;
+    }
+    .td-flow-narrow .chips span {
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--sl-color-gray-5);
+      background: var(--td-surface-raised);
+      font-size: var(--sl-text-xs);
+    }
+    .td-flow-narrow .core {
+      background: linear-gradient(135deg, var(--td-orange), #ff4d6d);
+      border: 0;
+      color: #fff;
+    }
+  }
+  @keyframes td-drop {
+    from {
+      opacity: 0.4;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .td-flow svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    font-family: var(--sl-font);
+  }
+  .wire {
+    fill: none;
+    stroke: var(--sl-color-gray-5);
+    stroke-width: 2;
+  }
+  .wire-back {
+    stroke-dasharray: 2 5;
+  }
+  .packet {
+    fill: none;
+    stroke: var(--td-signal);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 10 240;
+    animation: td-flow 2.4s linear infinite;
+  }
+  .packet-short {
+    stroke: var(--td-orange);
+    stroke-dasharray: 8 52;
+    animation-duration: 1.2s;
+  }
+  .packet-out {
+    stroke: var(--td-ok);
+    stroke-dasharray: 8 80;
+    animation-duration: 1.6s;
+  }
+  .packet-back {
+    stroke: var(--td-warn);
+    stroke-dasharray: 8 300;
+    animation-duration: 4s;
+  }
+  @keyframes td-flow {
+    to {
+      stroke-dashoffset: -250;
+    }
+  }
+  .packet-short {
+    animation-name: td-flow-short;
+  }
+  @keyframes td-flow-short {
+    to {
+      stroke-dashoffset: -60;
+    }
+  }
+  .packet-out {
+    animation-name: td-flow-out;
+  }
+  @keyframes td-flow-out {
+    to {
+      stroke-dashoffset: -88;
+    }
+  }
+  .packet-back {
+    animation-name: td-flow-back;
+  }
+  @keyframes td-flow-back {
+    to {
+      stroke-dashoffset: -308;
+    }
+  }
+  .device rect,
+  .node rect {
+    fill: var(--td-surface-raised);
+    stroke: var(--sl-color-gray-5);
+  }
+  .device text {
+    fill: var(--sl-color-gray-1);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .led {
+    fill: var(--td-ok);
+    animation: td-blink 2.4s ease-in-out infinite;
+  }
+  .device:nth-of-type(2n) .led {
+    animation-delay: -1.1s;
+  }
+  @keyframes td-blink {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  .core-glow {
+    opacity: 0.45;
+    animation: td-pulse 3s ease-in-out infinite;
+    transform-origin: 280px 180px;
+  }
+  @keyframes td-pulse {
+    50% {
+      opacity: 0.2;
+      transform: scale(1.12);
+    }
+  }
+  .core-label {
+    fill: #fff;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .node-title {
+    fill: var(--sl-color-white);
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .node-sub,
+  .wire-label {
+    fill: var(--sl-color-gray-3);
+    font-size: 10.5px;
+  }
+  .cloud path {
+    fill: var(--td-surface-raised);
+    stroke: var(--sl-color-gray-5);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .packet,
+    .led,
+    .core-glow,
+    .td-flow-narrow li + li::before {
+      animation: none;
+    }
+  }
+</style>

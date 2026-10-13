@@ -1,0 +1,17 @@
+.pp { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; margin-top: 1rem; }
+@media (max-width: 50rem) { .pp { grid-template-columns: minmax(0, 1fr); } }
+.pp-form { display: grid; gap: 0.9rem; }
+.pp-form > * { margin: 0 !important; }
+.pp-set { border: 0; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
+.pp-set legend { font-size: var(--sl-text-sm); font-weight: 600; color: var(--sl-color-gray-2); margin-bottom: 0.25rem; }
+.pp-check { display: flex; gap: 0.5rem; align-items: flex-start; font-size: var(--sl-text-sm); margin: 0 !important; }
+.pp-check input { margin-top: 0.25rem; }
+.pp-result { position: sticky; top: calc(var(--sl-nav-height) + 1rem); border-radius: var(--td-radius); padding: 1.25rem; border: 1px solid var(--sl-color-accent); background: linear-gradient(160deg, var(--sl-color-accent-low), var(--td-surface) 60%); }
+.pp-result > * { margin: 0 0 0.75rem !important; }
+.pp-kicker { font-size: var(--sl-text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--td-muted); margin-bottom: 0 !important; }
+.pp-pick { font-size: var(--sl-text-3xl); font-weight: 800; color: var(--sl-color-white); }
+.pp-pick code { background: none; padding: 0; font-size: inherit; }
+.pp-result ul { padding-left: 1.1rem; font-size: var(--sl-text-sm); }
+.pp-caveats { font-size: var(--sl-text-sm); }
+.pp-alt, .pp-foot { font-size: var(--sl-text-sm); color: var(--sl-color-gray-2); }
+.pp-cmd { padding: 0.6rem 0.75rem; background: var(--sl-color-black); border-radius: 0.375rem; font-size: var(--sl-text-xs); overflow-x: auto; }

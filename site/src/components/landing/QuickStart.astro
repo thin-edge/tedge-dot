@@ -1,0 +1,84 @@
+---
+// A terminal-style quick start: the simulator and the read CLI, from the README's
+// "Try it without hardware".
+const lines = [
+  { kind: 'comment', text: '# start the Modbus simulator on 127.0.0.1:5020' },
+  { kind: 'cmd', text: 'just sim modbus' },
+  { kind: 'comment', text: '# where the demo point lists live in a checkout' },
+  { kind: 'cmd', text: 'export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d' },
+  { kind: 'comment', text: '# read every point of every device, once' },
+  { kind: 'cmd', text: 'cargo run --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml' },
+  { kind: 'comment', text: '# or run the connector without a broker: samples as JSON lines' },
+  { kind: 'cmd', text: 'cargo run --manifest-path impl/rust/Cargo.toml -- run -c demo/config/modbus.toml --output stdout --duration 10s' },
+];
+---
+
+<div class="td-term" role="group" aria-label="Quick start commands">
+  <div class="bar" aria-hidden="true"><span></span><span></span><span></span><em>tedge-dot — zsh</em></div>
+  <pre><code>{lines.map((l) => <span class={l.kind}>{l.kind === 'cmd' && <span class="prompt" aria-hidden="true">$ </span>}{l.text}{'\n'}</span>)}</code></pre>
+</div>
+<p class="td-term-next">
+  Next: <a href="/tedge-dot/get-started/first-device/">your first device in 5 minutes</a>, then
+  <a href="/tedge-dot/guides/modbus-to-cumulocity/">into Cumulocity</a>.
+</p>
+
+<style>
+  .td-term {
+    border-radius: var(--td-radius);
+    overflow: hidden;
+    border: 1px solid var(--td-border);
+    background: #0a1622;
+    box-shadow: var(--sl-shadow-lg);
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem 0.9rem;
+    background: #132536;
+  }
+  .bar span {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: #ff5f57;
+  }
+  .bar span:nth-child(2) {
+    background: #febc2e;
+  }
+  .bar span:nth-child(3) {
+    background: #28c840;
+  }
+  .bar em {
+    margin-left: auto;
+    margin-right: auto;
+    font-style: normal;
+    font-size: var(--sl-text-xs);
+    color: #8fa5bd;
+  }
+  pre {
+    margin: 0 !important;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-size: var(--sl-text-sm);
+    line-height: 1.7;
+    background: transparent;
+    border: 0;
+  }
+  code {
+    background: none;
+    padding: 0;
+    color: #e8eef5;
+  }
+  .comment {
+    color: #7e95ad;
+  }
+  .prompt {
+    color: #ff7a2f;
+    user-select: none;
+  }
+  .td-term-next {
+    margin-top: 1rem;
+    font-size: var(--sl-text-sm);
+  }
+</style>

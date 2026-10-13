@@ -1,0 +1,179 @@
+---
+title: SNMP network devices
+description: Poll and write SNMP objects, receive traps and informs as events and alarms, use SNMPv3, and share udp/162 with an existing trap receiver.
+sidebar:
+  order: 4
+---
+
+import { Steps, Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+One `snmp` connector talks to equipment in both directions:
+
+- It **polls** objects with GET (v1) or GETBULK (v2c, v3) and **writes** them with SET.
+- It **receives notifications**: v1, v2c and v3 traps, and v2c and v3 informs, which it
+  acknowledges. Each notification is routed to the device whose `host` it comes from.
+
+What a notification *means* (an event or an alarm) is declared on the point and raised by the
+flows, so no trap-handling code is involved.
+
+**What you'll build:** one device, `snmp-switch`, that polls and writes to the demo's pysnmp agent
+(`snmp-agent-sim` on udp/1161) and receives the traps that the net-snmp simulator (`snmp-sim`)
+sends to udp/162 every 10 seconds: link down and link up, cold starts, and an enterprise-specific
+pump notification.
+
+## Run the demo
+
+<Tabs>
+  <TabItem label="On a Linux gateway">
+    With thin-edge.io and a tedge-dot package installed:
+
+    <Steps>
+
+    1. Start the agent and the trap simulator. Both use host networking, so the traps reach
+       udp/162 from `127.0.0.1`, the address the demo device is matched by:
+
+       ```sh
+       docker compose -f /usr/share/tedge-dot/demo/docker-compose.yaml up -d snmp-agent-sim snmp-sim
+       ```
+
+    2. Enable the demo config. Keep it mode `0640`, because SNMP configs contain communities and
+       passwords:
+
+       ```sh
+       sudo install -m 0640 -o tedge -g tedge /usr/share/tedge-dot/demo/snmp.toml /etc/tedge/plugins/ot/snmp.toml
+       ```
+
+       If a host `snmptrapd` already holds udp/162, see [Behind snmptrapd](#receiving-notifications) first.
+
+    3. Watch measurements, events and alarms arrive, and send a trap of your own:
+
+       ```sh
+       tedge mqtt sub 'te/+/+/+/+/#'
+       docker compose -f /usr/share/tedge-dot/demo/docker-compose.yaml exec snmp-sim send-trap linkdown 2
+       ```
+
+    </Steps>
+  </TabItem>
+  <TabItem label="From a checkout (CLI only)">
+    Poll and write the agent with no broker. `just sim snmp` publishes it on host port 1161. Use
+    `tedge-dot` from a package, or `cargo run --manifest-path impl/rust/Cargo.toml --` in its place:
+
+    ```sh
+    just sim snmp
+    export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+    tedge-dot read  -c demo/config/snmp.toml -p pump_speed
+    tedge-dot write -c demo/config/snmp.toml -d snmp-switch -p setpoint --value 55
+    just sim-down snmp
+    ```
+  </TabItem>
+</Tabs>
+
+## The device
+
+<RepoFile path="demo/config/snmp.toml" marker="device" />
+
+The `host` serves two purposes: it is where requests go, and it is the source address that
+notifications are matched against. The `protocol_address` keys:
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `host` | | IP address or DNS name. Two devices can't share a host. |
+| `port` | `161` | Agent port for GET and SET. |
+| `version` | `"v2c"` | `"v1"`, `"v2c"` or `"v3"`. Notifications are accepted in whichever version they arrive in. |
+| `community` / `write_community` | `"public"` / `community` | v1 and v2c communities for GET and SET. |
+| `v3` | | The SNMPv3 user (see below). |
+| `bulk` | `true` for v2c and v3 | Set `false` to use GET instead of GETBULK. |
+
+`request_timeout`, `retries` and `max_varbinds` can be set per device, with defaults in
+`[connection]`.
+
+## Points: objects, traps and varbinds
+
+The demo device takes its points from a point library, and each point says what it means for
+the flows:
+
+<RepoFile path="demo/points.d/snmp/demo-sim.toml" />
+
+There are three kinds of point:
+
+| Kind | Address | Delivered by |
+| --- | --- | --- |
+| object | `{ oid = "1.3.6.1.2.1.1.3.0" }`, the full instance OID | Polling (GET or GETBULK). Writable with SET. |
+| trap | `{ trap = "<OID>" }` or a list of OIDs | A notification whose trap OID is, or lies beneath, one of them |
+| varbind | `{ trap = …, oid = "<OID>" }` | The first varbind at or beneath `oid` in a matching notification |
+
+- **Writable objects** need an SNMP `type` for SET. It defaults from the datatype (signed integers
+  map to `integer`, `uint8`–`uint32` to `unsigned32`, `string` to `octet_string`), but floats
+  need an explicit `type`. SET failures report the SNMP error (`notWritable`, `wrongType`, …).
+- **Traps become events and alarms** through the point's `meta`:
+  `event = { …, every = true }` raises an event for every notification, and an alarm with
+  `when = { equals = "<raise OID>" }` is raised by one notification and cleared by another, as
+  `link_state` does above. The `ot-event` and `ot-alarm` flows ship active, so nothing else needs
+  configuring.
+- **Trap and varbind points can't be read on demand**, so they have no heartbeat. Don't give a
+  change filter to a point whose event uses `every = true`: two identical traps are two
+  occurrences.
+
+## Receiving notifications
+
+<RepoFile path="demo/config/snmp.toml" marker="connection" />
+
+`listen` is bound only while at least one device has a trap or varbind point, so a fresh install
+doesn't take udp/162. `community` lists the communities that v1 and v2c notifications must carry.
+Remove the key to accept any community. Informs are acknowledged from the listening socket.
+Notifications from unknown sources, and notifications that fail authentication, are dropped and
+never acknowledged.
+
+<Tabs>
+  <TabItem label="Own the trap port">
+    Port 162 is privileged. The packaged service has `CAP_NET_BIND_SERVICE` so it can bind it. If
+    you choose a port above 1023, no privilege is needed, but your devices must send to that port.
+  </TabItem>
+  <TabItem label="Behind snmptrapd">
+    If a host `snmptrapd` already owns udp/162, have it forward to the connector on another port,
+    and mark it as a trusted forwarder:
+
+    ```text title="/etc/snmp/snmptrapd.conf"
+    forward default udp:127.0.0.1:1162
+    ```
+
+    In `/etc/tedge/plugins/ot/snmp.toml`, set `listen = "127.0.0.1:1162"` and
+    `forwarders = ["127.0.0.1"]` in `[connection]`.
+
+    A notification from a forwarder is routed by its last `snmpTrapAddress.0` varbind instead of
+    its UDP source, and dropped if it has none. Stock `snmptrapd` 5.9.x does **not** add that
+    varbind, so the sending device must include it itself.
+  </TabItem>
+</Tabs>
+
+## SNMPv3
+
+Give the device a `v3` table. The demo agent also accepts SNMPv3, with the users defined in
+`connectors/snmp/agent/agent.py`, and the demo config has a commented example:
+
+<RepoFile path="demo/config/snmp.toml" marker="v3" />
+
+- `auth_protocol`: `MD5` or `SHA`. `SHA224` to `SHA512` work in `tedge-dot-rs` only.
+- `priv_protocol`: `DES` or `AES` (AES-128). `AES192` and `AES256` work in `tedge-dot-rs` only.
+- `auth_password_file` and `priv_password_file` keep secrets out of a config file that management
+  commands may rewrite. The connector reads the first line of the file.
+- v3 traps are authenticated with the same user. A v3 **inform** needs this receiver's engine ID,
+  `[connection] engine_id`, which is derived from `/etc/machine-id` by default and stays the same
+  across restarts.
+
+<Aside type="caution" title="SHA-2 on tedge-dot-c">
+  The C build uses net-snmp's bundled crypto, so it has no SHA-2 authentication and no
+  AES-192 or AES-256. A config that names one of them still loads, but that device stays
+  `disconnected` with a reason naming the missing capability. The
+  [package picker](/tedge-dot/tools/package-picker/) takes this into account.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="SNMP connector reference" description="Every key, GETBULK batching, notification rules and the acceptance vectors." href="/tedge-dot/reference/connectors/snmp/" />
+  <LinkCard title="Writing to devices from the cloud" description="Edit writable objects from the Cumulocity Parameters tab." href="/tedge-dot/guides/writing-to-devices/" />
+  <LinkCard title="Device-side flows" description="How meta.event and meta.alarm become Cumulocity events and alarms." href="/tedge-dot/reference/flows/flows/" />
+  <LinkCard title="A fleet of identical devices" description="One point library per switch model, one address per instance." href="/tedge-dot/guides/fleet-point-libraries/" />
+</CardGrid>

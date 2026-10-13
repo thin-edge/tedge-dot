@@ -1,0 +1,188 @@
+---
+title: A fleet of identical devices
+description: Keep a device type's point list in one point library, give each instance only its address, and add devices at runtime with define-device.
+sidebar:
+  order: 5
+---
+
+import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+Every ACME meter of the same firmware has the same registers; only its address differs. Writing
+the full point list into every `[[device]]` means copying it 50 times and fixing it 50 times. A
+**point library** keeps that list in one file, and each device references it.
+
+**What you'll build:** a library for one device type, a configuration where each instance is
+four lines long, a site-specific adjustment that survives package upgrades, and a device added at
+runtime from its address alone.
+
+## How it fits together
+
+A point library is the point list of one **device type**, in its own TOML file, with no
+connection information at all. It holds only a `[library]` table and `[[point]]` entries. A
+device references one or more libraries with `points_from`, and declares only what is
+per-instance:
+
+```toml
+[[device]]
+name             = "plc-7"
+protocol_address = { transport = "tcp", host = "192.168.0.17", port = 502, unit_id = 1 }
+points_from      = ["acme-meter-v2"]     # points.d/modbus/acme-meter-v2.toml
+```
+
+References are resolved when the configuration is **loaded**. A protocol module, a flow and the
+samples see no difference between an inherited point and one written inline.
+
+## Write the library
+
+<Steps>
+
+1. **Start from the `[library]` table.** `protocol` must match the connector that loads it, and
+   `type` names the device type the points describe. This is the header of the demo Modbus
+   library that ships with the package:
+
+   <RepoFile path="demo/points.d/modbus/demo-sim.toml" marker="library" />
+
+2. **Add the points**, with exactly the fields a `[[device.point]]` takes. Give them a `name` and
+   a `description`: declared once here, they reach every instance, the Cumulocity parameter UI
+   and the connector's retained capability descriptor. A sensible reporting policy for the device
+   type belongs here too:
+
+   <RepoFile path="demo/points.d/modbus/demo-sim.toml" marker="temp-scaled" />
+
+3. **Install it where the connector looks.** A name in `points_from` resolves to
+   `<dir>/<protocol>/<name>.toml`, in each directory of the search path, first match winning:
+
+   | Directory | For |
+   | --- | --- |
+   | `/etc/tedge/plugins/ot/points.d` | your own libraries; they shadow packaged ones of the same name |
+   | `/usr/share/tedge-dot/points.d` | libraries shipped by a package |
+
+   So a site's ACME library goes to `/etc/tedge/plugins/ot/points.d/modbus/acme-meter-v2.toml`.
+
+</Steps>
+
+<Aside type="tip" title="Search path">
+`[connector] point_library_path` (an array of directories) **replaces** the default path, so it
+must name at least one directory. When it is absent, the `TEDGE_DOT_POINT_LIBRARY_PATH`
+environment variable (colon-separated) replaces it instead. That is how a source checkout points
+at `demo/points.d`. A `points_from` entry that contains `/` or ends in `.toml` is a path rather
+than a name, relative to the configuration file.
+</Aside>
+
+## Add the instances
+
+Each device needs a name, an address and the reference. The packaged Modbus default config
+documents the pattern, including a per-instance adjustment:
+
+<RepoFile path="packaging/config/modbus.toml" marker="library-instance" lang="toml" title="packaging/config/modbus.toml (commented example)" />
+
+The demo configs work exactly this way: [`demo/config/modbus.toml`](https://github.com/thin-edge/tedge-dot/blob/main/demo/config/modbus.toml)
+gives its device an address and `points_from = ["demo-sim"]`, and nothing else.
+
+## Adjust a packaged list without editing it
+
+Points are collected in order: each library in `points_from` order, then the device's own
+`[[device.point]]` entries. A definition whose `id` already exists **patches** the earlier one:
+
+- `meta`, `transform` and `report` merge key by key, so one field changes without restating the
+  rest;
+- `map` is replaced whole (`map = {}` removes an inherited map);
+- every other field, `address` included, is replaced when the override declares it;
+- `{ id = "<point-id>", enabled = false }` switches an inherited point off.
+
+<Tabs>
+  <TabItem label="Relabel a point">
+
+```toml
+[[device]]
+name        = "meter-3"
+points_from = ["acme-meter-v2"]
+protocol_address = { transport = "tcp", host = "192.168.0.13", port = 502, unit_id = 1 }
+
+  [[device.point]]
+  id   = "flow_rate"
+  name = "Inlet flow"          # only the label changes
+```
+
+  </TabItem>
+  <TabItem label="Tighten a deadband">
+
+```toml
+  [[device.point]]
+  id     = "flow_rate"
+  report = { deadband = "0.5%" }   # other report keys stay as the library set them
+```
+
+  </TabItem>
+  <TabItem label="Add site points">
+
+```toml
+[[device]]
+name        = "meter-3"
+points_from = ["acme-meter-v2", "site-extras"]   # a second, untyped library
+```
+
+  </TabItem>
+</Tabs>
+
+Because the device wins over its libraries, a packaged list can be extended and adjusted while
+the file the package owns, which an upgrade replaces, stays untouched. To edit a packaged library
+itself, copy it to `/etc/tedge/plugins/ot/points.d/` under the same name: the packaged copy is
+then no longer used. Give it another name if you want both.
+
+## Device types and parameter set names
+
+The library's `type` is inherited by every device that references it (from the **first** library
+in `points_from` that declares one; a `type` on the `[[device]]` wins). It does two jobs in the
+cloud:
+
+- **Parameter set names.** Writable points are Cumulocity device parameters, grouped into sets
+  named `<device type>_<group>_parameters`, for example `acme_meter_v2_control_parameters`.
+  These names are tenant-wide, so deriving them from the type is what lets two device types on
+  the same protocol coexist. A device without a type falls back to
+  `<protocol>_control_parameters`, and `tedge-dot describe` warns about it.
+- **Entity type.** The registered child device shows up as an `acme-meter-v2`, not a generic
+  `modbus-device`.
+
+A point picks its set with `meta.parameter.group` (relative to the type, and it may be a list
+of groups), or names a set outright with `meta.parameter.set`. See
+[contract §5.2](/tedge-dot/reference/contract/ot-connector-contract/#52-parameters-writable-points-as-device-state)
+and [RFC 0005](/tedge-dot/reference/design/rfc-0005/).
+
+<Aside type="caution">
+The file name is never used as the type: it would become a permanent, tenant-wide identifier by
+accident. Declare `type` on purpose, and leave it out of a library that is only a fragment of
+points, such as `site-extras`.
+</Aside>
+
+## Add a device at runtime
+
+Because the runtime keeps the reference rather than the expanded points, the `define-device`
+management command can add an instance from its address alone. Whatever finds devices on your
+network (mDNS, a subnet scan, an asset inventory) publishes one small command per instance:
+
+```sh
+tedge mqtt pub -r te/device/main/service/tedge-dot-modbus/ot/cmd/define-device/d1 '{
+  "status": "init",
+  "device": {
+    "name": "plc-7",
+    "protocol_address": { "transport": "tcp", "host": "192.168.0.17", "port": 502, "unit_id": 1 },
+    "points_from": ["acme-meter-v2"]
+  }
+}'
+```
+
+The runtime patches the configuration file, which still says `points_from = ["acme-meter-v2"]`
+rather than 200 expanded points, and applies it. A reference introduced by a command must be a
+**name**, never a path. An unresolvable reference fails loudly, naming every path it looked
+in: a device never comes up quietly with zero points.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Contract §3.4: point libraries" description="The normative resolution and override rules." href="/tedge-dot/reference/contract/ot-connector-contract/#34-point-libraries" />
+  <LinkCard title="RFC 0004: point libraries" description="Why the persisted config keeps the reference." href="/tedge-dot/reference/design/rfc-0004/" />
+  <LinkCard title="Writing to devices from the cloud" description="Turn writable library points into Cumulocity device parameters." href="/tedge-dot/guides/writing-to-devices/" />
+  <LinkCard title="Config builder" description="Build a device config that references a library." href="/tedge-dot/tools/config-builder/" />
+</CardGrid>

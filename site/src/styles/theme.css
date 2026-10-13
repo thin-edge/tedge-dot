@@ -32,6 +32,12 @@
   --td-border: var(--sl-color-gray-5);
   --td-muted: var(--sl-color-gray-3);
   --td-radius: 0.75rem;
+
+  /* Chart series (validated with the dataviz palette checks on the dark surface). */
+  --td-chart-published: #e25b12;
+  --td-chart-heartbeat: #2b8fc9;
+  --td-chart-reading: #6b8299;
+  --td-chart-grid: #233a52;
 }
 
 :root[data-theme='light'] {
@@ -55,6 +61,11 @@
   --td-surface-raised: #ffffff;
   --td-border: #d5dfe9;
   --td-muted: #4a6580;
+
+  --td-chart-published: #c2470a;
+  --td-chart-heartbeat: #0077b6;
+  --td-chart-reading: #8197ad;
+  --td-chart-grid: #dde5ee;
 }
 
 /* Headings: a touch tighter, the way product sites set them. */

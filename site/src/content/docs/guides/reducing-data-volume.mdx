@@ -1,0 +1,114 @@
+---
+title: Reducing data volume on a metered link
+description: Publish readings only when they matter, keep Cumulocity availability with a heartbeat, and check the effective policy, using the report table.
+sidebar:
+  order: 6
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+A Modbus register polled every 2 seconds produces 43,200 samples a day, and each becomes a
+measurement in the cloud, even when the value never moves. On a cellular or satellite link you
+pay for every one of them.
+
+**What you'll build:** a reporting policy that sends a temperature only when it moves by more
+than its noise, a status bit only when it flips, a heartbeat that keeps the device *available*
+in Cumulocity, and a way to check what the connector actually applies.
+
+<Aside type="tip" title="Try it first">
+The [report-policy playground](/tedge-dot/tools/report-playground/) applies a policy to a sample
+signal in your browser and shows which readings would be published. Its engine passes the same
+test vectors as the Rust and C SDKs.
+</Aside>
+
+## Where the policy applies
+
+The `report` table is applied by the **SDK runtime**, in front of the sample topic, the same way
+for every connector and in both the Rust and the C build. A reading the policy holds back never
+reaches the broker, so every consumer (the measurement, alarm, event and parameter flows, and
+any tool subscribed to the samples) sees the reduced stream. Without a `report` anywhere, every
+reading is published.
+
+Some readings are always published, whatever the policy: the first one after a start, a reload,
+a reconnect, a write or a restored broker connection, and any reading whose `quality` changed.
+A failing read is therefore reported at once, and so is the recovery.
+
+## Build the policy
+
+<Steps>
+
+1. **Keep the heartbeat.** Cumulocity marks a device unavailable when it sends nothing within
+   its required interval (often 60 minutes), and a device that publishes only on change can be
+   quiet for hours. The packaged Modbus, OPC UA, CANopen and PROFIBUS configs already set a
+   30-minute heartbeat on the connector:
+
+   <RepoFile path="packaging/config/modbus.toml" marker="heartbeat" />
+
+   A heartbeat is always a **fresh reading** (the next poll, or an on-demand read of a pushed
+   OPC UA node), never an old value sent again. A CAN frame signal or an SNMP trap cannot be
+   read on demand, so it gets no heartbeat.
+
+2. **Filter the analog values with a deadband.** A temperature that moves by 0.1 °C of noise
+   does not need to be sent. A deadband publishes a reading only once it is far enough from the
+   last **published** value, so a slow drift still gets through when it adds up. Add a
+   `min_interval` to cap the rate: a change that arrives too soon is held and published when the
+   interval ends, with its own timestamp, so the last change of a burst is never lost.
+
+   The demo library's boiler temperature does both:
+
+   <RepoFile path="demo/points.d/modbus/demo-sim.toml" marker="temp-scaled" />
+
+   For a value whose scale varies a lot, such as a flow rate, a percent deadband fits better:
+   `report = { deadband = "2%" }`.
+
+3. **Send states on change.** A status word, a mode or a coil matters when it flips:
+   `report = { on_change = true }`. Booleans, strings and 64-bit integers compare exactly.
+
+4. **Debounce what chatters.** A float switch that bounces as it changes state:
+   `report = { debounce = "2s" }` publishes the new state once it has held for 2 seconds, and a
+   short-lived value is never sent.
+
+5. **Set defaults once.** `report` can be set on `[connector]`, on a `[[device]]` and on a point
+   (in a point library or in the configuration). The effective policy is merged **key by key**,
+   the most specific level winning for each key it sets. A duration of `"0"` switches off an
+   inherited setting, and `on_change = false` with `deadband = 0` switches off change detection.
+
+</Steps>
+
+<Aside type="caution" title="Alarms see the reduced stream">
+Keep a deadband smaller than the hysteresis of any alarm on the same signal, and do not filter a
+point whose every reading is an event (`meta.event = { ..., every = true }`, typically an SNMP
+trap). See [Alarms and events](/tedge-dot/reference/configuration/reducing-data-volume/#alarms-and-events).
+</Aside>
+
+## Apply and check it
+
+The service picks up a changed config file on its own within a few seconds, or at once with
+`sudo systemctl reload tedge-dot`. The connector then publishes the policies it applies in its
+retained capability descriptor, under `reports`:
+
+```sh
+tedge mqtt sub 'te/device/main/service/tedge-dot-modbus/ot/capabilities'   # retained: shown at once
+```
+
+`default` is the `[connector]` table, `devices` the tables declared on devices, and `points` the
+**effective**, merged policy of each point that differs from its device. When a point is quieter
+than you expect, look there first. A sample's `seq` counts published samples only, so a gap in
+`seq` still means a sample was lost on the way, never that the policy held it back.
+
+<Aside type="note" title="Moving from ot-measurement's settings">
+The `on_change`, `deadband`, `min_interval` and `debounce` parameters of the `ot-measurement`
+flow are deprecated: they cannot send a heartbeat. Move them from `meta` to `report`, and do not
+configure both. See
+[the reference](/tedge-dot/reference/configuration/reducing-data-volume/#moving-from-ot-measurements-settings).
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Reducing data volume: reference" description="Every key, the per-connector heartbeat table and the edge cases." href="/tedge-dot/reference/configuration/reducing-data-volume/" />
+  <LinkCard title="Report-policy playground" description="See which samples a policy publishes, before you deploy it." href="/tedge-dot/tools/report-playground/" />
+  <LinkCard title="A fleet of identical devices" description="Declare a policy once per device type, in its point library." href="/tedge-dot/guides/fleet-point-libraries/" />
+  <LinkCard title="Configuration file" description="The report table in the configuration reference." href="/tedge-dot/reference/configuration/config-file/" />
+</CardGrid>
