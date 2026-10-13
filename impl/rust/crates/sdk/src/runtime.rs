@@ -136,6 +136,7 @@ impl LinkTracker {
         config: &ConnectorConfig,
     ) -> Result<(), BoxError> {
         for report in reports {
+            log_link_report(self.states.get(&report.device).copied(), report);
             self.states.insert(report.device.clone(), report.status);
             if let Some(info) = &report.info {
                 self.infos.insert(report.device.clone(), info.clone());
@@ -185,7 +186,6 @@ impl LinkTracker {
         let Some(new) = next_link_state(current, healthy) else {
             return;
         };
-        info!(%device, status = new.as_str(), "link status changed");
         let report = LinkReport {
             device: device.to_string(),
             status: new,
@@ -314,6 +314,42 @@ async fn attempt_reconnect(
         }
     }
     restored
+}
+
+/// Log a link report about to be published, as the C runtime does. A device whose connect fails
+/// otherwise leaves no trace in the log: the connector returns the failure inside a
+/// `disconnected` report rather than as an error, and only the retained link status carried the
+/// reason.
+fn log_link_report(previous: Option<LinkStatus>, report: &LinkReport) {
+    if let Some((warning, line)) = link_log_line(previous, report) {
+        if warning {
+            warn!(device = %report.device, "{line}");
+        } else {
+            info!(device = %report.device, "{line}");
+        }
+    }
+}
+
+/// The log line for a link report, and whether it is a warning; `None` when there is nothing new
+/// to say. A transition is always logged. A report that is not `connected` is logged even when
+/// the status is unchanged: it comes from a connect (startup or reload), and a reload that leaves
+/// a device failing is worth a line. Reconnect attempts reach here only on a change
+/// (`publish_if_changed`), so a device that stays down is not logged on every retry. Pure so the
+/// rules are unit-testable.
+fn link_log_line(previous: Option<LinkStatus>, report: &LinkReport) -> Option<(bool, String)> {
+    let status = report.status.as_str();
+    match report.status {
+        LinkStatus::Connected => {
+            (previous != Some(LinkStatus::Connected)).then(|| (false, format!("link {status}")))
+        }
+        LinkStatus::Degraded | LinkStatus::Disconnected => Some((
+            true,
+            match &report.reason {
+                Some(reason) => format!("link {status}: {reason}"),
+                None => format!("link {status}"),
+            },
+        )),
+    }
 }
 
 /// The link state to publish after a poll batch, or `None` when nothing changed. Pure so the
@@ -3681,6 +3717,32 @@ protocol_address = {}
         // a device that never connected stays disconnected
         assert_eq!(next_link_state(Some(Disconnected), false), None);
         assert_eq!(next_link_state(None, false), None);
+    }
+
+    #[test]
+    fn link_reports_are_logged_with_their_reason() {
+        use LinkStatus::*;
+        let report = |status, reason: Option<&str>| LinkReport {
+            device: "plc".into(),
+            status,
+            reason: reason.map(str::to_string),
+            info: None,
+        };
+        let refused = report(Disconnected, Some("tcp connect failed: Connection refused"));
+        let line = "link disconnected: tcp connect failed: Connection refused";
+        // a device whose first connect fails is a warning naming the reason
+        assert_eq!(link_log_line(None, &refused), Some((true, line.into())));
+        // and so is a reload that leaves it failing
+        assert_eq!(link_log_line(Some(Disconnected), &refused), Some((true, line.into())));
+        assert_eq!(
+            link_log_line(Some(Connected), &report(Degraded, None)),
+            Some((true, "link degraded".into()))
+        );
+        // connecting is logged once, not on every reload of a healthy device
+        let connected = Some((false, "link connected".into()));
+        assert_eq!(link_log_line(None, &report(Connected, None)), connected);
+        assert_eq!(link_log_line(Some(Disconnected), &report(Connected, None)), connected);
+        assert_eq!(link_log_line(Some(Connected), &report(Connected, None)), None);
     }
 
     #[test]

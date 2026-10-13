@@ -198,7 +198,7 @@ Session Survives Secure Channel Token Renewal
     # evidence: a renewal that failed would have dropped the session and published
     # `disconnected` before reconnecting. Asserted on the published status rather than on log
     # text, which the two runtimes word differently ("device token: link disconnected" in C,
-    # "link status changed device=token status=disconnected" in Rust) -- a log-string check
+    # "link disconnected: <reason> device=token" in Rust) -- a log-string check
     # silently matches neither and can never fail.
     ${history}=    Get Messages    te/device/token/ot/${PROTOCOL}/status/link
     ${states}=    Evaluate    [json.loads(m)["status"] for m in $history]    modules=json
