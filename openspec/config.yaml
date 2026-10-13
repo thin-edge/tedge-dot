@@ -18,3 +18,8 @@ schema: spec-driven
 #       - Always include a "Non-goals" section
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
+rules:
+  tasks:
+    - For a user-visible change, include a task to add a release highlight in
+      changes/<change-name>.md (see changes/README.md); never edit packaging/release-notes.md
+      for a feature, it is the fixed header of every release.
