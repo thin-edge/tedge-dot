@@ -14,6 +14,7 @@
 
 #include "cjson/cJSON.h"
 #include "mosquitto.h"
+#include "tedge_dot/health.h"
 #include "tedge_dot/schedule.h"
 #include "tedge_dot/watch.h"
 
@@ -1650,6 +1651,40 @@ typedef struct {
     rt_t *rt;
 } sink_ctx_t;
 
+static void log_point_change(const tdot_device_t *dev, const tdot_point_t *pt,
+                             tdot_point_change_t change) {
+    if (change == TDOT_POINT_FAILED)
+        logmsg("warn", "device %s: point %s unreadable: %s", dev->name, pt->id,
+               pt->bad_error);
+    else if (change == TDOT_POINT_RECOVERED)
+        logmsg("info", "device %s: point %s readable again", dev->name, pt->id);
+}
+
+/* Hold a reading of this pass until judge_pass knows whether the pass as a
+ * whole failed (health.h). */
+static void hold_reading(tdot_point_t *pt, const tdot_sample_t *s) {
+    pt->tick_state = s->quality == TDOT_Q_BAD ? 2 : 1;
+    snprintf(pt->tick_error, sizeof pt->tick_error, "%s", s->error);
+}
+
+/* Log the point health changes of the readings held in a pass over the points
+ * `idx` lists (all of them when NULL), or only forget them when `judge` is
+ * false: a pass with no readable point is the device failing, which the link
+ * status reports. */
+static void judge_pass(tdot_device_t *dev, const size_t *idx, size_t n,
+                       bool judge) {
+    for (size_t k = 0; k < n; k++) {
+        tdot_point_t *pt = &dev->points[idx ? idx[k] : k];
+        if (!pt->tick_state)
+            continue;
+        if (judge)
+            log_point_change(dev, pt,
+                             tdot_point_health(pt->bad_error, pt->tick_state == 2,
+                                               pt->tick_error));
+        pt->tick_state = 0;
+    }
+}
+
 static void push_sink(void *ctx, tdot_device_t *dev, tdot_point_t *pt,
                       const tdot_sample_t *s) {
     sink_ctx_t *c = ctx;
@@ -1659,6 +1694,11 @@ static void push_sink(void *ctx, tdot_device_t *dev, tdot_point_t *pt,
     tdot_sample_t local = *s;
     if (pt->mode == TDOT_MODE_RAW)
         local.value.kind = TDOT_VAL_NONE;
+    /* A pushed sample arrives alone and says nothing about the rest of the
+     * device, so it is judged on its own. */
+    log_point_change(dev, pt,
+                     tdot_point_health(pt->bad_error, s->quality == TDOT_Q_BAD,
+                                       s->error));
     emit_sample(c->rt, dev, pt, &local);
 }
 
@@ -1727,6 +1767,7 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
             }
             if (pt->mode == TDOT_MODE_RAW)
                 s.value.kind = TDOT_VAL_NONE; /* raw: bytes only */
+            hold_reading(pt, &s);
             emit_sample(rt, dev, pt, &s);
             read++;
             if (s.quality == TDOT_Q_BAD)
@@ -1737,6 +1778,8 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
         /* Only a transport failure speaks against the device, as in Rust: a
          * heartbeat pass usually reads one point, and one unreadable node
          * must not degrade a device whose other points deliver. */
+        if (read > 0)
+            judge_pass(dev, dev->reported, n, !transport_down && read > bad);
         if (transport_down)
             mark_transport_down(rt, dev);
         else if (read > bad)
@@ -1880,6 +1923,7 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                     continue;
                 if (pt->mode == TDOT_MODE_RAW)
                     s.value.kind = TDOT_VAL_NONE; /* raw: bytes only */
+                hold_reading(pt, &s);
                 emit_sample(&rt, dev, pt, &s);
                 polled++;
                 if (s.quality == TDOT_Q_BAD)
@@ -1887,6 +1931,8 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                 if (rc != 0)
                     transport_down = true;
             }
+            if (polled > 0)
+                judge_pass(dev, dev->polled, n, !transport_down && bad < polled);
             if (transport_down) {
                 mark_transport_down(&rt, dev);
                 continue;
