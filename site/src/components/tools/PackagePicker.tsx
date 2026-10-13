@@ -67,11 +67,11 @@ export default function PackagePicker({ data }: { data: PackageData }) {
       <section class="pp-result" aria-live="polite" aria-label="Recommendation">
         <p class="pp-kicker">Install</p>
         <p class="pp-pick"><code>{r.pick}</code></p>
-        <ul>{r.reasons.map((x) => <li>{x}</li>)}</ul>
+        <ul>{r.reasons.map((x) => <li>{keepNames(x)}</li>)}</ul>
         {r.caveats.length > 0 && (
           <div class="pp-caveats">
             <strong>Not covered</strong>
-            <ul>{r.caveats.map((x) => <li>{x}</li>)}</ul>
+            <ul>{r.caveats.map((x) => <li>{keepNames(x)}</li>)}</ul>
           </div>
         )}
         {r.alternative && <p class="pp-alt" dangerouslySetInnerHTML={{ __html: codeSpans(r.alternative) }} />}
@@ -84,8 +84,13 @@ export default function PackagePicker({ data }: { data: PackageData }) {
   );
 }
 
+// Package names keep their hyphens on one line (non-breaking hyphens, for display only).
+function keepNames(s: string): string {
+  return s.replace(/tedge-dot-(rs|c)\b/g, 'tedge\u2011dot\u2011$1');
+}
+
 // The alternative text is our own data; only backtick spans are turned into <code>.
 function codeSpans(s: string): string {
   const esc = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return esc.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return esc.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/tedge-dot-(rs|c)\b/g, 'tedge&#8209;dot&#8209;$1');
 }

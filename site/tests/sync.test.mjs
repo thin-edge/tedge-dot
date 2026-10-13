@@ -181,3 +181,25 @@ describe('fitDiagrams fence pairing', async () => {
     expect(fitDiagrams(md)).toBe(md);
   });
 });
+
+describe('tables in the published Markdown', () => {
+  // A `|` inside inline code in a table row ends the cell, in GitHub's Markdown and on the site:
+  // `a|b` must be written `a\|b`. A cell left with an odd number of backticks shows the split.
+  const map = YAML.parse(readFileSync(new URL('../docs-map.yaml', import.meta.url), 'utf8'));
+  for (const page of map.pages) {
+    it(`${page.source}: no table cell splits a code span`, () => {
+      const lines = readFileSync(new URL(`../../${page.source}`, import.meta.url), 'utf8').split('\n');
+      const bad = [];
+      let fence = false;
+      lines.forEach((line, i) => {
+        if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+        if (fence || !/^\s*\|/.test(line)) return;
+        for (const cell of line.split(/(?<!\\)\|/)) {
+          const ticks = (cell.replace(/\\`/g, '').match(/`/g) || []).length;
+          if (ticks % 2) bad.push(`line ${i + 1}: ${cell.trim().slice(0, 50)}`);
+        }
+      });
+      expect(bad).toEqual([]);
+    });
+  }
+});

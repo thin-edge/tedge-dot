@@ -61,6 +61,13 @@ jobs:
       - name: Landing page JavaScript budget
         working-directory: site
         run: npm run check:budget
+      # Every page in a real browser at desktop and phone width: glued words, content spilling
+      # out of its box, mismatched button rows, sideways scroll, script errors, dead buttons.
+      - name: Layout check
+        working-directory: site
+        run: |
+          npx playwright install --with-deps chromium
+          npm run check:layout
       - name: Lighthouse (performance and accessibility >= 95)
         working-directory: site
         run: |

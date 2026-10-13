@@ -79,10 +79,15 @@ export default function ReportPlayground() {
   const span = hi - lo;
   lo -= span * 0.08;
   hi += span * 0.08;
+  // Snap the domain to whole ticks, so the top and bottom of the plot are labelled.
+  const step = tickStep(lo, hi, 4);
+  lo = Math.floor(lo / step) * step;
+  hi = Math.ceil(hi / step) * step;
+  const decimals = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
   const tMax = run?.readings.at(-1)?.t ?? 1;
   const x = (t: number) => PAD.left + (t / tMax) * (W - PAD.left - PAD.right);
   const y = (v: number) => PAD.top + (1 - (v - lo) / (hi - lo)) * (H - PAD.top - PAD.bottom);
-  const yTicks = niceTicks(lo, hi, 4);
+  const yTicks = niceTicks(lo, hi, step);
   const xTicks = (W < 500 ? [0, 5, 10] : [0, 2, 4, 6, 8, 10]).map((m) => m * 60_000).filter((t) => t <= tMax);
 
   const publishedSet = new Map(run?.published.map((p) => [p.index, p]) ?? []);
@@ -188,7 +193,7 @@ export default function ReportPlayground() {
               {yTicks.map((v) => (
                 <g>
                   <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)} class="rp-grid-line" />
-                  <text x={PAD.left - 6} y={y(v)} class="rp-axis" text-anchor="end" dominant-baseline="middle">{fmt(v)}</text>
+                  <text x={PAD.left - 6} y={y(v)} class="rp-axis" text-anchor="end" dominant-baseline="middle">{v.toFixed(decimals)}</text>
                 </g>
               ))}
               {xTicks.map((t) => (
@@ -212,7 +217,11 @@ export default function ReportPlayground() {
               )}
             </svg>
             {hovered && (
-              <div class="rp-tip" style={{ left: `clamp(4.5rem, ${(x(hovered.t) / W) * 100}%, calc(100% - 4.5rem))` }} aria-live="polite">
+              <div
+                class={`rp-tip ${x(hovered.t) > W * 0.6 ? 'left' : 'right'}`}
+                style={{ left: `${(x(hovered.t) / W) * 100}%`, top: `${PAD.top + 4}px` }}
+                aria-live="polite"
+              >
                 <strong>{fmt(hovered.value)}{unit && ` ${unit}`}</strong>
                 <span>at {fmtTime(hovered.t)}</span>
                 <span>
@@ -266,12 +275,15 @@ function Field(props: { label: string; hint: string; value: string; onInput: (e:
   );
 }
 
-function niceTicks(lo: number, hi: number, count: number): number[] {
+function tickStep(lo: number, hi: number, count: number): number {
   const raw = (hi - lo) / count;
   const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? raw;
+  return [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? raw;
+}
+
+function niceTicks(lo: number, hi: number, step: number): number[] {
   const out: number[] = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(Math.round(v * 1e6) / 1e6);
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-6; v += step) out.push(Math.round(v * 1e6) / 1e6);
   return out;
 }
 

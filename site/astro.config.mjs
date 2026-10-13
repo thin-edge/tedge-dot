@@ -5,6 +5,8 @@ import starlight from '@astrojs/starlight';
 import preact from '@astrojs/preact';
 import starlightLinksValidator from 'starlight-links-validator';
 import YAML from 'yaml';
+import rehypeInlineCodeNowrap from './src/plugins/rehype-inline-code-nowrap.mjs';
+import rehypeTableScroll from './src/plugins/rehype-table-scroll.mjs';
 
 // The Reference sidebar comes from the page map, so a published repository file is listed in
 // exactly one place.
@@ -28,6 +30,7 @@ export default defineConfig({
   trailingSlash: 'ignore',
   // Load a page when the pointer rests on its link, so a click usually shows it at once.
   prefetch: { prefetchAll: true, defaultStrategy: 'hover' },
+  markdown: { rehypePlugins: [rehypeInlineCodeNowrap, rehypeTableScroll] },
   // The tools import the contract schemas and test vectors from the repository (../doc).
   vite: { server: { fs: { allow: ['..'] } } },
   integrations: [

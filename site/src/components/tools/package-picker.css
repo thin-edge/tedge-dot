@@ -5,7 +5,7 @@
 .pp-set { border: 0; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
 .pp-set legend { font-size: var(--sl-text-sm); font-weight: 600; color: var(--sl-color-gray-2); margin-bottom: 0.25rem; }
 .pp-check { display: flex; gap: 0.5rem; align-items: flex-start; font-size: var(--sl-text-sm); margin: 0 !important; }
-.pp-check input { margin-top: 0.25rem; }
+.pp-check input { margin-top: 0.3rem; flex-shrink: 0; }
 .pp-result { position: sticky; top: calc(var(--sl-nav-height) + 1rem); border-radius: var(--td-radius); padding: 1.25rem; border: 1px solid var(--sl-color-accent); background: linear-gradient(160deg, var(--sl-color-accent-low), var(--td-surface) 60%); }
 .pp-result > * { margin: 0 0 0.75rem !important; }
 .pp-kicker { font-size: var(--sl-text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--td-muted); margin-bottom: 0 !important; }

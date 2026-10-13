@@ -6,7 +6,7 @@
 .rp-form { display: grid; gap: 0.75rem; }
 .rp-form > * { margin: 0 !important; }
 .rp-check { display: flex; gap: 0.5rem; align-items: center; font-size: var(--sl-text-sm); }
-.rp-toml { margin: 0; padding: 0.5rem; font-size: var(--sl-text-xs); white-space: pre-wrap; word-break: break-word; background: var(--sl-color-black); border-radius: 0.375rem; }
+.rp-toml { margin: 0; padding: 0.5rem; font-size: var(--sl-text-xs); white-space: pre; overflow-x: auto; background: var(--sl-color-black); border-radius: 0.375rem; }
 .rp-out { display: grid; gap: 0.75rem; min-width: 0; }
 .rp-out > * { margin: 0 !important; }
 .rp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
@@ -26,9 +26,11 @@
 .rp-hb { fill: var(--td-chart-heartbeat); stroke: var(--sl-color-black); stroke-width: 2; }
 .rp-delay { stroke: var(--td-chart-published); stroke-width: 2; stroke-dasharray: 3 3; }
 .rp-crosshair { stroke: var(--sl-color-gray-3); stroke-width: 1; }
-.rp-tip { position: absolute; top: 0; transform: translateX(-50%); pointer-events: none; display: grid; gap: 0.1rem; background: var(--td-surface-raised); border: 1px solid var(--td-border); border-radius: 0.5rem; padding: 0.35rem 0.6rem; font-size: var(--sl-text-xs); color: var(--sl-color-gray-2); white-space: nowrap; box-shadow: var(--sl-shadow-md); }
+.rp-tip { position: absolute; transform: translateX(10px); pointer-events: none; display: grid; gap: 0.1rem; background: var(--td-surface-raised); border: 1px solid var(--td-border); border-radius: 0.5rem; padding: 0.35rem 0.6rem; font-size: var(--sl-text-xs); color: var(--sl-color-gray-2); white-space: nowrap; box-shadow: var(--sl-shadow-md); }
 .rp-tip strong { color: var(--sl-color-white); font-size: var(--sl-text-sm); }
 .rp-note { font-size: var(--sl-text-xs); color: var(--td-muted); }
 .rp-table summary { cursor: pointer; font-size: var(--sl-text-sm); }
 .rp-table-scroll { max-height: 18rem; overflow: auto; }
-.rp-table table { display: table !important; width: 100%; font-size: var(--sl-text-xs); }
+.rp-tip.left { transform: translateX(calc(-100% - 10px)); }
+.rp-table table { display: table !important; width: 100%; font-size: var(--sl-text-xs); border-collapse: collapse; }
+.rp-table :is(th, td) { text-align: left; padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--td-border); }

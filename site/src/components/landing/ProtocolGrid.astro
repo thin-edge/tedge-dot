@@ -43,8 +43,12 @@ const protocols = [
   }
   a {
     display: grid;
+    /* Name, transport and text at the top; the package chips at the bottom of every card. */
+    grid-template-rows: auto auto 1fr auto;
+    align-content: start;
     gap: 0.35rem;
     height: 100%;
+    box-sizing: border-box;
     padding: 1.1rem 1.2rem;
     border-radius: var(--td-radius);
     border: 1px solid var(--td-border);
@@ -73,10 +77,15 @@ const protocols = [
   }
   .pkgs {
     display: flex;
+    align-self: end;
     gap: 0.35rem;
     margin-top: 0.25rem;
   }
   .pkg {
+    display: inline-flex;
+    align-items: center;
+    height: 1.4rem;
+    line-height: 1;
     font-family: var(--sl-font-mono);
     font-size: var(--sl-text-xs);
     padding: 0 0.45rem;

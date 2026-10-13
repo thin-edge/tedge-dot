@@ -1,12 +1,12 @@
 .cb { display: grid; gap: 1rem; margin-top: 1rem; }
-.cb-bar { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: end; }
+.cb-bar { position: relative; display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: end; }
 .cb-inline { min-width: 11rem; }
 .cb-import { position: relative; }
 .cb-import summary { list-style: none; }
 .cb-import summary::-webkit-details-marker { display: none; }
-/* Opens below the toolbar, full width: a floating panel overflowed small screens. */
-.cb-import[open] { flex-basis: 100%; }
-.cb-import[open] .td-panel { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
+/* Opens below the toolbar, across its full width, without moving the button. */
+.cb-import[open] .td-panel { position: absolute; left: 0; right: 0; top: calc(100% + 0.5rem); z-index: 5; display: grid; gap: 0.5rem; box-shadow: var(--sl-shadow-lg); background: var(--td-surface-raised); }
+.cb-import .td-panel .td-btn { justify-self: start; }
 .cb-import textarea { width: 100%; box-sizing: border-box; }
 .cb-import textarea { font-family: var(--sl-font-mono); font-size: var(--sl-text-xs); }
 .cb-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); align-items: start; }
@@ -17,7 +17,7 @@
 .cb-form > *, .cb-form fieldset > *, .cb-point > * { margin: 0 !important; }
 .cb-row { display: grid; gap: 0.6rem 0.75rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr)); align-items: start; }
 .cb-row > * { margin: 0 !important; }
-.cb-check { display: flex; gap: 0.4rem; align-items: center; font-size: var(--sl-text-sm); align-self: end; padding-bottom: 0.4rem; }
+.cb-check { display: flex; gap: 0.4rem; align-items: center; font-size: var(--sl-text-sm); align-self: end; min-height: 2.25rem; }
 .cb-shape { border-left: 2px solid var(--td-border); padding-left: 0.75rem; display: grid; gap: 0.5rem; }
 .cb-shape > * { margin: 0 !important; }
 .cb-shape-title { font-size: var(--sl-text-xs); color: var(--td-muted); }

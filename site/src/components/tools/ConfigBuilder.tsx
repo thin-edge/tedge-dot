@@ -142,6 +142,13 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
             </div>
           </fieldset>
 
+          {Object.keys(info?.connection?.properties ?? {}).length > 0 || config.connection ? (
+            <fieldset class="td-panel">
+              <legend>[connection]</legend>
+              <Shape ctx={ctx} base="/connection" schema={info?.connection} legend="shared connection settings" />
+            </fieldset>
+          ) : null}
+
           {devices.map((device, d) => (
             <fieldset class="td-panel cb-device">
               <legend>[[device]] {device.name || `#${d + 1}`}</legend>
@@ -170,7 +177,7 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
                 </div>
               ))}
               <div class="cb-actions">
-                <button type="button" class="td-btn" onClick={() => ctx.set(`/device/${d}/point/${(device.point ?? []).length}`, structuredClone(info.newPoint))}>
+                <button type="button" class="td-btn" onClick={() => ctx.set(`/device/${d}/point/${(device.point ?? []).length}`, { ...structuredClone(info.newPoint), id: uniqueId(info.newPoint.id, (device.point ?? []).map((p: any) => p.id)) })}>
                   + Add point
                 </button>
                 <button type="button" class="td-btn" onClick={() => ctx.set('/device', devices.filter((_, i) => i !== d))}>
@@ -297,6 +304,14 @@ function List(props: { ctx: Ctx; path: string; label: string; hint: string }) {
       {error && <span class="td-error">{error}</span>}
     </div>
   );
+}
+
+/** `base`, or `base_2`, `base_3`… when a point of that id exists already. */
+function uniqueId(base: string, taken: string[]): string {
+  if (!taken.includes(base)) return base;
+  let n = 2;
+  while (taken.includes(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
 }
 
 function splitList(text: string): string[] {
