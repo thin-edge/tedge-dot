@@ -178,3 +178,34 @@
 .main-pane:has(.td-tool) {
   --sl-content-width: 76rem;
 }
+
+/*
+ * Page-to-page navigation. Every page is its own document, so without this a click on the
+ * sidebar repaints the whole window. A cross-document view transition keeps the header and
+ * the sidebar where they are and fades only the content in. Browsers without support navigate
+ * as before.
+ */
+@view-transition {
+  navigation: auto;
+}
+/* `header.header`: Starlight's header component has an inner `.header` too, and a name used
+   twice cancels the transition. */
+header.header {
+  view-transition-name: td-header;
+}
+@media (min-width: 50rem) {
+  .sidebar-pane {
+    view-transition-name: td-sidebar;
+  }
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 120ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

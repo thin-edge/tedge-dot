@@ -26,6 +26,8 @@ export default defineConfig({
   site: 'https://thin-edge.github.io',
   base: '/tedge-dot',
   trailingSlash: 'ignore',
+  // Load a page when the pointer rests on its link, so a click usually shows it at once.
+  prefetch: { prefetchAll: true, defaultStrategy: 'hover' },
   // The tools import the contract schemas and test vectors from the repository (../doc).
   vite: { server: { fs: { allow: ['..'] } } },
   integrations: [
@@ -33,7 +35,6 @@ export default defineConfig({
       title: 'tedge-dot',
       description:
         'OT protocol connectors for thin-edge.io: Modbus, OPC UA, CAN bus, CANopen, SNMP and PROFIBUS-DP into one neutral MQTT contract.',
-      logo: { src: './src/assets/mark.svg', alt: '' },
       favicon: '/favicon.svg',
       customCss: [
         '@fontsource-variable/inter',
@@ -48,6 +49,8 @@ export default defineConfig({
       components: {
         // The landing page's animated data-flow hero.
         Hero: './src/components/LandingHero.astro',
+        // The logo, inline, so it does not blink on navigation.
+        SiteTitle: './src/components/SiteTitle.astro',
       },
       head: [
         { tag: 'meta', attrs: { name: 'theme-color', content: '#0b1f33' } },
