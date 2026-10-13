@@ -88,7 +88,10 @@ source file, not by line numbers.
 
 ### Interactive tools
 
-- **Config builder**: a form driven by `config.schema.json` (protocol, `[connector]`, one or
+- **Config builder**: a form driven by `config.schema.json` plus small per-protocol shapes
+  (`site/src/data/protocols.json`: the types of the `protocol_address`, `address` and
+  `connection` keys the connector specs define, other keys allowed), because the contract schema
+  leaves those tables open; (protocol, `[connector]`, one or
   more `[[device]]`, points). It emits TOML with `smol-toml` (MIT) and validates it live with
   `ajv` (MIT). It can load any `demo/config/*.toml` as a starting point, and offers copy and
   download. CI checks that every config in `demo/config` and `packaging/config` validates and
@@ -137,6 +140,8 @@ release workflow makes, so the GitHub release and the site always agree.
     (`starlight-links-validator`), run the tool tests (vectors, config round-trip);
   - on push to `main`, on `release: published` and manually: the same, then
     `actions/upload-pages-artifact` + `actions/deploy-pages`.
+- The deploy job (and the Pages artifact upload) run only when the repository variable
+  `DOCS_PAGES` is `"true"`, so `main` stays green before Pages is enabled (Migration Plan step 1).
 - `astro.config` sets `site: https://thin-edge.github.io`, `base: /tedge-dot`.
 - `just docs` / `just docs-build` wrap the npm commands for contributors.
 

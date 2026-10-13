@@ -27,7 +27,7 @@
 ## 4. Get started and guides
 
 - [x] 4.1 Overview page (what tedge-dot is, architecture diagram, how it fits thin-edge.io)
-- [ ] 4.2 Install page rendering `doc/install.md` with the package table from `site/src/data/packages.yaml`
+- [x] 4.2 Install page rendering `doc/install.md` with the package table from `site/src/data/packages.yaml`
 - [x] 4.3 "Your first device in 5 minutes" with the demo compose stack
 - [x] 4.4 Marker-comment snippet include helper (select part of a repository file by markers)
 - [x] 4.5 Guide: Modbus TCP PLC to Cumulocity
@@ -54,7 +54,7 @@
 - [x] 6.1 Hero with animated SVG data flow (devices → tedge-dot → flows → thin-edge.io → cloud), reduced-motion fallback
 - [x] 6.2 Protocol grid, "two packages, one contract" comparison, quick-start terminal block, guide cards
 - [x] 6.3 Review in light/dark and at phone width; JS ≤ 100 kB on the landing page
-- [ ] 6.4 Lighthouse CI check (performance and accessibility ≥ 95)
+- [x] 6.4 Lighthouse CI check (performance and accessibility ≥ 95)
 
 ## 7. What's new
 
@@ -63,13 +63,13 @@
 
 ## 8. CI and deployment
 
-- [ ] 8.1 `docs.yaml`: PR build + sync tests + link check + tool checks on relevant paths
-- [ ] 8.2 Deploy job on push to `main`, `release: published` and dispatch (`fetch-depth: 0`, upload-pages-artifact, deploy-pages)
-- [ ] 8.3 Dependabot for `site/package.json`
-- [ ] 8.4 Smoke: run the Modbus guide's commands against the demo stack in CI
+- [x] 8.1 `docs.yaml`: PR build + sync tests + link check + tool checks on relevant paths
+- [x] 8.2 Deploy job on push to `main`, `release: published` and dispatch (`fetch-depth: 0`, upload-pages-artifact, deploy-pages)
+- [x] 8.3 Dependabot for `site/package.json`
+- [x] 8.4 Smoke: run the Modbus guide's commands against the demo stack in CI
 
 ## 9. Go live
 
 - [ ] 9.1 Ask a repository admin to enable GitHub Pages with the "GitHub Actions" source; run the deploy
 - [ ] 9.2 Point `packaging/release-notes.md` and the README's top section at the site; set the repository homepage URL
-- [ ] 9.3 Add a release highlight in `changes/docs-site.md` announcing the site
+- [x] 9.3 Add a release highlight in `changes/docs-site.md` announcing the site
