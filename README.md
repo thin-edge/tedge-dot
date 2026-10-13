@@ -8,6 +8,9 @@ MQTT broker.
 
 > **Status: alpha.** The MQTT contract, config format and packaging may still
 > change between releases.
+>
+> **AI-driven project.** tedge-dot is developed largely by AI coding agents. Check what it
+> does before you rely on it, and [report what you find](https://github.com/thin-edge/tedge-dot/issues).
 
 ## Two implementations, one contract
 

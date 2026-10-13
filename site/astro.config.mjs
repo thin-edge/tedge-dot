@@ -51,6 +51,8 @@ export default defineConfig({
         Hero: './src/components/LandingHero.astro',
         // The logo, inline, so it does not blink on navigation.
         SiteTitle: './src/components/SiteTitle.astro',
+        // A notice on every page: the project is AI-driven and alpha.
+        Banner: './src/components/Banner.astro',
       },
       head: [
         { tag: 'meta', attrs: { name: 'theme-color', content: '#0b1f33' } },
