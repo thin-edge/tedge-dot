@@ -331,6 +331,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.ref }}
+          # The release notes pick the highlights added since the previous tag.
+          fetch-depth: 0
 
       # Both implementations' assets land in the same directory, so the release and the
       # Cloudsmith push each happen once and carry everything.
@@ -368,31 +370,69 @@ jobs:
             echo "prerelease=--prerelease" >> "$GITHUB_OUTPUT"
           fi
 
-      # The handwritten preamble (which package do I want, how do I install it) followed by
-      # the changelog: release-please's CHANGELOG.md section when it already created the
-      # release, GitHub's generated notes otherwise (a snapshot). A re-run must not stack a
-      # second preamble on top of the first, so an existing body is cut at the marker.
+      # A short header (which package, where the install guide is), then the highlights in
+      # changes/ added since the previous published release (see changes/README.md), then the
+      # changelog. "Published" means its GitHub release has assets: a tag whose release run
+      # failed (0.0.15) never reached users, so its highlights and changelog are carried by the
+      # next release that does. The changelog is the CHANGELOG.md sections from this tag back
+      # to the previous published one; a snapshot gets GitHub's generated notes instead.
       - name: Assemble release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.rel.outputs.tag }}
+          REF: ${{ needs.version.outputs.ref }}
+          REPO: ${{ github.repository }}
         run: |
           set -eu
-          marker='<!-- changelog -->'
-          cp packaging/release-notes.md notes.md
-          printf '\n---\n\n%s\n\n' "$marker" >> notes.md
-          if [ "$TAG" != "snapshot" ] \
-             && body=$(gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq .body 2>/dev/null) \
-             && [ -n "$body" ]; then
-            printf '%s\n' "$body" | awk -v m="$marker" 'found {print} $0 == m {found=1}' > changelog.md
-            # No marker: the body is release-please's changelog section as created.
-            [ -s changelog.md ] || printf '%s\n' "$body" > changelog.md
-            cat changelog.md >> notes.md
+          # Link the docs as of this release; a snapshot links main.
+          if [ "$TAG" = "snapshot" ]; then doc_ref=main; else doc_ref="$TAG"; fi
+          sed "s|{{REF}}|$doc_ref|g" packaging/release-notes.md > notes.md
+
+          # The release tags (X.Y.Z, so not `snapshot`) before this commit, newest first, down
+          # to the newest one that was published. The ones above it were not.
+          prev=""
+          skipped=""
+          for t in $(git tag --merged "$REF^" --sort=-v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true); do
+            assets=$(gh release view "$t" --repo "$REPO" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+            if [ "$assets" -gt 0 ]; then prev="$t"; break; fi
+            skipped="$skipped $t"
+          done
+          echo "Previous published release: ${prev:-none}; unpublished since:${skipped:- none}"
+          if [ -n "$skipped" ]; then
+            list=$(printf '%s' "$skipped" | sed 's/^ //; s/ /, /g')
+            printf '\n> This release also delivers %s, which was tagged but never published.\n' "$list" >> notes.md
+          fi
+
+          range="${prev:+$prev..}$REF"
+          highlights=$(git log --reverse --diff-filter=A --name-only --format= "$range" -- 'changes/*.md' \
+                       | grep -v '^changes/README.md$' | awk 'NF && !seen[$0]++' || true)
+          echo "Highlights: $(printf '%s' "${highlights:-none}" | tr '\n' ' ')"
+          if [ -n "$highlights" ]; then
+            printf '\n## Highlights\n' >> notes.md
+            for f in $highlights; do
+              [ -f "$f" ] || continue    # added, then removed again before the release
+              printf '\n' >> notes.md
+              cat "$f" >> notes.md
+            done
+          fi
+
+          printf '\n---\n\n' >> notes.md
+          changelog=""
+          if [ "$TAG" != "snapshot" ]; then
+            # From "## [TAG]" up to, not including, "## [prev]".
+            changelog=$(awk -v cur="## [$TAG]" -v stop="## [$prev]" '
+              index($0, cur) == 1 { on = 1 }
+              on && stop != "## []" && index($0, stop) == 1 { exit }
+              on { print }' CHANGELOG.md)
+          fi
+          if [ -n "$changelog" ]; then
+            printf '%s\n' "$changelog" >> notes.md
           else
-            gh api "repos/${{ github.repository }}/releases/generate-notes" \
-              -f tag_name="$TAG" -f target_commitish="${{ needs.version.outputs.ref }}" \
+            gh api "repos/$REPO/releases/generate-notes" \
+              -f tag_name="$TAG" -f target_commitish="$REF" ${prev:+-f previous_tag_name="$prev"} \
               --jq .body >> notes.md || echo "_No changelog available._" >> notes.md
           fi
+          cat notes.md
 
       - name: Publish GitHub release
         env:

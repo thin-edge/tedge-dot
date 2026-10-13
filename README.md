@@ -93,7 +93,8 @@ or grab a `.deb`/`.rpm`/`.apk` (or a plain binary archive) from the
 [releases page](https://github.com/thin-edge/tedge-dot/releases). The package depends on
 [tedge-parameter-plugin](https://github.com/thin-edge/tedge-parameter-plugin) from that same
 repository (see [Writing to devices](#writing-to-devices)), so set the repository up even when
-installing a downloaded file. The package installs:
+installing a downloaded file. [doc/install.md](doc/install.md) has the details: which of the
+two packages to pick, every install route, and upgrading. The package installs:
 
 - `tedge-dot` — the connector binary (also a standalone `read`/`write`/`describe` CLI);
 - one default config per protocol in `/etc/tedge/plugins/ot/` (no devices
@@ -328,6 +329,12 @@ and [CHANGELOG.md](CHANGELOG.md) entry come from the
 release: `fix:` bumps the patch, and while below 1.0 so does `feat:`; a breaking change
 (`feat!:` or a `BREAKING CHANGE:` footer) bumps the minor. Only `feat`, `fix`, `perf` and
 `revert` appear in the changelog. So the squash-merge title of each PR matters.
+
+A change that needs more than its changelog line (what is new and how to use it, a changed
+default, a deprecation) also adds a **highlight** to [changes/](changes/) in the same PR. The
+GitHub release shows a short header linking [doc/install.md](doc/install.md)
+([packaging/release-notes.md](packaging/release-notes.md)), the highlights added since the
+previous published release, then the changelog (including any tag whose release run failed). See [changes/README.md](changes/README.md).
 
 Merging the release PR tags the release (no `v` prefix, e.g. `0.0.14`) and creates the
 GitHub release, then runs the [release workflow](.github/workflows/release.yaml), which
