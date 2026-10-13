@@ -8,10 +8,12 @@ layout. They speak the same [OT Connector Contract](contract/), so a config, a f
 integration built against one works unchanged against the other. Install **one or the other**:
 they declare each other as conflicting.
 
+<!-- site:packages -->
 | Package | Implementation | Pick it when |
 |---|---|---|
 | `tedge-dot-rs` | Rust (`impl/rust/`) | Default. Richest protocol support, one static binary, no shared-library dependencies. |
 | `tedge-dot-c` | C (`impl/c/`) | Small or old devices: ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), and it additionally ships the **PROFIBUS-DP** connector. |
+<!-- /site:packages -->
 
 Where the two differ in behaviour, see the parity table in [impl/c/README.md](../impl/c/README.md).
 

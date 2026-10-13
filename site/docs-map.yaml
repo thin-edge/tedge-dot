@@ -1,0 +1,184 @@
+# The page map: every repository file that appears on the documentation site.
+#
+# scripts/sync-docs.mjs turns each entry into a generated page at src/content/docs/<slug>.md
+# (git-ignored), and astro.config.mjs builds the Reference sidebar from `section`. A file that
+# is not listed here stays GitHub-only: a link to it from a published page goes to GitHub.
+#
+#   source:  path from the repository root
+#   slug:    the page's path on the site (lowercase, no extension)
+#   section: the Reference sidebar group (one of `sections`), or omitted for a page that an
+#            authored sidebar entry places elsewhere (the install guide under Get started)
+#   label:   the sidebar label, when the page title is too long for it (optional)
+
+repository: thin-edge/tedge-dot
+branch: main
+
+# Reference sidebar groups, in order.
+sections:
+  - Contract
+  - Configuration
+  - Connectors
+  - Flows
+  - SDK and implementations
+  - Design and RFCs
+  - Migration
+  - Project
+
+pages:
+  # Get started
+  - source: doc/install.md
+    slug: get-started/install
+
+  # Contract
+  - source: doc/contract/ot-connector-contract.md
+    slug: reference/contract/ot-connector-contract
+    section: Contract
+    label: OT Connector Contract
+  - source: doc/contract/test-vectors/report/README.md
+    slug: reference/contract/report-vectors
+    section: Contract
+    label: Report-policy vectors
+  - source: doc/contract/test-vectors/map/README.md
+    slug: reference/contract/map-vectors
+    section: Contract
+    label: Value-mapping vectors
+  - source: doc/contract/test-vectors/opcua-struct/README.md
+    slug: reference/contract/opcua-struct-vectors
+    section: Contract
+    label: OPC UA structure vectors
+
+  # Configuration
+  - source: doc/reducing-data-volume.md
+    slug: reference/configuration/reducing-data-volume
+    section: Configuration
+  - source: doc/mapping-values.md
+    slug: reference/configuration/mapping-values
+    section: Configuration
+  - source: demo/points.d/README.md
+    slug: reference/configuration/point-libraries
+    section: Configuration
+    label: Demo point libraries
+
+  # Connectors
+  - source: doc/connectors/modbus-connector-spec.md
+    slug: reference/connectors/modbus
+    section: Connectors
+    label: Modbus
+  - source: doc/connectors/opcua-connector-spec.md
+    slug: reference/connectors/opcua
+    section: Connectors
+    label: OPC UA
+  - source: doc/connectors/canbus-connector-spec.md
+    slug: reference/connectors/canbus
+    section: Connectors
+    label: CAN bus and CANopen
+  - source: doc/connectors/snmp-connector-spec.md
+    slug: reference/connectors/snmp
+    section: Connectors
+    label: SNMP
+  - source: connectors/README.md
+    slug: reference/connectors/adding-a-connector
+    section: Connectors
+    label: Adding a connector
+  - source: doc/connectors/_template-connector-spec.md
+    slug: reference/connectors/template
+    section: Connectors
+    label: Connector spec template
+
+  # Flows
+  - source: flows/README.md
+    slug: reference/flows/flows
+    section: Flows
+    label: Device-side flows
+  - source: doc/flows/README.md
+    slug: reference/flows/example-flows
+    section: Flows
+    label: Example flow packages
+  - source: operations/README.md
+    slug: reference/flows/operations
+    section: Flows
+    label: Cumulocity operations
+
+  # SDK and implementations
+  - source: doc/sdk/connector-sdk.md
+    slug: reference/sdk/connector-sdk
+    section: SDK and implementations
+    label: Connector SDK
+  - source: impl/rust/README.md
+    slug: reference/sdk/rust
+    section: SDK and implementations
+    label: Rust implementation
+  - source: impl/c/README.md
+    slug: reference/sdk/c
+    section: SDK and implementations
+    label: C implementation
+
+  # Design and RFCs
+  - source: README.md
+    slug: reference/design/readme
+    section: Design and RFCs
+    label: Project README
+  - source: doc/README.md
+    slug: reference/design/proposal
+    section: Design and RFCs
+    label: Framework proposal
+  - source: doc/rfc/0001-ot-connector-architecture.md
+    slug: reference/design/rfc-0001
+    section: Design and RFCs
+    label: "RFC 0001: Architecture"
+  - source: doc/rfc/0002-cloud-fieldbus-integration.md
+    slug: reference/design/rfc-0002
+    section: Design and RFCs
+    label: "RFC 0002: Cloud Fieldbus"
+  - source: doc/rfc/0003-parameter-writes.md
+    slug: reference/design/rfc-0003
+    section: Design and RFCs
+    label: "RFC 0003: Parameter writes"
+  - source: doc/rfc/0004-point-libraries.md
+    slug: reference/design/rfc-0004
+    section: Design and RFCs
+    label: "RFC 0004: Point libraries"
+  - source: doc/rfc/0005-device-types-and-parameter-sets.md
+    slug: reference/design/rfc-0005
+    section: Design and RFCs
+    label: "RFC 0005: Device types"
+  - source: doc/rfc/0006-opcua-namespace-table.md
+    slug: reference/design/rfc-0006
+    section: Design and RFCs
+    label: "RFC 0006: OPC UA namespaces"
+  - source: doc/roadmap.md
+    slug: reference/design/roadmap
+    section: Design and RFCs
+    label: Roadmap
+
+  # Migration
+  - source: doc/migration/migration-guide.md
+    slug: reference/migration/migration-guide
+    section: Migration
+    label: From the modbus plugin
+  - source: doc/migration/modbus-plugin-gap-analysis.md
+    slug: reference/migration/gap-analysis
+    section: Migration
+    label: Gap analysis
+
+  # Project
+  - source: demo/README.md
+    slug: reference/project/demo
+    section: Project
+    label: The demo
+  - source: doc/testing.md
+    slug: reference/project/testing
+    section: Project
+    label: Testing strategy
+  - source: doc/conformance/conformance-suite.md
+    slug: reference/project/conformance
+    section: Project
+    label: Conformance suite
+  - source: doc/community/community-model.md
+    slug: reference/project/community
+    section: Project
+    label: Community model
+  - source: changes/README.md
+    slug: reference/project/release-highlights
+    section: Project
+    label: Release highlights

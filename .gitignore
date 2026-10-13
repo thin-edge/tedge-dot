@@ -25,4 +25,11 @@ __pycache__/
 # async-opcua's default PKI directory (./pki), created by anything that builds a client
 # without an explicit pki_dir
 pki/
-.zig-cache/
+.zig-cache/# Documentation site (site/): dependencies, build output and the pages generated from the
+# repository's Markdown by site/scripts/sync-docs.mjs
+site/node_modules/
+site/dist/
+site/.astro/
+site/public/repo/
+site/src/content/docs/reference/
+site/src/content/docs/get-started/install.md

@@ -1,0 +1,164 @@
+/*
+ * tedge-dot site theme: the thin-edge.io palette (orange accent on a deep navy), applied
+ * through Starlight's colour tokens so that every page, the landing page and the interactive
+ * tools follow the light/dark switch from one place.
+ */
+
+:root {
+  --sl-font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sl-font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* Dark (Starlight's default) */
+  --sl-color-accent-low: #3b1b08;
+  --sl-color-accent: #ff7a2f;
+  --sl-color-accent-high: #ffd2b5;
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #e8eef5;
+  --sl-color-gray-2: #c3d0de;
+  --sl-color-gray-3: #8fa5bd;
+  --sl-color-gray-4: #557089;
+  --sl-color-gray-5: #2c4560;
+  --sl-color-gray-6: #142a40;
+  --sl-color-black: #0a1826;
+
+  /* Tokens of our own, used by the landing page and the tools. */
+  --td-navy: #0b1f33;
+  --td-orange: #ff7a2f;
+  --td-signal: #5cc8ff;
+  --td-ok: #3ddc97;
+  --td-warn: #ffb547;
+  --td-surface: var(--sl-color-gray-6);
+  --td-surface-raised: #1a334d;
+  --td-border: var(--sl-color-gray-5);
+  --td-muted: var(--sl-color-gray-3);
+  --td-radius: 0.75rem;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ffe5d4;
+  --sl-color-accent: #c2470a;
+  --sl-color-accent-high: #5a2005;
+  --sl-color-white: #0a1826;
+  --sl-color-gray-1: #142a40;
+  --sl-color-gray-2: #2c4560;
+  --sl-color-gray-3: #4a6580;
+  --sl-color-gray-4: #7e95ad;
+  --sl-color-gray-5: #c3d0de;
+  --sl-color-gray-6: #eaf0f6;
+  --sl-color-gray-7: #f5f8fb;
+  --sl-color-black: #ffffff;
+
+  --td-signal: #0077b6;
+  --td-ok: #13875a;
+  --td-warn: #a35c00;
+  --td-surface: #f5f8fb;
+  --td-surface-raised: #ffffff;
+  --td-border: #d5dfe9;
+  --td-muted: #4a6580;
+}
+
+/* Headings: a touch tighter, the way product sites set them. */
+.sl-markdown-content :is(h1, h2, h3) {
+  letter-spacing: -0.015em;
+}
+
+/* Wide reference tables scroll inside themselves instead of widening the page on a phone. */
+.sl-markdown-content table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Islands (the interactive tools) share these. */
+.td-panel {
+  background: var(--td-surface);
+  border: 1px solid var(--td-border);
+  border-radius: var(--td-radius);
+  padding: 1rem 1.25rem;
+}
+
+.td-field {
+  display: grid;
+  gap: 0.25rem;
+  font-size: var(--sl-text-sm);
+}
+.td-field > span {
+  color: var(--sl-color-gray-2);
+  font-weight: 600;
+}
+.td-field small {
+  color: var(--td-muted);
+}
+.td-field.has-error :is(input, select, textarea) {
+  border-color: var(--sl-color-red, #e5484d);
+}
+.td-error {
+  color: var(--sl-color-red-high, #e5484d);
+  font-size: var(--sl-text-xs);
+}
+
+.td-tool :is(input, select, textarea) {
+  font: inherit;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-white);
+  background: var(--sl-color-black);
+  border: 1px solid var(--td-border);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  min-width: 0;
+}
+.td-tool :is(input, select, textarea):focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 1px;
+}
+.td-tool input[type='checkbox'],
+.td-tool input[type='radio'] {
+  accent-color: var(--sl-color-accent);
+}
+
+.td-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: inherit;
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--td-border);
+  background: var(--td-surface-raised);
+  color: var(--sl-color-white);
+}
+.td-btn:hover {
+  border-color: var(--sl-color-accent);
+}
+.td-btn.primary {
+  background: var(--sl-color-accent);
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-black);
+}
+.td-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.td-chip {
+  display: inline-block;
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-accent-high);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

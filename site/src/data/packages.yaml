@@ -1,0 +1,69 @@
+# The two tedge-dot packages: one data table for the install guide's package table and the
+# package picker. The table in doc/install.md is rendered from `packages[*].table` (the site
+# replaces it at build time, and a test fails when the copy in doc/install.md differs).
+
+packages:
+  - id: tedge-dot-rs
+    implementation: Rust
+    source: impl/rust/
+    table:
+      pick: Default. Richest protocol support, one static binary, no shared-library dependencies.
+    architectures: [amd64, arm64]
+    # Not pinned: the Rust build is not tested on old distributions.
+    glibc_min: null
+    binary_size: 12 MB
+    protocols: [modbus, opcua, canbus, canopen, snmp]
+    features:
+      - snmpv3-sha2
+      - opcua-basic128rsa15
+      - opcua-structures
+      - canbus-fd
+      - profibus-serial
+  - id: tedge-dot-c
+    implementation: C
+    source: impl/c/
+    table:
+      pick: >-
+        Small or old devices: ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), and it
+        additionally ships the **PROFIBUS-DP** connector.
+    architectures: [amd64, arm64, armhf]
+    glibc_min: "2.17"
+    binary_size: 457 KB
+    protocols: [modbus, opcua, canbus, canopen, snmp, profibus]
+    features: []
+
+# What each feature id means, for the picker's questions and explanations.
+features:
+  snmpv3-sha2:
+    label: SNMPv3 with SHA-2 authentication or AES-192/256 privacy
+  opcua-basic128rsa15:
+    label: OPC UA servers that only offer the deprecated Basic128Rsa15 policy
+  opcua-structures:
+    label: OPC UA structured values (ExtensionObject fields, array elements)
+  canbus-fd:
+    label: CAN FD frames
+  profibus-serial:
+    label: PROFIBUS-DP on a serial RS-485 line (not through a device server)
+
+protocols:
+  modbus: Modbus TCP / RTU
+  opcua: OPC UA
+  canbus: CAN bus (DBC)
+  canopen: CANopen
+  snmp: SNMP
+  profibus: PROFIBUS-DP
+
+# Distribution choices for the picker, with the glibc each one ships.
+distributions:
+  - { id: debian8, label: "Debian 8 (jessie)", glibc: "2.19" }
+  - { id: debian9, label: "Debian 9 (stretch)", glibc: "2.24" }
+  - { id: debian10, label: "Debian 10 (buster)", glibc: "2.28" }
+  - { id: debian11, label: "Debian 11 or newer", glibc: "2.31" }
+  - { id: rhel7, label: "RHEL / CentOS 7", glibc: "2.17" }
+  - { id: rhel8, label: "RHEL 8 or newer", glibc: "2.28" }
+  - { id: ubuntu18, label: "Ubuntu 18.04", glibc: "2.27" }
+  - { id: ubuntu20, label: "Ubuntu 20.04 or newer", glibc: "2.31" }
+  - { id: yocto, label: "Yocto / Buildroot / other", glibc: null }
+
+# Below this glibc the picker recommends tedge-dot-c: the Rust package is not tested there.
+rust_glibc_comfort: "2.28"
