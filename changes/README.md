@@ -10,6 +10,10 @@ same pull request.
   reader has to do, and link to the full documentation in the repository rather than repeating
   it. Install instructions do not belong here; they live in [doc/install.md](../doc/install.md).
 
-The release workflow puts every highlight **added** since the previous release tag on the GitHub
-release, in the order the files were added, above the changelog. A highlight appears on exactly
-one release; editing it later does not repeat it. The files stay here as the history.
+The release workflow puts every highlight **added** since the previous published release on the
+GitHub release, in the order the files were added, above the changelog. A highlight appears on
+exactly one release; editing it later does not repeat it. The files stay here as the history.
+
+A tag whose GitHub release has no assets (its release run failed) never reached users, so it
+does not count as published: the next release that is published carries that tag's highlights
+and its changelog section as well.

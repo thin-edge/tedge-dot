@@ -4,7 +4,9 @@
 - [x] 1.2 Move install, package choice and upgrade notes to `doc/install.md`; link it from the README
 - [x] 1.3 Add `changes/` with its README, and select highlights added since the previous tag in `release.yaml`
 - [x] 1.4 Add the openspec `tasks` rule that asks for a highlight in `changes/`
-- [ ] 1.5 Merge, then regenerate the 0.0.16 release body with the new header (`gh release edit`)
+- [x] 1.5 Count only releases with assets as published; carry an unpublished tag's highlights and changelog into the next release
+- [ ] 1.6 Merge, then regenerate the 0.0.16 release body (with the 0.0.15 highlights written by hand, since `changes/` did not exist yet)
+- [ ] 1.7 What's new page: backfill the highlights of releases before `changes/` existed
 
 ## 2. Site scaffold
 
@@ -56,7 +58,7 @@
 
 ## 7. What's new
 
-- [ ] 7.1 Build-time loader: each `changes/*.md` → the release that first contained it (git), or Unreleased
+- [ ] 7.1 Build-time loader: each `changes/*.md` → the first published release (with assets) that contained it, or Unreleased; same rule as `release.yaml`
 - [ ] 7.2 What's new page, newest first, linking each GitHub release
 
 ## 8. CI and deployment

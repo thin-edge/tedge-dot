@@ -334,7 +334,7 @@ A change that needs more than its changelog line (what is new and how to use it,
 default, a deprecation) also adds a **highlight** to [changes/](changes/) in the same PR. The
 GitHub release shows a short header linking [doc/install.md](doc/install.md)
 ([packaging/release-notes.md](packaging/release-notes.md)), the highlights added since the
-previous release, then the changelog. See [changes/README.md](changes/README.md).
+previous published release, then the changelog (including any tag whose release run failed). See [changes/README.md](changes/README.md).
 
 Merging the release PR tags the release (no `v` prefix, e.g. `0.0.14`) and creates the
 GitHub release, then runs the [release workflow](.github/workflows/release.yaml), which
