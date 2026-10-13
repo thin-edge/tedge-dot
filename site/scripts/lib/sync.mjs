@@ -186,6 +186,41 @@ export function renderPackageTable(data) {
   return ['| Package | Implementation | Pick it when |', '|---|---|---|', ...rows].join('\n') + '\n';
 }
 
+const BOX_DRAWING = /[\u2500-\u257f\u25b2-\u25c4\u2190-\u2193]/;
+
+/**
+ * ASCII diagrams (a top-level fence with box-drawing characters and no language, or `text`)
+ * become a `<pre class="td-ascii">` that knows its width in columns, so the site's CSS can size
+ * its font to fit the column instead of making the reader scroll the picture sideways.
+ */
+export function fitDiagrams(markdown) {
+  const lines = markdown.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    // Any fence, at any indent: skip it whole, so a closing fence is never read as an opening one.
+    const open = /^( *)(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+    if (!open) {
+      out.push(lines[i]);
+      continue;
+    }
+    const [, indent, fence, info] = open;
+    let j = i + 1;
+    const close = new RegExp(`^ *${fence[0] === '`' ? '`' : '~'}{${fence.length},}\\s*$`);
+    while (j < lines.length && !close.test(lines[j])) j++;
+    const body = lines.slice(i + 1, j);
+    const lang = info.trim();
+    if (indent === '' && (lang === '' || lang === 'text' || lang === 'txt') && body.some((l) => BOX_DRAWING.test(l))) {
+      const cols = Math.max(...body.map((l) => [...l].length));
+      const escaped = body.map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).join('\n');
+      out.push(`<pre class="td-ascii" style="--cols: ${cols}" data-cols="${cols}">${escaped}</pre>`);
+    } else {
+      out.push(...lines.slice(i, Math.min(j + 1, lines.length)));
+    }
+    i = j;
+  }
+  return out.join('\n');
+}
+
 /** Publish one repository file as a page. */
 export function convertPage(markdown, page, ctx) {
   const { title: heading, body } = extractTitle(markdown);
@@ -199,7 +234,7 @@ export function convertPage(markdown, page, ctx) {
     editUrl: githubUrl(ctx, 'edit', page.source),
     sourcePath: page.source,
   });
-  return { content: head + escapeForStarlight(linked), images, title };
+  return { content: head + fitDiagrams(escapeForStarlight(linked)), images, title };
 }
 
 /**

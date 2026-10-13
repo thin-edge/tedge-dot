@@ -209,3 +209,42 @@ header.header {
     animation: none !important;
   }
 }
+
+/*
+ * The @fontsource JetBrains Mono subsets stop at Latin/Cyrillic/Greek, so box-drawing lines,
+ * arrows and shapes fell back to whatever monospace font the system had: diagrams then drew
+ * broken strokes, and on some systems the wrong widths. This subset of the official font
+ * (OFL-1.1, src/assets/fonts/JetBrainsMono-OFL.txt) supplies exactly those ranges under the
+ * same family name; a page downloads it only when it uses one of them.
+ */
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('../assets/fonts/jetbrains-mono-symbols-wght.woff2') format('woff2-variations');
+  unicode-range: U+2010-2027, U+2070-209F, U+2190-21FF, U+2200-22FF, U+2500-259F, U+25A0-25FF, U+26A0;
+}
+
+/*
+ * ASCII diagrams from the repository's Markdown (sync-docs.mjs `fitDiagrams`): the font is
+ * sized so that the widest line (--cols characters, 0.6em each in JetBrains Mono) fits the
+ * column, down to a readable minimum; past that the diagram scrolls.
+ */
+.sl-markdown-content {
+  container-type: inline-size;
+}
+.sl-markdown-content pre.td-ascii {
+  font-family: var(--sl-font-mono);
+  /* 2.5rem of padding, the border and half a cell of slack for rounding. */
+  font-size: clamp(0.55rem, calc((100cqi - 2.5rem - 2px) / (var(--cols) * 0.6 + 0.5)), 0.875rem);
+  line-height: 1.3;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  color: var(--sl-color-gray-2);
+  background: var(--td-surface);
+  border: 1px solid var(--td-border);
+  border-radius: var(--td-radius);
+  white-space: pre;
+  font-variant-ligatures: none;
+}

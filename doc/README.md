@@ -69,7 +69,7 @@ business logic* and reserves Rust for *everything that is protocol plumbing*.
         │                                                                        │
         │   ┌────────────┐     ┌──────────────────┐      ┌────────────────────┐  │
    OT ──┼──▶│ Transport  │────▶│ Decode (optional)│─────▶│ Publish: canonical │  │
- device │   │ (protocol) │     │ raw │ typed       │      │ "sample" envelope │  │
+ device │   │ (protocol) │     │ raw │ typed      │      │ "sample" envelope  │  │
         │   └────────────┘     └──────────────────┘      └─────────┬──────────┘  │
         │   ▲ write_point            capability model              │             │
         └───┼──────────────────────────────────────────────────────┼─────────────┘

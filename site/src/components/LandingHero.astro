@@ -18,8 +18,8 @@ const devices = [
   { label: 'SNMP', y: 248 },
   { label: 'PROFIBUS-DP', y: 316 },
 ];
-// Each device's path into tedge-dot (the node at x 236..324, y 150..210).
-const inPath = (y: number) => `M128 ${y} C 180 ${y}, 180 ${180 + (y - 180) * 0.25}, 236 ${180 + (y - 180) * 0.25}`;
+// Each device's path into tedge-dot (the node at x 226..334, y 152..208).
+const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.13}, 226 ${180 + (y - 180) * 0.13}`;
 ---
 
 <div class="td-hero">
@@ -41,7 +41,7 @@ const inPath = (y: number) => `M128 ${y} C 180 ${y}, 180 ${180 + (y - 180) * 0.2
   </div>
 
   <figure class="td-flow">
-    <svg class="td-flow-wide" viewBox="0 0 712 360" role="img" aria-labelledby="td-flow-title td-flow-desc">
+    <svg class="td-flow-wide" viewBox="0 0 720 360" role="img" aria-labelledby="td-flow-title td-flow-desc">
       <title id="td-flow-title">How data flows through tedge-dot</title>
       <desc id="td-flow-desc">
         Readings from Modbus, OPC UA, CAN and CANopen, SNMP and PROFIBUS-DP devices flow into
@@ -67,53 +67,52 @@ const inPath = (y: number) => `M128 ${y} C 180 ${y}, 180 ${180 + (y - 180) * 0.2
           <path d={inPath(d.y)} class="packet" style={`animation-delay: ${-i * 0.37}s`} />
         </g>
       ))}
-      <path d="M324 180 H 384" class="wire" />
-      <path d="M324 180 H 384" class="packet packet-short" />
-      <path d="M484 180 H 528" class="wire" />
-      <path d="M484 180 H 528" class="packet packet-short" style="animation-delay:-0.6s" />
-      <path d="M612 162 C 640 140, 640 110, 652 96" class="wire" />
-      <path d="M612 162 C 640 140, 640 110, 652 96" class="packet packet-out" />
+      <path d="M334 180 H 378" class="wire" />
+      <path d="M334 180 H 378" class="packet packet-short" />
+      <path d="M494 180 H 522" class="wire" />
+      <path d="M494 180 H 522" class="packet packet-short" style="animation-delay:-0.6s" />
+      <path d="M626 164 C 650 150, 664 130, 666 104" class="wire" />
+      <path d="M626 164 C 650 150, 664 130, 666 104" class="packet packet-out" />
       <!-- a write coming back down -->
-      <path d="M528 196 C 440 300, 330 300, 280 214" class="wire wire-back" />
-      <path d="M528 196 C 440 300, 330 300, 280 214" class="packet packet-back" />
+      <path d="M574 208 C 520 300, 340 300, 280 212" class="wire wire-back" />
+      <path d="M574 208 C 520 300, 340 300, 280 212" class="packet packet-back" />
 
       <!-- devices -->
       {devices.map((d) => (
         <g class="device">
-          <rect x="4" y={d.y - 18} width="124" height="36" rx="10" />
+          <rect x="4" y={d.y - 18} width="140" height="36" rx="10" />
           <circle cx="20" cy={d.y} r="4" class="led" />
           <text x="31" y={d.y} dominant-baseline="central">{d.label}</text>
         </g>
       ))}
 
       <!-- tedge-dot -->
-      <circle cx="280" cy="180" r="46" fill="url(#td-core)" filter="url(#td-glow)" class="core-glow" />
-      <rect x="236" y="146" width="88" height="68" rx="16" fill="url(#td-core)" />
-      <text x="280" y="174" text-anchor="middle" class="core-label">tedge</text>
-      <text x="280" y="194" text-anchor="middle" class="core-label">-dot</text>
+      <circle cx="280" cy="180" r="50" fill="url(#td-core)" filter="url(#td-glow)" class="core-glow" />
+      <rect x="226" y="152" width="108" height="56" rx="16" fill="url(#td-core)" />
+      <text x="280" y="181" text-anchor="middle" dominant-baseline="central" class="core-label">tedge-dot</text>
 
       <!-- flows -->
       <g class="node">
-        <rect x="384" y="150" width="100" height="60" rx="12" />
-        <text x="434" y="174" text-anchor="middle" class="node-title">flows</text>
-        <text x="434" y="194" text-anchor="middle" class="node-sub">scale · alarm · map</text>
+        <rect x="380" y="150" width="114" height="60" rx="12" />
+        <text x="437" y="174" text-anchor="middle" class="node-title">flows</text>
+        <text x="437" y="194" text-anchor="middle" class="node-sub">scale · alarm · map</text>
       </g>
 
       <!-- thin-edge.io -->
       <g class="node">
-        <rect x="528" y="150" width="84" height="60" rx="12" />
-        <text x="570" y="174" text-anchor="middle" class="node-title">thin-edge</text>
-        <text x="570" y="194" text-anchor="middle" class="node-sub">MQTT · mapper</text>
+        <rect x="524" y="150" width="102" height="60" rx="12" />
+        <text x="575" y="174" text-anchor="middle" class="node-title">thin-edge.io</text>
+        <text x="575" y="194" text-anchor="middle" class="node-sub">MQTT · mapper</text>
       </g>
 
       <!-- cloud -->
       <g class="cloud">
-        <path d="M630 96 a 22 22 0 0 1 4 -43 a 28 28 0 0 1 52 6 a 18 18 0 0 1 4 37 z" />
-        <text x="660" y="80" text-anchor="middle" class="node-sub">cloud</text>
+        <path d="M638 100 a 22 22 0 0 1 4 -43 a 28 28 0 0 1 52 6 a 18 18 0 0 1 4 37 z" />
+        <text x="668" y="84" text-anchor="middle" class="node-sub">cloud</text>
       </g>
 
       <text x="356" y="168" text-anchor="middle" class="wire-label">sample</text>
-      <text x="404" y="292" text-anchor="middle" class="wire-label">write</text>
+      <text x="427" y="292" text-anchor="middle" class="wire-label">write</text>
     </svg>
     <!-- Phone width: the same chain, top to bottom, at a readable size. -->
     <ol class="td-flow-narrow" aria-hidden="true">

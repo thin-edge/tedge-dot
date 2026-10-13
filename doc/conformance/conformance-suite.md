@@ -22,7 +22,7 @@ The suite has three layers, run in order:
  │ Layer 2 — Decode conformance (pure functions, no I/O)              │
  │   golden vectors: bytes + datatype + endianness/word_order → value │
  ├────────────────────────────────────────────────────────────────────┤
- │ Layer 3 — Behavioural conformance (connector ⇄ protocol simulator) │
+ │ Layer 3 — Behavioural conformance (connector ↔ protocol simulator) │
  │   run the real connector against a simulator, assert MQTT traffic  │
  └────────────────────────────────────────────────────────────────────┘
 ```
@@ -181,7 +181,7 @@ cargo run --manifest-path impl/rust/Cargo.toml -p ot-conformance -- check --spec
 # Layers 1 & 2 only — fast, static:
 cargo run --manifest-path impl/rust/Cargo.toml -p ot-conformance -- check --spec connectors/modbus/conformance.toml --static
 
-# Layer 3 only — behavioural (connector ⇄ simulator ⇄ test broker):
+# Layer 3 only — behavioural (connector ↔ simulator ↔ test broker):
 cargo run --manifest-path impl/rust/Cargo.toml -p ot-conformance -- check --spec connectors/modbus/conformance.toml --behavioural
 
 # Machine-readable reports for CI / agents:

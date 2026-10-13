@@ -3,7 +3,7 @@
 // the SDK's policy would publish. The engine is src/lib/report.ts, which runs the contract's
 // test vectors in CI.
 
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { checkTable, type ReportTable } from '../../lib/report';
 import { SIGNALS, simulate, tableToToml, type SignalId } from '../../lib/playground';
 import './report-playground.css';
@@ -35,15 +35,25 @@ function toTable(form: Form): Record<string, unknown> {
   return table;
 }
 
-const W = 760;
-const H = 260;
-const PAD = { top: 16, right: 16, bottom: 28, left: 44 };
+// The chart is drawn at its real pixel width (measured), so its labels keep their size on a
+// phone instead of shrinking with a scaled-down picture.
+const PAD = { top: 16, right: 24, bottom: 28, left: 44 };
 
 export default function ReportPlayground() {
   const [signal, setSignal] = useState<SignalId>(PRESETS[0].signal);
   const [form, setForm] = useState<Form>(PRESETS[0].form);
   const [hover, setHover] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [W, setW] = useState(760);
+  useEffect(() => {
+    const el = chartRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setW(Math.max(280, Math.round(entry.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const H = W < 500 ? 220 : 260;
 
   const table = toTable(form);
   const error = checkTable(table);
@@ -73,7 +83,7 @@ export default function ReportPlayground() {
   const x = (t: number) => PAD.left + (t / tMax) * (W - PAD.left - PAD.right);
   const y = (v: number) => PAD.top + (1 - (v - lo) / (hi - lo)) * (H - PAD.top - PAD.bottom);
   const yTicks = niceTicks(lo, hi, 4);
-  const xTicks = [0, 2, 4, 6, 8, 10].map((m) => m * 60_000).filter((t) => t <= tMax);
+  const xTicks = (W < 500 ? [0, 5, 10] : [0, 2, 4, 6, 8, 10]).map((m) => m * 60_000).filter((t) => t <= tMax);
 
   const publishedSet = new Map(run?.published.map((p) => [p.index, p]) ?? []);
   const heartbeats = run?.published.filter((p) => p.heartbeat).length ?? 0;
@@ -163,7 +173,7 @@ export default function ReportPlayground() {
             <li><svg width="22" height="10" aria-hidden="true"><line x1="0" y1="5" x2="22" y2="5" class="rp-delay" /></svg>Held, published later</li>
           </ul>
 
-          <div class="rp-chart">
+          <div class="rp-chart" ref={chartRef}>
             <svg
               ref={svgRef}
               viewBox={`0 0 ${W} ${H}`}
@@ -182,7 +192,7 @@ export default function ReportPlayground() {
                 </g>
               ))}
               {xTicks.map((t) => (
-                <text x={x(t)} y={H - 8} class="rp-axis" text-anchor="middle">{t / 60_000} min</text>
+                <text x={x(t)} y={H - 8} class="rp-axis" text-anchor={t === 0 ? 'start' : t === tMax ? 'end' : 'middle'}>{t / 60_000} min</text>
               ))}
               <path d={linePath} class="rp-line" />
               {run?.published.map((p) => {
@@ -202,7 +212,7 @@ export default function ReportPlayground() {
               )}
             </svg>
             {hovered && (
-              <div class="rp-tip" style={{ left: `${(x(hovered.t) / W) * 100}%` }} aria-live="polite">
+              <div class="rp-tip" style={{ left: `clamp(4.5rem, ${(x(hovered.t) / W) * 100}%, calc(100% - 4.5rem))` }} aria-live="polite">
                 <strong>{fmt(hovered.value)}{unit && ` ${unit}`}</strong>
                 <span>at {fmtTime(hovered.t)}</span>
                 <span>

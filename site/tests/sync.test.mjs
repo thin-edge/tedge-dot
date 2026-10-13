@@ -159,3 +159,25 @@ describe('the repository', () => {
     ).toBe(renderPackageTable(data));
   });
 });
+
+describe('fitDiagrams', async () => {
+  const { fitDiagrams } = await import('../scripts/lib/sync.mjs');
+  it('turns a box diagram into a sized <pre>, escaping its text', () => {
+    const md = '```text\n┌──┐ <a>\n└──┘\n```\n';
+    expect(fitDiagrams(md)).toBe('<pre class="td-ascii" style="--cols: 8" data-cols="8">┌──┐ &lt;a&gt;\n└──┘</pre>\n');
+  });
+  it('leaves code and indented fences alone', () => {
+    const code = '```toml\n# ┌ not a diagram\nx = 1\n```\n';
+    expect(fitDiagrams(code)).toBe(code);
+    const indented = '1. Step\n\n   ```text\n   ┌──┐\n   ```\n';
+    expect(fitDiagrams(indented)).toBe(indented);
+  });
+});
+
+describe('fitDiagrams fence pairing', async () => {
+  const { fitDiagrams } = await import('../scripts/lib/sync.mjs');
+  it('never pairs a closing fence with the next opening one', () => {
+    const md = '```toml\nx = 1\n```\n\n## Heading → with an arrow\n\n```sh\necho\n```\n';
+    expect(fitDiagrams(md)).toBe(md);
+  });
+});

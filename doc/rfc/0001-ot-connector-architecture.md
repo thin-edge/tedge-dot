@@ -92,7 +92,7 @@ a machine-readable spec — can complete and prove correct.
    │  Command    │◀── cmd/write request ────────│  thin-edge.io flows  │
    │  router     │──▶ result (init→…→done)      │  (all transformation)│
    └─────────────┘                              └──────────┬───────────┘
-                                                            ▼
+                                                           ▼
                                                  te/device/<d>///m|e|a/...
 ```
 

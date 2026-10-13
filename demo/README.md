@@ -114,18 +114,18 @@ simulators; the installed package runs all the connectors under **one**
 systemd service.
 
 ```
-┌──────────────────────────── Linux device ────────────────────────────┐
+┌──────────────────────────── Linux device ─────────────────────────────┐
 │                                                                       │
 │  docker compose (simulators)              tedge-dot.service           │
 │  ┌─────────────────────────┐              (one systemd unit)          │
-│  │ modbus-sim    tcp :5020  │◄──────────── tedge-dot (modbus)         │
-│  │ opcua-sim     tcp :4840  │◄──────────── tedge-dot (opcua)          │
-│  │ canbus-sim    vcan0      │◄── socketcan─ tedge-dot (canbus)        │
-│  │ canopen-sim   vcan0      │◄── socketcan─ tedge-dot (canopen)       │
-│  │ profibus-sim  tcp :9200  │◄──── tcp ──── tedge-dot (profibus)      │
+│  │ modbus-sim    tcp :5020 │◄──────────── tedge-dot (modbus)          │
+│  │ opcua-sim     tcp :4840 │◄──────────── tedge-dot (opcua)           │
+│  │ canbus-sim    vcan0     │◄── socketcan─ tedge-dot (canbus)         │
+│  │ canopen-sim   vcan0     │◄── socketcan─ tedge-dot (canopen)        │
+│  │ profibus-sim  tcp :9200 │◄──── tcp ──── tedge-dot (profibus)       │
 │  └─────────────────────────┘                     │                    │
-│                                                   ▼                    │
-│                              mosquitto :1883 (thin-edge.io broker)     │
+│                                                  ▼                    │
+│                              mosquitto :1883 (thin-edge.io broker)    │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 

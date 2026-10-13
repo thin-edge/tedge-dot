@@ -6,7 +6,7 @@
 ---
 
 <figure class="arch">
-  <svg class="arch-wide" viewBox="0 0 900 330" role="img" aria-labelledby="arch-title arch-desc">
+  <svg class="arch-wide" viewBox="0 0 680 460" role="img" aria-labelledby="arch-title arch-desc">
     <title id="arch-title">tedge-dot architecture</title>
     <desc id="arch-desc">
       OT devices (Modbus, OPC UA, CAN bus, CANopen, SNMP, PROFIBUS-DP) are read and written by
@@ -21,65 +21,55 @@
       </marker>
     </defs>
 
-    <!-- OT devices -->
-    <text x="80" y="22" class="label-head" text-anchor="middle">OT devices</text>
+    <!-- Row 1: OT devices -> tedge-dot -->
+    <text x="10" y="22" class="label-head">OT devices</text>
     {['Modbus TCP/RTU', 'OPC UA', 'CAN bus', 'CANopen', 'SNMP', 'PROFIBUS-DP'].map((name, i) => (
       <g>
-        <rect x="10" y={38 + i * 46} width="140" height="34" rx="8" class="box-device"></rect>
-        <text x="80" y={60 + i * 46} text-anchor="middle" class="label">{name}</text>
+        <rect x={10 + (i % 2) * 120} y={38 + Math.floor(i / 2) * 42} width="114" height="32" rx="8" class="box-device"></rect>
+        <text x={67 + (i % 2) * 120} y={59 + Math.floor(i / 2) * 42} text-anchor="middle" class="label label-device">{name}</text>
       </g>
     ))}
-    <path d="M152 165 H196" class="line" marker-end="url(#arch-arrow)"></path>
+    <path d="M248 100 H284" class="line" marker-end="url(#arch-arrow)"></path>
 
-    <!-- tedge-dot -->
-    <rect x="200" y="58" width="190" height="214" rx="14" class="box-dot"></rect>
-    <text x="295" y="86" text-anchor="middle" class="label-strong">tedge-dot</text>
-    <text x="295" y="104" text-anchor="middle" class="label-muted">one binary, one contract</text>
+    <rect x="288" y="30" width="382" height="140" rx="14" class="box-dot"></rect>
+    <text x="306" y="58" class="label-strong">tedge-dot</text>
+    <text x="392" y="58" class="label-muted">one binary, one contract</text>
     {['transport', 'decode', 'transform · map', 'report by exception'].map((step, i) => (
       <g>
-        <rect x="218" y={118 + i * 36} width="154" height="28" rx="6" class="box-step"></rect>
-        <text x="295" y={137 + i * 36} text-anchor="middle" class="label">{step}</text>
+        <rect x={306 + (i % 2) * 178} y={76 + Math.floor(i / 2) * 40} width="168" height="30" rx="6" class="box-step"></rect>
+        <text x={390 + (i % 2) * 178} y={96 + Math.floor(i / 2) * 40} text-anchor="middle" class="label">{step}</text>
       </g>
     ))}
 
-    <!-- envelopes to the broker -->
-    <path d="M392 140 H446" class="line" marker-end="url(#arch-arrow)"></path>
-    <text x="419" y="130" text-anchor="middle" class="label-tiny">sample</text>
-    <text x="419" y="160" text-anchor="middle" class="label-tiny">status</text>
-    <path d="M446 196 H394" class="line dashed" marker-end="url(#arch-arrow)"></path>
-    <text x="419" y="212" text-anchor="middle" class="label-tiny">cmd</text>
+    <!-- Row 2: thin-edge.io -> Cumulocity -->
+    <rect x="10" y="196" width="530" height="254" rx="14" class="box-tedge"></rect>
+    <text x="28" y="224" class="label-strong">thin-edge.io</text>
+    <rect x="28" y="254" width="494" height="32" rx="8" class="box-step"></rect>
+    <text x="275" y="275" text-anchor="middle" class="label">MQTT broker · te/device/…/ot/…</text>
+    <!-- envelopes between tedge-dot and the broker (drawn over the thin-edge.io box) -->
+    <path d="M440 172 V250" class="line" marker-end="url(#arch-arrow)"></path>
+    <text x="432" y="189" text-anchor="end" class="label-tiny">sample · status</text>
+    <path d="M520 250 V174" class="line dashed" marker-end="url(#arch-arrow)"></path>
+    <text x="528" y="189" class="label-tiny">cmd</text>
 
-    <!-- thin-edge.io -->
-    <rect x="450" y="22" width="290" height="290" rx="14" class="box-tedge"></rect>
-    <text x="595" y="48" text-anchor="middle" class="label-strong">thin-edge.io</text>
-    <rect x="468" y="62" width="254" height="34" rx="8" class="box-step"></rect>
-    <text x="595" y="84" text-anchor="middle" class="label">MQTT broker · te/device/…/ot/…</text>
-    <path d="M595 98 V116" class="line" marker-end="url(#arch-arrow)"></path>
-    <rect x="468" y="120" width="254" height="124" rx="8" class="box-flows"></rect>
-    <text x="595" y="142" text-anchor="middle" class="label-strong small">flows (JavaScript)</text>
-    {[
-      ['measurement', 482, 154],
-      ['registration', 600, 154],
-      ['alarm · event', 482, 186],
-      ['parameter state', 600, 186],
-      ['command forward', 482, 218],
-      ['command result', 600, 218],
-    ].map(([name, x, y]) => (
+    <path d="M275 288 V302" class="line" marker-end="url(#arch-arrow)"></path>
+    <rect x="28" y="306" width="494" height="88" rx="8" class="box-flows"></rect>
+    <text x="44" y="326" class="label-strong small">flows (JavaScript)</text>
+    {['measurement', 'registration', 'alarm · event', 'parameter state', 'command forward', 'command result'].map((name, i) => (
       <g>
-        <rect x={x} y={y} width="110" height="24" rx="12" class="chip"></rect>
-        <text x={Number(x) + 55} y={Number(y) + 16} text-anchor="middle" class="label-tiny">{name}</text>
+        <rect x={44 + (i % 3) * 156} y={336 + Math.floor(i / 3) * 28} width="148" height="22" rx="11" class="chip"></rect>
+        <text x={118 + (i % 3) * 156} y={351 + Math.floor(i / 3) * 28} text-anchor="middle" class="label-tiny">{name}</text>
       </g>
     ))}
-    <path d="M595 246 V262" class="line" marker-end="url(#arch-arrow)"></path>
-    <rect x="468" y="266" width="254" height="32" rx="8" class="box-step"></rect>
-    <text x="595" y="287" text-anchor="middle" class="label">Cumulocity mapper</text>
+    <path d="M275 396 V408" class="line" marker-end="url(#arch-arrow)"></path>
+    <rect x="28" y="412" width="494" height="28" rx="8" class="box-step"></rect>
+    <text x="275" y="431" text-anchor="middle" class="label">Cumulocity mapper</text>
 
-    <!-- cloud -->
-    <path d="M724 282 C760 282 760 165 786 165" class="line" marker-end="url(#arch-arrow)"></path>
-    <rect x="790" y="120" width="100" height="90" rx="14" class="box-cloud"></rect>
-    <text x="840" y="160" text-anchor="middle" class="label-strong small">Cumulocity</text>
-    <text x="840" y="178" text-anchor="middle" class="label-muted">devices · data</text>
-    <text x="840" y="194" text-anchor="middle" class="label-muted">parameters</text>
+    <path d="M524 426 H566 C 590 426 609 418 609 400" class="line" marker-end="url(#arch-arrow)"></path>
+    <rect x="556" y="306" width="114" height="90" rx="14" class="box-cloud"></rect>
+    <text x="613" y="338" text-anchor="middle" class="label-strong small">Cumulocity</text>
+    <text x="613" y="360" text-anchor="middle" class="label-muted">devices · data</text>
+    <text x="613" y="378" text-anchor="middle" class="label-muted">parameters</text>
   </svg>
 
   <svg class="arch-narrow" viewBox="0 0 340 560" role="img" aria-labelledby="arch-title-n arch-desc-n">
@@ -203,6 +193,9 @@
   .label-head {
     fill: var(--sl-color-white);
     font-size: 13px;
+  }
+  .label-device {
+    font-size: 12px;
   }
   .label-strong {
     font-weight: 700;
