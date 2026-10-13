@@ -59,7 +59,7 @@ points_from      = ["demo-sim"]
   # points.d/snmp/demo-sim.toml (contract §3.4). An installed package finds it automatically;
   # from a source checkout point the search path at the copy in this repo:
   #
-  #   export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+  #   export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
   #
   # Try it without a broker (Ctrl-C stops), after `just sim snmp`:
   #

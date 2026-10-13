@@ -61,7 +61,7 @@ pump notification.
 
     ```sh
     just sim snmp
-    export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+    export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
     tedge-dot read  -c demo/config/snmp.toml -p pump_speed
     tedge-dot write -c demo/config/snmp.toml -d snmp-switch -p setpoint --value 55
     just sim-down snmp

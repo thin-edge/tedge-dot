@@ -18,7 +18,7 @@ Build the connector once, and say where the demo point lists are:
 
 ```sh
 cargo build --manifest-path impl/rust/Cargo.toml
-export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
 ```
 
 > **Why the export.** Each config in [config/](config/) holds only what is

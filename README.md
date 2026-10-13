@@ -189,7 +189,7 @@ poke — the CLI talks to the device directly:
 
 ```sh
 just sim modbus     # pymodbus simulator on 127.0.0.1:5020
-export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d   # where the demo point lists live in a checkout
+export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d   # where the demo point lists live in a checkout
 cargo run --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml                    # all devices, all readable points
 cargo run --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml -d plc1 -p 'temp_*' --poll   # keep polling (Ctrl-C stops)
 cargo run --manifest-path impl/rust/Cargo.toml -- run  -c demo/config/modbus.toml --output stdout --duration 10s  # sample JSON lines, no broker

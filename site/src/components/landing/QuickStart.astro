@@ -5,7 +5,7 @@ const lines = [
   { kind: 'comment', text: '# start the Modbus simulator on 127.0.0.1:5020' },
   { kind: 'cmd', text: 'just sim modbus' },
   { kind: 'comment', text: '# where the demo point lists live in a checkout' },
-  { kind: 'cmd', text: 'export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d' },
+  { kind: 'cmd', text: 'export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d' },
   { kind: 'comment', text: '# read every point of every device, once' },
   { kind: 'cmd', text: 'cargo run --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml' },
   { kind: 'comment', text: '# or run the connector without a broker: samples as JSON lines' },

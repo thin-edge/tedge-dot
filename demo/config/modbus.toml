@@ -8,7 +8,7 @@
 #     The points come from a packaged library, so from a checkout say where it is
 #     once (an installed package needs none of this):
 #
-#       export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+#       export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
 #       cargo run --manifest-path impl/rust/Cargo.toml -- read  -c demo/config/modbus.toml                        # all readable points, once
 #       cargo run --manifest-path impl/rust/Cargo.toml -- read  -c demo/config/modbus.toml -p 'temp_*' --poll     # keep polling (Ctrl-C stops)
 #       cargo run --manifest-path impl/rust/Cargo.toml -- write -c demo/config/modbus.toml -d plc1 -p coil_rw --value true
@@ -61,7 +61,7 @@ points_from      = ["demo-sim"]
   # installed package finds it automatically; from a source checkout point the
   # search path at the copy in this repo:
   #
-  #   export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+  #   export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
   #
   # A device may still add points of its own, or adjust an inherited one by
   # naming its id and only the fields to change, e.g.:
