@@ -58,15 +58,19 @@ configuration layout, so a config or a flow works unchanged with either. A host 
 other.
 
 <CardGrid>
-  <Card title="tedge-dot-rs" icon="rocket">
-    The default. The Rust build: richest protocol support, one static binary, no shared-library
-    dependencies.
+  <Card title="tedge-dot-c" icon="rocket">
+    The default. The C build: about 25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era),
+    amd64, arm64 and armhf packages, and every protocol including PROFIBUS-DP.
   </Card>
-  <Card title="tedge-dot-c" icon="setting">
-    For small or old gateways. The C build: about 25x smaller, a glibc 2.17 floor (Debian 8 /
-    RHEL 7 era), armhf packages, and the PROFIBUS-DP connector.
+  <Card title="tedge-dot-rs" icon="setting">
+    The Rust build, for the features only it has: SNMPv3 with SHA-2 or AES-192/256, OPC UA
+    structured values, the deprecated Basic128Rsa15 policy, CAN FD.
   </Card>
 </CardGrid>
+
+:::caution[Not final yet]
+Both packages are maintained and released today, but whether both will remain in the final product is not decided. They implement the same contract, so a config, a flow or a cloud integration built for one carries over to the other.
+:::
 
 The [package picker](/tedge-dot/tools/package-picker/) recommends one for your gateway, and the
 [install guide](/tedge-dot/get-started/install/) lists the differences.

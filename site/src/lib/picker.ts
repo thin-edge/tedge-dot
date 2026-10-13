@@ -53,59 +53,62 @@ export function recommend(data: PackageData, input: Answers): Recommendation {
   const rs = data.packages.find((p) => p.id === 'tedge-dot-rs')!;
   const c = data.packages.find((p) => p.id === 'tedge-dot-c')!;
   const distro = data.distributions.find((d) => d.id === a.distribution);
-  const needC: string[] = [];
-  const needRs: string[] = [];
+  const profibus = a.protocols.includes('profibus');
 
+  // What only the Rust build has, among the answers.
+  const rsOnly = a.features.filter((f) => rs.features.includes(f) && !c.features.includes(f));
+  const needRs = rsOnly.map((f) => `${data.features[f]?.label ?? f} is supported by tedge-dot-rs only.`);
+
+  // What keeps the Rust build off this gateway.
+  const rsBlocked: string[] = [];
   if (a.architecture && !rs.architectures.includes(a.architecture)) {
-    needC.push(
+    rsBlocked.push(
       `tedge-dot-rs is built for ${rs.architectures.join(' and ')} only; tedge-dot-c is also built for ${c.architectures
         .filter((x) => !rs.architectures.includes(x))
         .join(', ')}.`,
     );
   }
   if (distro?.glibc && versionLess(distro.glibc, data.rust_glibc_comfort)) {
-    needC.push(
+    rsBlocked.push(
       `${distro.label} ships glibc ${distro.glibc}. tedge-dot-c is built against a glibc ${c.glibc_min} floor, so it runs there; the Rust package is not tested on distributions that old.`,
     );
   }
-  const profibus = a.protocols.includes('profibus');
-  if (profibus) {
-    needC.push('PROFIBUS-DP ships in tedge-dot-c only: the Rust package is built without it.');
-  }
-  if (a.smallFootprint) {
-    needC.push(`tedge-dot-c is about ${c.binary_size}, against ${rs.binary_size} for the Rust binary.`);
-  }
-  const rsOnly = a.features.filter((f) => rs.features.includes(f) && !c.features.includes(f));
-  for (const f of rsOnly) {
-    needRs.push(`${data.features[f]?.label ?? f} is supported by tedge-dot-rs only.`);
-  }
 
-  // Only PROFIBUS asks for C, and a Rust-only feature asks for Rust: build Rust with PROFIBUS.
-  const onlyProfibus = needC.length === 1 && profibus;
+  // The default package, and why it suits these answers in particular.
+  const forC = [
+    ...rsBlocked,
+    ...(profibus ? ['PROFIBUS-DP ships in tedge-dot-c only: the Rust package is built without it.'] : []),
+    ...(a.smallFootprint ? [`tedge-dot-c is about ${c.binary_size}, against ${rs.binary_size} for the Rust binary.`] : []),
+  ];
   const sourceBuild =
     'Build tedge-dot-rs from source on Linux with `cargo build --manifest-path impl/rust/Cargo.toml --features profibus`.';
 
-  if (needC.length && !(needRs.length && onlyProfibus)) {
+  if (!needRs.length) {
     return {
       pick: 'tedge-dot-c',
-      reasons: needC,
-      caveats: needRs.map((r) => r.replace('is supported by tedge-dot-rs only.', 'is not available in tedge-dot-c.')),
-      alternative: onlyProfibus ? `Or keep the Rust build: ${sourceBuild[0].toLowerCase()}${sourceBuild.slice(1)}` : undefined,
+      reasons: [
+        'It is the default: every protocol, a small binary, and packages down to a glibc 2.17 floor.',
+        ...forC,
+      ],
+      caveats: [],
+      alternative: profibus ? `Or use the Rust build: ${sourceBuild[0].toLowerCase()}${sourceBuild.slice(1)}` : undefined,
     };
   }
-  if (needRs.length && onlyProfibus) {
+  if (rsBlocked.length) {
+    // The Rust build is what the features need, but it does not run here.
     return {
-      pick: 'tedge-dot-rs',
-      reasons: [...needRs, 'PROFIBUS-DP is not in the released Rust package, but the Rust source has it.'],
-      caveats: [],
-      alternative: sourceBuild,
+      pick: 'tedge-dot-c',
+      reasons: forC,
+      caveats: needRs.map((r) => r.replace('is supported by tedge-dot-rs only.', 'is not available in tedge-dot-c.')),
     };
   }
   return {
     pick: 'tedge-dot-rs',
-    reasons: needRs.length
-      ? needRs
-      : ['It is the default: the richest protocol support, in one static binary with no shared-library dependencies.'],
+    reasons: [
+      ...needRs,
+      ...(profibus ? ['PROFIBUS-DP is not in the released Rust package, but the Rust source has it.'] : []),
+    ],
     caveats: [],
+    alternative: profibus ? sourceBuild : 'Without that, the default tedge-dot-c is the smaller choice.',
   };
 }

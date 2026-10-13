@@ -11,8 +11,13 @@ import PackagePicker from '../../../components/tools/PackagePicker.tsx';
 export const data = YAML.parse(readFileSync('src/data/packages.yaml', 'utf8'));
 
 tedge-dot ships as two interchangeable packages that install the same `/usr/bin/tedge-dot`:
-**`tedge-dot-rs`** (Rust) and **`tedge-dot-c`** (C). A config, a flow or a cloud integration
-built against one works unchanged with the other. Tell the picker about your gateway.
+**`tedge-dot-c`** (C, the default) and **`tedge-dot-rs`** (Rust, for the few features only it
+has). A config, a flow or a cloud integration built against one works unchanged with the other.
+Tell the picker about your gateway.
+
+:::caution[Not final yet]
+Both packages are maintained and released today, but whether both will remain in the final product is not decided. They implement the same contract, so a config, a flow or a cloud integration built for one carries over to the other.
+:::
 
 <PackagePicker client:visible data={data} />
 

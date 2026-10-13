@@ -20,8 +20,12 @@ packages that both install `/usr/bin/tedge-dot`:
 
 | Package | Source | Pick it when |
 |---|---|---|
-| **`tedge-dot-rs`** | [impl/rust/](impl/rust/) | Default. Richest protocol support, one static binary, no shared-library dependencies. |
-| **`tedge-dot-c`** | [impl/c/](impl/c/) | Small or old devices: ~25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era), and it ships the PROFIBUS-DP connector the Rust package omits. |
+| **`tedge-dot-c`** | [impl/c/](impl/c/) | **Default.** ~25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol including PROFIBUS-DP. |
+| **`tedge-dot-rs`** | [impl/rust/](impl/rust/) | When you need a feature only the Rust build has: SNMPv3 with SHA-2 or AES-192/256, OPC UA structured values, the deprecated Basic128Rsa15 policy, or CAN FD. |
+
+> **Not final yet:** both packages are maintained and released today, but whether both will remain
+> in the final product is not decided. They implement the same contract, so a config, a flow or a
+> cloud integration built for one carries over to the other.
 
 The two are mutually exclusive — a host installs one or the other — and a
 config, a flow or a cloud integration built against one works unchanged against
@@ -90,7 +94,7 @@ device's link status says so; `tedge-dot pki trust <thumbprint>` trusts it, no r
 
 ## Install
 
-Install `tedge-dot-rs` (or `tedge-dot-c`) from the thin-edge.io
+Install `tedge-dot-c` (or `tedge-dot-rs`) from the thin-edge.io
 [community repository](https://thin-edge.github.io/thin-edge.io/install/#community-plugins),
 or grab a `.deb`/`.rpm`/`.apk` (or a plain binary archive) from the
 [releases page](https://github.com/thin-edge/tedge-dot/releases). The package depends on

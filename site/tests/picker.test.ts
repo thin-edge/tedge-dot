@@ -7,8 +7,8 @@ const data: PackageData = YAML.parse(readFileSync(new URL('../src/data/packages.
 const base: Answers = { architecture: 'amd64', distribution: 'debian11', protocols: ['modbus'], features: [], smallFootprint: false };
 
 describe('package picker', () => {
-  it('defaults to tedge-dot-rs', () => {
-    expect(recommend(data, base).pick).toBe('tedge-dot-rs');
+  it('defaults to tedge-dot-c', () => {
+    expect(recommend(data, base).pick).toBe('tedge-dot-c');
   });
 
   it('recommends tedge-dot-c on armhf and Debian 9, giving the glibc 2.17 floor (spec scenario)', () => {
@@ -38,6 +38,12 @@ describe('package picker', () => {
   it('recommends tedge-dot-rs for SNMPv3 SHA-2', () => {
     const r = recommend(data, { ...base, protocols: ['snmp'], features: ['snmpv3-sha2'] });
     expect(r.pick).toBe('tedge-dot-rs');
+  });
+
+  it('recommends tedge-dot-rs on a modern gateway that needs OPC UA structures, and names the default as the alternative', () => {
+    const r = recommend(data, { ...base, protocols: ['opcua'], features: ['opcua-structures'] });
+    expect(r.pick).toBe('tedge-dot-rs');
+    expect(r.alternative).toContain('tedge-dot-c');
   });
 
   it('names the caveat when an old gateway needs a Rust-only feature', () => {

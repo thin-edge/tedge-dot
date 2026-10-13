@@ -1,13 +1,25 @@
-# The two tedge-dot packages: one data table for the install guide's package table and the
-# package picker. The table in doc/install.md is rendered from `packages[*].table` (the site
+# The two tedge-dot packages, the default (tedge-dot-c) first: one data table for the install
+# guide's package table and the package picker. The table in doc/install.md is rendered from `packages[*].table` (the site
 # replaces it at build time, and a test fails when the copy in doc/install.md differs).
 
 packages:
+  - id: tedge-dot-c
+    implementation: C
+    source: impl/c/
+    table:
+      pick: >-
+        **Default.** ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol including **PROFIBUS-DP**.
+    architectures: [amd64, arm64, armhf]
+    glibc_min: "2.17"
+    binary_size: 457 KB
+    protocols: [modbus, opcua, canbus, canopen, snmp, profibus]
+    features: []
   - id: tedge-dot-rs
     implementation: Rust
     source: impl/rust/
     table:
-      pick: Default. Richest protocol support, one static binary, no shared-library dependencies.
+      pick: >-
+        When you need a feature only the Rust build has: SNMPv3 with SHA-2 or AES-192/256, OPC UA structured values, the deprecated Basic128Rsa15 policy, or CAN FD.
     architectures: [amd64, arm64]
     # Not pinned: the Rust build is not tested on old distributions.
     glibc_min: null
@@ -19,18 +31,6 @@ packages:
       - opcua-structures
       - canbus-fd
       - profibus-serial
-  - id: tedge-dot-c
-    implementation: C
-    source: impl/c/
-    table:
-      pick: >-
-        Small or old devices: ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), and it
-        additionally ships the **PROFIBUS-DP** connector.
-    architectures: [amd64, arm64, armhf]
-    glibc_min: "2.17"
-    binary_size: 457 KB
-    protocols: [modbus, opcua, canbus, canopen, snmp, profibus]
-    features: []
 
 # What each feature id means, for the picker's questions and explanations.
 features:
@@ -65,5 +65,5 @@ distributions:
   - { id: ubuntu20, label: "Ubuntu 20.04 or newer", glibc: "2.31" }
   - { id: yocto, label: "Yocto / Buildroot / other", glibc: null }
 
-# Below this glibc the picker recommends tedge-dot-c: the Rust package is not tested there.
+# Below this glibc the Rust package is not tested; the picker says so when it is needed there.
 rust_glibc_comfort: "2.28"

@@ -5,8 +5,8 @@ import YAML from 'yaml';
 
 const data = YAML.parse(readFileSync('src/data/packages.yaml', 'utf8'));
 const blurb: Record<string, string> = {
-  'tedge-dot-rs': 'The default. The richest protocol support, in one static binary with no shared-library dependencies.',
-  'tedge-dot-c': 'For small or old gateways: about 25 times smaller, runs down to glibc 2.17, and ships PROFIBUS-DP.',
+  'tedge-dot-c': 'The default. About 25 times smaller, runs down to glibc 2.17, and ships every protocol including PROFIBUS-DP.',
+  'tedge-dot-rs': 'For the features only the Rust build has: SNMPv3 with SHA-2, OPC UA structured values, CAN FD.',
 };
 ---
 
@@ -44,10 +44,10 @@ const blurb: Record<string, string> = {
     background: var(--td-surface);
     margin: 0 !important;
   }
-  .pkg.tedge-dot-rs {
+  .pkg.tedge-dot-c {
     border-top: 3px solid var(--td-orange);
   }
-  .pkg.tedge-dot-c {
+  .pkg.tedge-dot-rs {
     border-top: 3px solid var(--td-signal);
   }
   header {
@@ -91,6 +91,7 @@ const blurb: Record<string, string> = {
   .td-packages-cta {
     grid-column: 1 / -1;
     font-weight: 600;
+    color: var(--sl-color-text-accent);
     margin: 0 !important;
   }
 </style>

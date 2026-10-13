@@ -1,6 +1,7 @@
 # tedge-dot — Rust implementation
 
-The default implementation, packaged as **`tedge-dot-rs`**. A cargo workspace:
+One of the two implementations, packaged as **`tedge-dot-rs`** (the default package is the C
+build, `tedge-dot-c`; pick this one for the features only it has). A cargo workspace:
 the SDK (runtime, `Connector` trait, config model, decode helpers), one crate
 per protocol module, the conformance harness, and the `tedge-dot` binary.
 

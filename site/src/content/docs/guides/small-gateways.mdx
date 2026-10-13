@@ -11,9 +11,9 @@ Many OT gateways in the field run an old distribution on a 32-bit ARM board with
 A binary built on a current distribution will not even start there: a native build on
 `ubuntu-24.04` hard-requires glibc 2.39 on the target.
 
-**What you'll build:** a `tedge-dot-c` install on such a gateway, with the same configs, flows
-and cloud integration as the default `tedge-dot-rs` package, and a clear picture of the few
-features it does not have.
+**What you'll build:** a `tedge-dot-c` install on such a gateway, the default package, with the
+same configs, flows and cloud integration as `tedge-dot-rs`, and a clear picture of the few
+features only the Rust build has.
 
 <Aside type="tip" title="Not sure which package you need?">
 The [package picker](/tedge-dot/tools/package-picker/) asks about your architecture,
