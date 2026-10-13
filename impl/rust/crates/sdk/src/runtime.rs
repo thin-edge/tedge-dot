@@ -136,6 +136,7 @@ impl LinkTracker {
         config: &ConnectorConfig,
     ) -> Result<(), BoxError> {
         for report in reports {
+            log_link_report(self.states.get(&report.device).copied(), report);
             self.states.insert(report.device.clone(), report.status);
             if let Some(info) = &report.info {
                 self.infos.insert(report.device.clone(), info.clone());
@@ -185,7 +186,6 @@ impl LinkTracker {
         let Some(new) = next_link_state(current, healthy) else {
             return;
         };
-        info!(%device, status = new.as_str(), "link status changed");
         let report = LinkReport {
             device: device.to_string(),
             status: new,
@@ -221,6 +221,57 @@ impl LinkTracker {
             .collect();
         reports.sort_by(|a, b| a.device.cmp(&b.device));
         publish_links(client, &self.protocol, &reports, config).await
+    }
+}
+
+/// Remembers which points last read `bad`, and why, so an unreadable point is logged when it
+/// starts failing and when it recovers rather than on every poll. The link status covers a whole
+/// device failing; this covers one point failing on a device that otherwise reads fine (a wrong
+/// register, an unknown node id), whose reason would otherwise exist only in the sample payload.
+#[derive(Default)]
+struct PointHealth {
+    errors: HashMap<(String, String), String>,
+}
+
+impl PointHealth {
+    fn note(&mut self, device: &str, samples: &[Sample], batch: bool) {
+        for (warning, point, line) in self.changes(device, samples, batch) {
+            if warning {
+                warn!(%device, %point, "{line}");
+            } else {
+                info!(%device, %point, "{line}");
+            }
+        }
+    }
+
+    /// The lines to log for `device`'s samples: `(warning, point, line)`. A read `batch` with no
+    /// good sample is the device failing, which the link status reports: it is neither logged per
+    /// point nor recorded, so the points do not "recover" one by one afterwards. A pushed sample
+    /// arrives alone and says nothing about the rest of the device, so it is always judged.
+    /// Pure apart from the recorded errors, so the rules are unit-testable.
+    fn changes(&mut self, device: &str, samples: &[Sample], batch: bool) -> Vec<(bool, String, String)> {
+        if batch && !samples.iter().any(|s| s.quality != Quality::Bad) {
+            return Vec::new();
+        }
+        let mut lines = Vec::new();
+        for sample in samples {
+            let key = (device.to_string(), sample.point.clone());
+            if sample.quality == Quality::Bad {
+                let error = sample.error.clone().unwrap_or_else(|| "bad quality".to_string());
+                if self.errors.get(&key) != Some(&error) {
+                    lines.push((true, sample.point.clone(), format!("point unreadable: {error}")));
+                    self.errors.insert(key, error);
+                }
+            } else if self.errors.remove(&key).is_some() {
+                lines.push((false, sample.point.clone(), "point readable again".to_string()));
+            }
+        }
+        lines
+    }
+
+    /// Forget a device's points: a reload may have changed or removed them.
+    fn clear(&mut self) {
+        self.errors.clear();
     }
 }
 
@@ -314,6 +365,42 @@ async fn attempt_reconnect(
         }
     }
     restored
+}
+
+/// Log a link report about to be published, as the C runtime does. A device whose connect fails
+/// otherwise leaves no trace in the log: the connector returns the failure inside a
+/// `disconnected` report rather than as an error, and only the retained link status carried the
+/// reason.
+fn log_link_report(previous: Option<LinkStatus>, report: &LinkReport) {
+    if let Some((warning, line)) = link_log_line(previous, report) {
+        if warning {
+            warn!(device = %report.device, "{line}");
+        } else {
+            info!(device = %report.device, "{line}");
+        }
+    }
+}
+
+/// The log line for a link report, and whether it is a warning; `None` when there is nothing new
+/// to say. A transition is always logged. A report that is not `connected` is logged even when
+/// the status is unchanged: it comes from a connect (startup or reload), and a reload that leaves
+/// a device failing is worth a line. Reconnect attempts reach here only on a change
+/// (`publish_if_changed`), so a device that stays down is not logged on every retry. Pure so the
+/// rules are unit-testable.
+fn link_log_line(previous: Option<LinkStatus>, report: &LinkReport) -> Option<(bool, String)> {
+    let status = report.status.as_str();
+    match report.status {
+        LinkStatus::Connected => {
+            (previous != Some(LinkStatus::Connected)).then(|| (false, format!("link {status}")))
+        }
+        LinkStatus::Degraded | LinkStatus::Disconnected => Some((
+            true,
+            match &report.reason {
+                Some(reason) => format!("link {status}: {reason}"),
+                None => format!("link {status}"),
+            },
+        )),
+    }
 }
 
 /// The link state to publish after a poll batch, or `None` when nothing changed. Pure so the
@@ -611,6 +698,7 @@ pub async fn run_until_reloadable(
     let mut schedule = build_schedule(&config, &subscribed);
     let mut meta_index = build_meta_index(&config);
     let mut reporter = Reporter::new(&config);
+    let mut point_health = PointHealth::default();
     let mut seq_counters: HashMap<(String, String), u64> = HashMap::new();
     // Devices whose transport needs re-establishing, keyed by device name.
     let mut reconnects: HashMap<String, ReconnectEntry> = HashMap::new();
@@ -659,6 +747,7 @@ pub async fn run_until_reloadable(
                                         .await;
                                 }
                             }
+                            point_health.note(&device, &samples, true);
                             // A batch where every point failed means the device itself is
                             // unreachable (a single bad point keeps the link healthy).
                             if !samples.is_empty() {
@@ -733,6 +822,9 @@ pub async fn run_until_reloadable(
                     };
                     let samples = reporter.heartbeat_result(caps.protocol, &device, &points, result);
                     let healthy = samples.iter().any(|s| s.quality != crate::model::Quality::Bad);
+                    if failure.is_none() {
+                        point_health.note(&device, &samples, true);
+                    }
                     for s in samples {
                         if let Some(mut s) = reporter.offer(map_sample(s, &meta_index)) {
                             publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index).await;
@@ -811,6 +903,7 @@ pub async fn run_until_reloadable(
                 }
             }
             Some(sample) = sample_rx.recv() => {
+                point_health.note(&sample.device.clone(), std::slice::from_ref(&sample), false);
                 if let Some(mut sample) = reporter.offer(map_sample(sample, &meta_index)) {
                     publish_sample(&client, &protocol, &mut sample, &mut seq_counters, &meta_index)
                         .await;
@@ -884,6 +977,7 @@ pub async fn run_until_reloadable(
             schedule = build_schedule(&config, &subscribed);
             meta_index = build_meta_index(&config);
             reporter = Reporter::new(&config);
+            point_health.clear();
             seq_counters.clear();
             // applying the configuration already reconnected every device
             reconnects.clear();
@@ -1893,6 +1987,7 @@ async fn handle_command(
             publish_retained(client, topic, payload.to_string()).await?;
         }
         Err(e) => {
+            warn!(%device, %point, "{verb} failed: {e}");
             publish_retained(
                 client,
                 topic,
@@ -2055,6 +2150,7 @@ async fn handle_write_batch(
     let writes = match parse_batch_writes(json) {
         Ok(w) => w,
         Err(reason) => {
+            warn!(%device, "write-batch refused: {reason}");
             publish_retained(
                 client,
                 topic,
@@ -2105,6 +2201,7 @@ async fn handle_write_batch(
             }
             Err(e) => {
                 let reason = format!("write to {} failed: {e}", w.point);
+                warn!(%device, "write-batch failed: {reason}");
                 results.push(serde_json::json!({
                     "point": w.point,
                     "status": "failed",
@@ -3681,6 +3778,84 @@ protocol_address = {}
         // a device that never connected stays disconnected
         assert_eq!(next_link_state(Some(Disconnected), false), None);
         assert_eq!(next_link_state(None, false), None);
+    }
+
+    #[test]
+    fn an_unreadable_point_is_logged_when_it_fails_and_when_it_recovers() {
+        let sample = |point: &str, error: Option<&str>| Sample {
+            ts: OffsetDateTime::UNIX_EPOCH,
+            device: "plc".into(),
+            protocol: "modbus",
+            point: point.into(),
+            mode: Mode::Typed,
+            datatype: Some(DataType::Uint16),
+            value: error.is_none().then_some(crate::model::Value::Number(1.0)),
+            raw: vec![],
+            raw_group: 0,
+            quality: if error.is_some() { Quality::Bad } else { Quality::Good },
+            unit: None,
+            addr: serde_json::Value::Null,
+            seq: None,
+            error: error.map(str::to_string),
+            source_value: None,
+        };
+        let lines = |health: &mut PointHealth, samples: &[Sample], batch| {
+            health
+                .changes("plc", samples, batch)
+                .into_iter()
+                .map(|(warning, point, line)| format!("{} {point}: {line}", if warning { "WARN" } else { "INFO" }))
+                .collect::<Vec<_>>()
+        };
+        let mut health = PointHealth::default();
+        let illegal = Some("illegal data address");
+        let batch = [sample("a", None), sample("b", illegal)];
+        // a point failing beside a readable one is a warning, once
+        assert_eq!(lines(&mut health, &batch, true), ["WARN b: point unreadable: illegal data address"]);
+        assert!(lines(&mut health, &batch, true).is_empty());
+        // a different error is logged again
+        let timeout = [sample("a", None), sample("b", Some("timeout"))];
+        assert_eq!(lines(&mut health, &timeout, true), ["WARN b: point unreadable: timeout"]);
+        // the whole device failing is the link's to report, and changes nothing here
+        let down = [sample("a", Some("connection reset")), sample("b", Some("connection reset"))];
+        assert!(lines(&mut health, &down, true).is_empty());
+        // recovery is logged for the point that was unreadable, not for the device's outage
+        let good = [sample("a", None), sample("b", None)];
+        assert_eq!(lines(&mut health, &good, true), ["INFO b: point readable again"]);
+        assert!(lines(&mut health, &good, true).is_empty());
+        // a pushed sample is judged on its own
+        assert_eq!(
+            lines(&mut health, &[sample("c", Some("BadNodeIdUnknown"))], false),
+            ["WARN c: point unreadable: BadNodeIdUnknown"]
+        );
+        // a new configuration forgets what was logged, so a point still failing is reported again
+        health.clear();
+        assert_eq!(lines(&mut health, &batch, true), ["WARN b: point unreadable: illegal data address"]);
+    }
+
+    #[test]
+    fn link_reports_are_logged_with_their_reason() {
+        use LinkStatus::*;
+        let report = |status, reason: Option<&str>| LinkReport {
+            device: "plc".into(),
+            status,
+            reason: reason.map(str::to_string),
+            info: None,
+        };
+        let refused = report(Disconnected, Some("tcp connect failed: Connection refused"));
+        let line = "link disconnected: tcp connect failed: Connection refused";
+        // a device whose first connect fails is a warning naming the reason
+        assert_eq!(link_log_line(None, &refused), Some((true, line.into())));
+        // and so is a reload that leaves it failing
+        assert_eq!(link_log_line(Some(Disconnected), &refused), Some((true, line.into())));
+        assert_eq!(
+            link_log_line(Some(Connected), &report(Degraded, None)),
+            Some((true, "link degraded".into()))
+        );
+        // connecting is logged once, not on every reload of a healthy device
+        let connected = Some((false, "link connected".into()));
+        assert_eq!(link_log_line(None, &report(Connected, None)), connected);
+        assert_eq!(link_log_line(Some(Disconnected), &report(Connected, None)), connected);
+        assert_eq!(link_log_line(Some(Connected), &report(Connected, None)), None);
     }
 
     #[test]

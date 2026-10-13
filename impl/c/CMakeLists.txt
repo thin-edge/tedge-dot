@@ -348,6 +348,11 @@ add_executable(tedge-dot-schedule tests/schedule.c)
 target_link_libraries(tedge-dot-schedule PRIVATE tedge_dot_sdk)
 add_test(NAME schedule COMMAND tedge-dot-schedule)
 
+# When an unreadable point is logged (health.h): the same cases as the Rust runtime's PointHealth.
+add_executable(tedge-dot-health tests/health.c)
+target_link_libraries(tedge-dot-health PRIVATE tedge_dot_sdk)
+add_test(NAME health COMMAND tedge-dot-health)
+
 # The write direction of the per-point transform (contract §4.2): the inverse math and the
 # one write path every command and the CLI take.
 add_executable(tedge-dot-write tests/write.c)

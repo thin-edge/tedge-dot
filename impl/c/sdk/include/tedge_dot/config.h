@@ -121,6 +121,13 @@ typedef struct tdot_point {
      * point whose policy is not the passthrough; NULL otherwise. Freed with
      * the point, so a replaced configuration starts from a clean state. */
     tdot_report_state_t *report_state;
+    /* Point health logging (health.h): the error last logged, "" while the
+     * point reads fine, and this pass's reading, held until the runtime knows
+     * whether the whole pass failed (tick_state 0 = not read, 1 = good, 2 =
+     * bad). */
+    char bad_error[TDOT_ERR_MAX];
+    char tick_error[TDOT_ERR_MAX];
+    unsigned char tick_state;
 } tdot_point_t;
 
 typedef enum {
