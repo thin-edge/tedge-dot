@@ -10,6 +10,7 @@
 .rp-out { display: grid; gap: 0.75rem; min-width: 0; }
 .rp-out > * { margin: 0 !important; }
 .rp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
+@media (max-width: 30rem) { .rp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rp-stats > div { background: var(--td-surface); border: 1px solid var(--td-border); border-radius: var(--td-radius); padding: 0.5rem 0.75rem; margin: 0 !important; }
 .rp-stats dt { font-size: var(--sl-text-xs); color: var(--td-muted); }
 .rp-stats dd { margin: 0; font-size: var(--sl-text-xl); font-weight: 700; color: var(--sl-color-white); font-variant-numeric: tabular-nums; }

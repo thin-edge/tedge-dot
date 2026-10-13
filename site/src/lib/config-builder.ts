@@ -186,8 +186,18 @@ export function coerce(text: string, type: string | undefined): unknown {
   return text;
 }
 
+/** A protocol's shapes and templates; a protocol the builder does not know gets generic ones. */
 export function protocolInfo(protocol: string): any {
-  return (protocols as any)[protocol];
+  return (
+    (protocols as any)[protocol] ?? {
+      label: protocol || 'unknown',
+      protocol_address: { type: 'object' },
+      address: { type: 'object' },
+      connection: { type: 'object' },
+      newDevice: { name: 'device1', protocol_address: {} },
+      newPoint: { id: 'point1', access: 'read' },
+    }
+  );
 }
 
 export function newConfig(protocol: ProtocolId): Config {

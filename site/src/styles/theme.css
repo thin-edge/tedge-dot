@@ -80,6 +80,40 @@
   max-width: 100%;
 }
 
+/*
+ * The interactive tools and the landing components carry `not-content`: Starlight's content
+ * styles would otherwise add a top margin to every element after the first, which stretched the
+ * first button of a row and pushed the others down. They lay themselves out with gap, and get
+ * back the few content styles they use here.
+ */
+.td-tool {
+  font-size: var(--sl-text-base);
+  line-height: var(--sl-line-height);
+}
+.td-tool code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.875em;
+  background: var(--sl-color-gray-6);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+}
+.td-tool pre code {
+  background: none;
+  padding: 0;
+}
+.td-tool a {
+  color: var(--sl-color-text-accent);
+}
+.td-tool :is(p, ul, ol, dl, pre, h4) {
+  margin: 0;
+}
+.td-tool ul {
+  padding-left: 1.1rem;
+}
+.td-tool li + li {
+  margin-top: 0.25rem;
+}
+
 /* Islands (the interactive tools) share these. */
 .td-panel {
   background: var(--td-surface);
@@ -247,4 +281,10 @@ header.header {
   border-radius: var(--td-radius);
   white-space: pre;
   font-variant-ligatures: none;
+}
+
+/* Tab labels stay on one line: a tab bar too wide for the column scrolls sideways (Starlight's
+   wrapper already does) instead of wrapping each label word by word. */
+starlight-tabs [role='tab'] {
+  white-space: nowrap;
 }

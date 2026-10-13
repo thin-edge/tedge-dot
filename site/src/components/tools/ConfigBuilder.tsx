@@ -45,12 +45,22 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
   const devices: any[] = config.device ?? [];
 
   const load = (text: string, from: string) => {
+    if (!text.trim()) {
+      setImportError('Paste a connector configuration first.');
+      return false;
+    }
     try {
-      setConfig(parseToml(text));
+      const parsed = parseToml(text);
+      if (!parsed.connector) {
+        setImportError('This is not a connector configuration: it has no [connector] table.');
+        return false;
+      }
+      setConfig(parsed);
+      setImportError('');
       setNotice(`Loaded ${from}.`);
       return true;
     } catch (e) {
-      setImportError(String((e as Error).message ?? e));
+      setImportError(`Not valid TOML: ${String((e as Error).message ?? e).split('\n')[0]}`);
       return false;
     }
   };
@@ -74,7 +84,7 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
   };
 
   return (
-    <div class="td-tool cb">
+    <div class="td-tool not-content cb">
       <div class="cb-bar">
         <label class="td-field cb-inline">
           <span>Protocol</span>
@@ -86,6 +96,7 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
             }}
           >
             {PROTOCOL_IDS.map((id) => <option value={id}>{protocolInfo(id).label}</option>)}
+            {protocol && !PROTOCOL_IDS.includes(protocol) && <option value={protocol}>{protocol} (not known to the builder)</option>}
           </select>
         </label>
         <label class="td-field cb-inline">
@@ -106,7 +117,7 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
           <div class="td-panel">
             <textarea rows={8} value={importText} onInput={(e) => setImportText((e.currentTarget as HTMLTextAreaElement).value)} aria-label="TOML to load" spellcheck={false} />
             {importError && <p class="td-error">{importError}</p>}
-            <button type="button" class="td-btn" onClick={() => { setImportError(''); load(importText, 'your TOML'); }}>Load</button>
+            <button type="button" class="td-btn" onClick={() => load(importText, 'your TOML')}>Load</button>
           </div>
         </details>
       </div>

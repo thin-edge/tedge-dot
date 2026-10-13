@@ -4,7 +4,10 @@
 .cb-import { position: relative; }
 .cb-import summary { list-style: none; }
 .cb-import summary::-webkit-details-marker { display: none; }
-.cb-import[open] .td-panel { position: absolute; z-index: 5; width: min(30rem, 90vw); display: grid; gap: 0.5rem; margin-top: 0.5rem; box-shadow: var(--sl-shadow-lg); }
+/* Opens below the toolbar, full width: a floating panel overflowed small screens. */
+.cb-import[open] { flex-basis: 100%; }
+.cb-import[open] .td-panel { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
+.cb-import textarea { width: 100%; box-sizing: border-box; }
 .cb-import textarea { font-family: var(--sl-font-mono); font-size: var(--sl-text-xs); }
 .cb-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); align-items: start; }
 @media (max-width: 60rem) { .cb-grid { grid-template-columns: minmax(0, 1fr); } }

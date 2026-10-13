@@ -26,7 +26,7 @@ export default function PackagePicker({ data }: { data: PackageData }) {
   const rustOnly = Object.keys(data.features);
 
   return (
-    <div class="td-tool pp">
+    <div class="td-tool not-content pp">
       <form class="td-panel pp-form" onSubmit={(e) => e.preventDefault()}>
         <label class="td-field">
           <span>CPU architecture</span>

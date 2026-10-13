@@ -69,3 +69,11 @@ describe('builder', () => {
     expect(toml).toMatch(/^\[connector\]\nprotocol {6}= "modbus"\nservice_name {2}= /);
   });
 });
+
+describe('unknown protocols', () => {
+  it('still offer device and point templates', async () => {
+    const { protocolInfo } = await import('../src/lib/config-builder');
+    expect(protocolInfo('bacnet').newDevice.name).toBe('device1');
+    expect(protocolInfo(undefined as unknown as string).newPoint.id).toBe('point1');
+  });
+});

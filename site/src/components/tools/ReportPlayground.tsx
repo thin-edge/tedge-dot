@@ -115,7 +115,7 @@ export default function ReportPlayground() {
   const hoveredPub = hover !== null ? publishedSet.get(hover) : undefined;
 
   return (
-    <div class="td-tool rp">
+    <div class="td-tool not-content rp">
       <div class="rp-presets" role="group" aria-label="Presets">
         {PRESETS.map((p) => (
           <button
