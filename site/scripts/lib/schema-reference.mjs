@@ -90,6 +90,18 @@ function escapeText(s) {
     .join('');
 }
 
-function cell(s) {
-  return escapeText(s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+// A table cell. Outside code spans a backslash and a pipe are escaped with a backslash. A code
+// span cannot hold a pipe that way (GFM keeps the backslash of `\\|` and ends the cell at the
+// pipe), so a code span with a pipe or a backslash becomes an HTML <code> with entities.
+export function cell(s) {
+  return s
+    .replace(/\r?\n/g, ' ')
+    .split(/(`[^`]*`)/)
+    .map((part) => {
+      if (!part.startsWith('`')) return part.replace(/[\\|]/g, '\\$&').replace(/</g, '&lt;');
+      if (!/[\\|]/.test(part)) return part;
+      const html = part.slice(1, -1).replace(/[&<>|\\]/g, (c) => `&#${c.charCodeAt(0)};`);
+      return `<code>${html}</code>`;
+    })
+    .join('');
 }

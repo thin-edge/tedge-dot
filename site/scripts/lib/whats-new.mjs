@@ -63,7 +63,7 @@ export function renderWhatsNew({ releases, unreleased }, { repository, dates = {
     '[install guide](/tedge-dot/get-started/install/#upgrading) says what to check when you upgrade.',
     '',
   ];
-  const fragmentBody = (f) => demote(rewrite(f.content, f.file)).trim();
+  const fragmentBody = (f) => stripComments(rewrite(f.content, f.file)).trim();
   if (unreleased.length) {
     out.push('## Unreleased', '', 'On `main`, in the next release.', '');
     for (const f of unreleased) out.push(fragmentBody(f), '');
@@ -77,7 +77,7 @@ export function renderWhatsNew({ releases, unreleased }, { repository, dates = {
     if (r.carries.length) {
       out.push(`:::note`, `This release also delivers ${listJoin(r.carries)}, which ${r.carries.length > 1 ? 'were' : 'was'} tagged but never published.`, ':::', '');
     }
-    const bodies = [...(extra ? [demote(extra).trim()] : []), ...r.highlights.map(fragmentBody)];
+    const bodies = [...(extra ? [stripComments(extra).trim()] : []), ...r.highlights.map(fragmentBody)];
     if (bodies.length) for (const b of bodies) out.push(b, '');
     else out.push('Fixes and smaller changes: see the changelog on the GitHub release.', '');
   }
@@ -88,9 +88,16 @@ function listJoin(items) {
   return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0];
 }
 
-// A fragment starts with `### `: keep it under its release's `##`. Comments are dropped.
-function demote(markdown) {
-  return markdown.replace(/<!--[\s\S]*?-->\n*/g, '');
+// A fragment starts with `### `: it stays under its release's `##`. HTML comments are dropped,
+// until none is left (removing one can join the halves of another), and an unclosed one is
+// shown as text rather than hiding the rest of the page.
+export function stripComments(markdown) {
+  let prev;
+  do {
+    prev = markdown;
+    markdown = markdown.replace(/<!--[\s\S]*?-->\n*/g, '');
+  } while (markdown !== prev);
+  return markdown.replace(/<!--/g, '&lt;!--');
 }
 
 // --- git and GitHub -------------------------------------------------------------------------
