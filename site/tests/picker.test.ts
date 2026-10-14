@@ -52,6 +52,13 @@ describe('package picker', () => {
     expect(r.caveats[0]).toContain('not available in tedge-dot-c');
   });
 
+  it('the config builder marks the same protocols as preview as packages.yaml', () => {
+    const protocols = JSON.parse(readFileSync(new URL('../src/data/protocols.json', import.meta.url), 'utf8'));
+    const marked = Object.keys(protocols).filter((k) => protocols[k].preview === true);
+    expect(marked.sort()).toEqual([...(data.preview_protocols ?? [])].sort());
+    for (const id of data.preview_protocols ?? []) expect(data.protocols[id]).toBeDefined();
+  });
+
   it('every feature the packages name has a label', () => {
     for (const p of data.packages) for (const f of p.features) expect(data.features[f]).toBeDefined();
   });

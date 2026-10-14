@@ -95,7 +95,7 @@ export default function ConfigBuilder({ demos }: { demos: Record<string, string>
               setNotice('');
             }}
           >
-            {PROTOCOL_IDS.map((id) => <option value={id}>{protocolInfo(id).label}</option>)}
+            {PROTOCOL_IDS.map((id) => <option value={id}>{protocolInfo(id).label}{protocolInfo(id).preview ? ' (preview)' : ''}</option>)}
             {protocol && !PROTOCOL_IDS.includes(protocol) && <option value={protocol}>{protocol} (not known to the builder)</option>}
           </select>
         </label>

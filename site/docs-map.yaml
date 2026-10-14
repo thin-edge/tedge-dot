@@ -72,6 +72,7 @@ pages:
     slug: reference/connectors/canbus
     section: Connectors
     label: CAN bus and CANopen
+    badge: Preview
   - source: doc/connectors/snmp-connector-spec.md
     slug: reference/connectors/snmp
     section: Connectors

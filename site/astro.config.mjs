@@ -20,7 +20,11 @@ const reference = map.sections.map((section) => ({
       : []),
     ...map.pages
       .filter((p) => p.section === section)
-      .map((p) => (p.label ? { label: p.label, slug: p.slug } : p.slug)),
+      .map((p) => {
+        // `badge` in the page map: a sidebar badge, e.g. Preview for a connector not yet tested on real equipment.
+        const badge = p.badge ? { badge: { text: p.badge, variant: 'caution' } } : {};
+        return p.label || p.badge ? { label: p.label, slug: p.slug, ...badge } : p.slug;
+      }),
   ],
 }));
 
@@ -37,7 +41,7 @@ export default defineConfig({
     starlight({
       title: 'tedge-dot',
       description:
-        'OT protocol connectors for thin-edge.io: Modbus, OPC UA, CAN bus, CANopen, SNMP and PROFIBUS-DP into one neutral MQTT contract.',
+        'OT protocol connectors for thin-edge.io: Modbus, OPC UA, SNMP, CAN bus, CANopen and PROFIBUS-DP into one neutral MQTT contract.',
       favicon: '/favicon.svg',
       customCss: [
         '@fontsource-variable/inter',

@@ -20,7 +20,7 @@ packages that both install `/usr/bin/tedge-dot`:
 
 | Package | Source | Pick it when |
 |---|---|---|
-| **`tedge-dot-c`** | [impl/c/](impl/c/) | **Default.** ~25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol including PROFIBUS-DP. |
+| **`tedge-dot-c`** | [impl/c/](impl/c/) | **Default.** ~25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol, including the PROFIBUS-DP preview. |
 | **`tedge-dot-rs`** | [impl/rust/](impl/rust/) | When you need a feature only the Rust build has: SNMPv3 with SHA-2 or AES-192/256, OPC UA structured values, the deprecated Basic128Rsa15 policy, or CAN FD. |
 
 > **Not final yet:** both packages are maintained and released today, but whether both will remain
@@ -62,10 +62,15 @@ one protocol, selected by `connector.protocol` in its config file.
 |---|---|---|---|
 | Modbus (reference) | TCP + RTU | ✅ | ✅ |
 | OPC UA (None, Basic256Sha256, Aes128/Aes256 policies; username and X.509 users) | opc.tcp | ✅ | ✅ |
-| CAN bus | Linux SocketCAN + DBC | ✅ | ✅ |
-| CANopen | Linux SocketCAN (SDO) | ✅ | ✅ |
-| PROFIBUS-DP | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
 | SNMP (v1/v2c/v3: polling, writes, traps and informs) | UDP | ✅ | ✅ (no SHA-2 / AES-192/256) |
+| CAN bus *(preview)* | Linux SocketCAN + DBC | ✅ | ✅ |
+| CANopen *(preview)* | Linux SocketCAN (SDO) | ✅ | ✅ |
+| PROFIBUS-DP *(preview)* | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
+
+**Preview:** the CAN bus, CANopen and PROFIBUS-DP connectors are tested in CI against simulators
+(a virtual SocketCAN bus and a PROFIBUS-DP slave simulator) but not yet on real equipment, so
+expect rough edges and changes. If you try one on real hardware, please
+[tell us how it went](https://github.com/thin-edge/tedge-dot/issues).
 
 Rust modules: [connector-modbus](impl/rust/crates/connector-modbus/),
 [connector-opcua](impl/rust/crates/connector-opcua/),

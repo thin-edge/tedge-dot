@@ -7,8 +7,8 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
 
 **tedge-dot** connects industrial (OT) equipment to [thin-edge.io](https://thin-edge.io). One
-`tedge-dot` binary reads and writes Modbus, OPC UA, CAN bus, CANopen, SNMP and PROFIBUS-DP
-devices, and publishes what it reads to the thin-edge.io MQTT broker in one protocol-neutral
+`tedge-dot` binary reads and writes Modbus, OPC UA and SNMP devices, plus CAN bus, CANopen
+and PROFIBUS-DP in preview (tested against simulators, not yet on real equipment), and publishes what it reads to the thin-edge.io MQTT broker in one protocol-neutral
 format. From there, thin-edge.io [flows](https://thin-edge.github.io/thin-edge.io/extend/flows/)
 turn it into measurements, child devices, alarms, events and device parameters in the cloud.
 
@@ -60,7 +60,7 @@ other.
 <CardGrid>
   <Card title="tedge-dot-c" icon="rocket">
     The default. The C build: about 25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era),
-    amd64, arm64 and armhf packages, and every protocol including PROFIBUS-DP.
+    amd64, arm64 and armhf packages, and every protocol, including the PROFIBUS-DP preview.
   </Card>
   <Card title="tedge-dot-rs" icon="setting">
     The Rust build, for the features only it has: SNMPv3 with SHA-2 or AES-192/256, OPC UA

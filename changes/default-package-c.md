@@ -1,7 +1,7 @@
 ### `tedge-dot-c` is now the recommended package
 
 The documentation now recommends **`tedge-dot-c`** by default: it is about 25 times smaller,
-runs down to glibc 2.17 and ships every protocol, PROFIBUS-DP included. Choose `tedge-dot-rs`
+runs down to glibc 2.17 and ships every protocol, including the PROFIBUS-DP preview. Choose `tedge-dot-rs`
 when you need one of the features only the Rust build has (SNMPv3 with SHA-2 or AES-192/256,
 OPC UA structured values, the deprecated Basic128Rsa15 policy, CAN FD); the
 [package picker](https://thin-edge.github.io/tedge-dot/tools/package-picker/) helps you decide.

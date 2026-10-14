@@ -16,3 +16,4 @@
 .pp-alt, .pp-foot { font-size: var(--sl-text-sm); color: var(--sl-color-gray-2); }
 .pp-cmd { padding: 0.6rem 0.75rem; background: var(--sl-color-black); border-radius: 0.375rem; font-size: var(--sl-text-xs); overflow-x: auto; }
 .pp > * { margin: 0 !important; }
+.pp-preview { margin-left: 0.4rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--td-warn); }

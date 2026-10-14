@@ -46,6 +46,7 @@ export default function PackagePicker({ data }: { data: PackageData }) {
             <label class="pp-check">
               <input type="checkbox" checked={a.protocols.includes(id)} onChange={() => toggle('protocols', id)} />
               {label}
+              {data.preview_protocols?.includes(id) && <span class="pp-preview" title="Tested against simulators, not yet on real equipment">preview</span>}
             </label>
           ))}
         </fieldset>

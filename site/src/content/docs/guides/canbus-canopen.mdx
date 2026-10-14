@@ -3,10 +3,19 @@ title: CAN bus and CANopen
 description: Decode CAN signals with a DBC file and poll CANopen object dictionaries over Linux SocketCAN, using the demo's virtual CAN bus.
 sidebar:
   order: 3
+  badge:
+    text: Preview
+    variant: caution
 ---
 
 import { Steps, Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 import RepoFile from '../../../components/RepoFile.astro';
+
+<Aside type="caution" title="Preview">
+Both CAN connectors are tested in CI against simulators on a virtual SocketCAN bus, but not yet
+on real equipment. Expect rough edges, and changes to their configuration. If you try them on
+real hardware, please [tell us how it went](https://github.com/thin-edge/tedge-dot/issues).
+</Aside>
 
 tedge-dot has two connectors for CAN, and both use Linux SocketCAN:
 

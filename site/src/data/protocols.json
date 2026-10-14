@@ -79,6 +79,7 @@
   },
   "canbus": {
     "label": "CAN bus",
+    "preview": true,
     "spec": "/tedge-dot/reference/connectors/canbus/",
     "protocol_address": {
       "type": "object",
@@ -100,6 +101,7 @@
   },
   "canopen": {
     "label": "CANopen",
+    "preview": true,
     "spec": "/tedge-dot/guides/canbus-canopen/",
     "protocol_address": {
       "type": "object",
@@ -142,6 +144,7 @@
   },
   "profibus": {
     "label": "PROFIBUS-DP",
+    "preview": true,
     "spec": "/tedge-dot/guides/small-gateways/",
     "protocol_address": {
       "type": "object",

@@ -1,12 +1,17 @@
 ---
-// The supported protocols, with what each one does and which package carries it.
-const protocols = [
-  { name: 'Modbus', transport: 'TCP and RTU', what: 'Holding/input registers, coils, bit fields, every word order.', href: '/tedge-dot/reference/connectors/modbus/', rs: true, c: true },
-  { name: 'OPC UA', transport: 'opc.tcp', what: 'Monitored items, secured sessions, X.509 users, method calls.', href: '/tedge-dot/reference/connectors/opcua/', rs: true, c: true },
-  { name: 'CAN bus', transport: 'SocketCAN + DBC', what: 'Signals decoded from a DBC file; writes by read-modify-write.', href: '/tedge-dot/reference/connectors/canbus/', rs: true, c: true },
-  { name: 'CANopen', transport: 'SocketCAN (SDO)', what: 'Object dictionary entries by index and sub-index.', href: '/tedge-dot/guides/canbus-canopen/', rs: true, c: true },
-  { name: 'SNMP', transport: 'UDP, v1/v2c/v3', what: 'GET, GETBULK and SET, plus traps and informs.', href: '/tedge-dot/reference/connectors/snmp/', rs: true, c: true },
-  { name: 'PROFIBUS-DP', transport: 'serial / tcp://', what: 'A DP-V0 class-1 master for cyclic I/O.', href: '/tedge-dot/guides/small-gateways/', rs: 'source', c: true },
+// The supported protocols, with what each one does and which package carries it. Protocols in
+// preview (src/data/packages.yaml `preview_protocols`) come last, with a Preview chip.
+import { readFileSync } from 'node:fs';
+import YAML from 'yaml';
+
+const { preview_protocols: preview } = YAML.parse(readFileSync('src/data/packages.yaml', 'utf8'));
+const protocols: { id: string; name: string; transport: string; what: string; href: string; rs: boolean | 'source'; c: boolean }[] = [
+  { id: 'modbus', name: 'Modbus', transport: 'TCP and RTU', what: 'Holding/input registers, coils, bit fields, every word order.', href: '/tedge-dot/reference/connectors/modbus/', rs: true, c: true },
+  { id: 'opcua', name: 'OPC UA', transport: 'opc.tcp', what: 'Monitored items, secured sessions, X.509 users, method calls.', href: '/tedge-dot/reference/connectors/opcua/', rs: true, c: true },
+  { id: 'snmp', name: 'SNMP', transport: 'UDP, v1/v2c/v3', what: 'GET, GETBULK and SET, plus traps and informs.', href: '/tedge-dot/reference/connectors/snmp/', rs: true, c: true },
+  { id: 'canbus', name: 'CAN bus', transport: 'SocketCAN + DBC', what: 'Signals decoded from a DBC file; writes by read-modify-write.', href: '/tedge-dot/reference/connectors/canbus/', rs: true, c: true },
+  { id: 'canopen', name: 'CANopen', transport: 'SocketCAN (SDO)', what: 'Object dictionary entries by index and sub-index.', href: '/tedge-dot/guides/canbus-canopen/', rs: true, c: true },
+  { id: 'profibus', name: 'PROFIBUS-DP', transport: 'serial / tcp://', what: 'A DP-V0 class-1 master for cyclic I/O.', href: '/tedge-dot/guides/small-gateways/', rs: 'source', c: true },
 ];
 ---
 
@@ -15,7 +20,14 @@ const protocols = [
     protocols.map((p) => (
       <li>
         <a href={p.href}>
-          <span class="name">{p.name}</span>
+          <span class="name">
+            {p.name}
+            {preview.includes(p.id) && (
+              <span class="preview" title="Tested against simulators, not yet on real equipment">
+                Preview
+              </span>
+            )}
+          </span>
           <span class="transport">{p.transport}</span>
           <span class="what">{p.what}</span>
           <span class="pkgs">
@@ -65,6 +77,23 @@ const protocols = [
     font-size: var(--sl-text-lg);
     font-weight: 700;
     color: var(--sl-color-white);
+  }
+  .name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.5rem;
+  }
+  .preview {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--td-warn) 60%, transparent);
+    color: var(--td-warn);
   }
   .transport {
     font-family: var(--sl-font-mono);

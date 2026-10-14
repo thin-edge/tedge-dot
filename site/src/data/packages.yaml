@@ -8,7 +8,7 @@ packages:
     source: impl/c/
     table:
       pick: >-
-        **Default.** ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol including **PROFIBUS-DP**.
+        **Default.** ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol, including the PROFIBUS-DP preview.
     architectures: [amd64, arm64, armhf]
     glibc_min: "2.17"
     binary_size: 457 KB
@@ -45,12 +45,17 @@ features:
   profibus-serial:
     label: PROFIBUS-DP on a serial RS-485 line (not through a device server)
 
+# Protocols in preview: tested in CI against simulators (a virtual SocketCAN bus, a PROFIBUS-DP
+# slave simulator) but not yet on real equipment. The landing page, the picker and the config
+# builder mark them (src/data/protocols.json repeats the flag; a test keeps the two equal).
+preview_protocols: [canbus, canopen, profibus]
+
 protocols:
   modbus: Modbus TCP / RTU
   opcua: OPC UA
+  snmp: SNMP
   canbus: CAN bus (DBC)
   canopen: CANopen
-  snmp: SNMP
   profibus: PROFIBUS-DP
 
 # Distribution choices for the picker, with the glibc each one ships.

@@ -13,6 +13,8 @@ export interface PackageData {
   }[];
   features: Record<string, { label: string }>;
   protocols: Record<string, string>;
+  /** Protocols tested against simulators only, not yet on real equipment. */
+  preview_protocols?: string[];
   distributions: { id: string; label: string; glibc: string | null }[];
   rust_glibc_comfort: string;
 }
