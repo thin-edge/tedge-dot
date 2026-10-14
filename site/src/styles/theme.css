@@ -1,71 +1,97 @@
 /*
- * tedge-dot site theme: the thin-edge.io palette (orange accent on a deep navy), applied
- * through Starlight's colour tokens so that every page, the landing page and the interactive
- * tools follow the light/dark switch from one place.
+ * tedge-dot site theme: the thin-edge.io brand (the navy of the wordmark, the yellow slash, and
+ * the docs' link colours: blue in light mode, amber in dark mode), applied through Starlight's
+ * colour tokens so that every page, the landing page and the interactive tools follow the
+ * light/dark switch from one place. Brand source: github.com/thin-edge/tedge-docs
+ * (src/css/custom.css, static/img/thin-edge-logo.svg).
  */
 
 :root {
   --sl-font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --sl-font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 
-  /* Dark (Starlight's default) */
-  --sl-color-accent-low: #3b1b08;
-  --sl-color-accent: #ff7a2f;
-  --sl-color-accent-high: #ffd2b5;
+  /* Brand constants (the same in both modes). */
+  --td-brand-navy: #181564;
+  --td-brand-yellow: #ffe400;
+
+  /* Dark (Starlight's default): greys tinted toward the brand navy, amber accent. */
+  --sl-color-accent-low: #3a2a0c;
+  --sl-color-accent: #fcaf3e;
+  --sl-color-accent-high: #ffdca3;
   --sl-color-white: #ffffff;
-  --sl-color-gray-1: #e8eef5;
-  --sl-color-gray-2: #c3d0de;
-  --sl-color-gray-3: #8fa5bd;
-  --sl-color-gray-4: #557089;
-  --sl-color-gray-5: #2c4560;
-  --sl-color-gray-6: #142a40;
-  --sl-color-black: #0a1826;
+  --sl-color-gray-1: #ebebf7;
+  --sl-color-gray-2: #c6c5e2;
+  --sl-color-gray-3: #9493c2;
+  --sl-color-gray-4: #5c5b93;
+  --sl-color-gray-5: #302e6b;
+  --sl-color-gray-6: #1a1846;
+  --sl-color-black: #0e0d2c;
 
   /* Tokens of our own, used by the landing page and the tools. */
-  --td-navy: #0b1f33;
-  --td-orange: #ff7a2f;
-  --td-signal: #5cc8ff;
+  --td-highlight: var(--td-brand-yellow);
+  --td-core-from: #ffe400;
+  --td-core-to: #fcaf3e;
+  --td-core-ink: var(--td-brand-navy);
+  --td-signal: #6aa8ff;
   --td-ok: #3ddc97;
   --td-warn: #ffb547;
   --td-surface: var(--sl-color-gray-6);
-  --td-surface-raised: #1a334d;
+  --td-surface-raised: #232156;
   --td-border: var(--sl-color-gray-5);
   --td-muted: var(--sl-color-gray-3);
   --td-radius: 0.75rem;
 
   /* Chart series (validated with the dataviz palette checks on the dark surface). */
-  --td-chart-published: #e25b12;
-  --td-chart-heartbeat: #2b8fc9;
-  --td-chart-reading: #6b8299;
-  --td-chart-grid: #233a52;
+  --td-chart-published: #c98200;
+  --td-chart-heartbeat: #3f86de;
+  --td-chart-reading: #7a79a8;
+  --td-chart-grid: #2a2860;
 }
 
 :root[data-theme='light'] {
-  --sl-color-accent-low: #ffe5d4;
-  --sl-color-accent: #c2470a;
-  --sl-color-accent-high: #5a2005;
-  --sl-color-white: #0a1826;
-  --sl-color-gray-1: #142a40;
-  --sl-color-gray-2: #2c4560;
-  --sl-color-gray-3: #4a6580;
-  --sl-color-gray-4: #7e95ad;
-  --sl-color-gray-5: #c3d0de;
-  --sl-color-gray-6: #eaf0f6;
-  --sl-color-gray-7: #f5f8fb;
+  --sl-color-accent-low: #dde7f6;
+  --sl-color-accent: #204a87;
+  --sl-color-accent-high: #142f57;
+  --sl-color-white: #181564;
+  --sl-color-gray-1: #23205f;
+  --sl-color-gray-2: #3b3972;
+  --sl-color-gray-3: #5b5a88;
+  --sl-color-gray-4: #8e8db0;
+  --sl-color-gray-5: #cfcfe3;
+  --sl-color-gray-6: #ededf6;
+  --sl-color-gray-7: #f7f7fb;
   --sl-color-black: #ffffff;
 
-  --td-signal: #0077b6;
+  --td-highlight: var(--td-brand-navy);
+  --td-core-from: var(--td-brand-navy);
+  --td-core-to: #204a87;
+  --td-core-ink: #ffffff;
+  --td-signal: #2e63b8;
   --td-ok: #13875a;
   --td-warn: #a35c00;
-  --td-surface: #f5f8fb;
+  --td-surface: #f7f7fb;
   --td-surface-raised: #ffffff;
-  --td-border: #d5dfe9;
-  --td-muted: #4a6580;
+  --td-border: #dcdcea;
+  --td-muted: #5b5a88;
 
-  --td-chart-published: #c2470a;
-  --td-chart-heartbeat: #0077b6;
-  --td-chart-reading: #8197ad;
-  --td-chart-grid: #dde5ee;
+  --td-chart-published: #c47200;
+  --td-chart-heartbeat: #2e63b8;
+  --td-chart-reading: #8e8db0;
+  --td-chart-grid: #e2e2ee;
+}
+
+/* Dark mode: links, the current sidebar entry and primary buttons in full amber, as on the
+   thin-edge.io docs (Starlight would use the pale accent-high). */
+:root:not([data-theme='light']) {
+  --sl-color-text-accent: var(--sl-color-accent);
+}
+
+/* A brand rule under the header: the yellow slash on navy in dark mode, navy in light mode. */
+:root:not([data-theme='light']) header.header {
+  --sl-color-bg-nav: var(--td-brand-navy);
+}
+header.header {
+  border-bottom: 2px solid var(--td-highlight);
 }
 
 /* Headings: a touch tighter, the way product sites set them; a long token (start_bit=0,) breaks

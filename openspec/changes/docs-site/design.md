@@ -174,8 +174,11 @@ own throughout.
 
 ## Open Questions
 
-- Brand: reuse thin-edge.io's colours and logo, or give tedge-dot its own mark? (Default: the
-  thin-edge.io palette with a tedge-dot wordmark, pending a maintainer's OK.)
+- Brand: settled by a maintainer: the site matches thin-edge.io, as an extension of it. The
+  palette is taken from the thin-edge.io docs (github.com/thin-edge/tedge-docs): the wordmark's
+  navy `#181564` and yellow slash `#FFE400`, links in blue `#204a87` (light) and amber `#fcaf3e`
+  (dark). tedge-dot keeps its own small mark in those colours rather than reusing the
+  thin-edge.io logo.
 - Should the site live under the thin-edge.io docs (`thin-edge.github.io/thin-edge.io/`) later,
   rather than a separate project site? This design keeps the content portable (plain Markdown
   plus a few islands) so either works.

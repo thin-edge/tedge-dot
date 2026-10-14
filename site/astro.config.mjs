@@ -58,7 +58,7 @@ export default defineConfig({
         Banner: './src/components/Banner.astro',
       },
       head: [
-        { tag: 'meta', attrs: { name: 'theme-color', content: '#0b1f33' } },
+        { tag: 'meta', attrs: { name: 'theme-color', content: '#181564' } },
       ],
       sidebar: [
         {

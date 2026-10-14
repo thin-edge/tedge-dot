@@ -52,8 +52,8 @@ const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.1
 
       <defs>
         <linearGradient id="td-core" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="var(--td-orange)" />
-          <stop offset="1" stop-color="#ff4d6d" />
+          <stop offset="0" stop-color="var(--td-core-from)" />
+          <stop offset="1" stop-color="var(--td-core-to)" />
         </linearGradient>
         <filter id="td-glow" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="6" />
@@ -156,8 +156,8 @@ const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.1
     width: 0.6rem;
     height: 0.6rem;
     border-radius: 50%;
-    background: var(--td-orange);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--td-orange) 25%, transparent);
+    background: var(--td-highlight);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--td-highlight) 25%, transparent);
   }
   h1 {
     font-size: clamp(2.4rem, 5vw, 3.4rem);
@@ -173,16 +173,6 @@ const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.1
   }
   .td-hero-tagline :global(a) {
     color: var(--sl-color-accent-high);
-  }
-  .td-hero-actions :global(.sl-link-button.primary) {
-    background: var(--td-orange);
-    border-color: var(--td-orange);
-    color: #1b0d03;
-  }
-  :global([data-theme='light']) .td-hero-actions :global(.sl-link-button.primary) {
-    background: var(--sl-color-accent);
-    border-color: var(--sl-color-accent);
-    color: #fff;
   }
   .td-hero-actions {
     display: flex;
@@ -245,9 +235,9 @@ const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.1
       font-size: var(--sl-text-xs);
     }
     .td-flow-narrow .core {
-      background: linear-gradient(135deg, var(--td-orange), #ff4d6d);
+      background: linear-gradient(135deg, var(--td-core-from), var(--td-core-to));
       border: 0;
-      color: #fff;
+      color: var(--td-core-ink);
     }
   }
   @keyframes td-drop {
@@ -281,7 +271,7 @@ const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.1
     animation: td-flow 2.4s linear infinite;
   }
   .packet-short {
-    stroke: var(--td-orange);
+    stroke: var(--td-highlight);
     stroke-dasharray: 8 52;
     animation-duration: 1.2s;
   }
@@ -358,7 +348,7 @@ const inPath = (y: number) => `M144 ${y} C 188 ${y}, 188 ${180 + (y - 180) * 0.1
     }
   }
   .core-label {
-    fill: #fff;
+    fill: var(--td-core-ink);
     font-size: 17px;
     font-weight: 800;
     letter-spacing: -0.02em;
