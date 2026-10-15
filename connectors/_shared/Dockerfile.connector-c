@@ -4,7 +4,8 @@
 # connector module is compiled in and which stack's config/entrypoint is installed.
 #
 # Base images come from the AWS ECR Public mirror of the Docker Official Images (see the
-# Rust Dockerfiles for why); override BASE_REGISTRY to go back to docker.io/library.
+# Rust Dockerfiles for why); override BASE_REGISTRY to go back to docker.io/library;
+# CI sets it to the GHCR mirror of .github/mirror-images.txt.
 ARG BASE_REGISTRY=public.ecr.aws/docker/library
 
 FROM ${BASE_REGISTRY}/debian:bookworm AS build

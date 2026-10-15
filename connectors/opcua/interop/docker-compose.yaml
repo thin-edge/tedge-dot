@@ -19,10 +19,9 @@
 # Ports are published without a fixed host port (parallel-safe); BROKER_PORT pins the broker's
 # by hand. The servers need no host port: only the connector talks to them.
 
-# The tag is written out rather than interpolated: `just _pull-stack-images` greps `image:`
-# lines and hands them to `docker pull` verbatim, so a `${VAR}` here reaches docker as those
-# literal characters and is rejected as an invalid reference. Bumping it means editing this
-# line and REFSERVER_REF in .github/workflows/publish-simulators.yaml together.
+# Bumping the tag means editing this line and REFSERVER_REF in
+# .github/workflows/publish-simulators.yaml together. It is our own GHCR image, so it is not
+# under BASE_REGISTRY (which only selects where third-party images come from).
 x-refserver: &refserver
   image: ghcr.io/thin-edge/tedge-dot/uanetstandard-refserver:v1.5.5
   restart: unless-stopped
@@ -31,7 +30,7 @@ services:
   # Gives the servers that need one an RSA-2048 certificate; see gen-server-certs.sh for why
   # the auto-generated 1024-bit one makes every modern policy untestable.
   refserver-certs:
-    image: public.ecr.aws/docker/library/alpine:3
+    image: ${BASE_REGISTRY:-public.ecr.aws/docker/library}/alpine:3
     entrypoint: ["/bin/sh", "-c"]
     command:
       - apk add --no-cache openssl >/dev/null && exec /opt/interop/gen-server-certs.sh ref-all ref-token ref-strict
@@ -42,7 +41,7 @@ services:
       - refserver-trust:/out/ref-strict
 
   broker:
-    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    image: ${BASE_REGISTRY:-public.ecr.aws/docker/library}/eclipse-mosquitto:2
     volumes:
       - ../../_shared/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     ports:
@@ -168,6 +167,7 @@ services:
       context: ../../..
       dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/opcua/Dockerfile.connector}
       args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
         PROTOCOL: opcua
     entrypoint: ["/opt/interop/entrypoint.sh"]
     volumes:

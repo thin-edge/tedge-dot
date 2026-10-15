@@ -129,6 +129,11 @@ check-manifest-parity:
 check-release-versions:
     ./ci/check-release-versions.sh
 
+# Check that every third-party image the Dockerfiles and compose stacks use is listed in
+# .github/mirror-images.txt (CI pulls them from the GHCR mirror), and none bypasses BASE_REGISTRY.
+check-mirrored-images:
+    ./ci/check-mirrored-images.sh
+
 # Validate the thin-edge flows offline with `tedge flows test` (no broker/device/cloud).
 test-flows:
     ./flows/test-flows.sh
@@ -165,8 +170,8 @@ sim proto:
     #!/usr/bin/env bash
     set -euo pipefail
     export $(just _sim-port {{proto}})
-    # Same retried pre-pull the e2e suites use: a bare `compose up` here fails the whole CI job
-    # on `toomanyrequests: Rate exceeded`, which the shared runner egress makes routine.
+    # Same pre-pull (mirror, fallback, backoff) the e2e suites use: a bare `compose up` here
+    # fails the whole CI job when a registry throttles the shared runner egress.
     just _pull-stack-images connectors/{{proto}}/docker-compose.yaml
     docker compose -p tedge-dot-sim-{{proto}} -f connectors/{{proto}}/docker-compose.yaml up -d --build --wait simulator
     echo "{{proto}} simulator ready — see demo/config/{{proto}}.toml for usage"
@@ -287,38 +292,16 @@ _e2e proto impl args:
         --outputdir "$outdir" --variable IMPL:{{impl}} "${skips[@]+"${skips[@]}"}" {{args}} \
         connectors/{{proto}}/tests/
 
-# Pull the stack's registry images once, with backoff, before any suite starts.
+# Pull the stack's registry images -- runtime `image:`s and the `FROM` images of everything it
+# builds -- once, before any suite starts, so no suite or build touches a registry for them.
 #
-# The stacks already pull from public.ecr.aws rather than docker.io for its more generous
-# anonymous limits, but a full CI matrix still trips its per-IP throttle: the broker pull returns
-# `toomanyrequests: Rate exceeded`. Nothing then caches the image, so every suite in the job
-# repeats the same failing pull and the whole run fails in setup, before a single test executes.
-#
-# One retried pull up front fixes that: compose's default pull policy is "missing", so once the
-# image is in the local store no suite touches the registry again. Only registry references are
-# pulled -- the connector's `image:` is a locally built tag with no host, and is skipped.
-#
-# Best effort by design: if the image still cannot be pulled, fall through and let compose fail
-# with the real error in context rather than masking it here.
+# Third-party images resolve under BASE_REGISTRY: CI points it at this repository's GHCR mirror
+# (.github/mirror-images.txt), because ECR Public's and Docker Hub's anonymous quotas are per
+# egress IP, shared with every other Actions user, and regularly answered whole CI runs with
+# `429 toomanyrequests: Data limit exceeded`. A pull falls back mirror -> ECR Public -> Docker Hub
+# and is tagged as the reference the stack asked for. Best effort: see ci/pull-stack-images.py.
 _pull-stack-images compose_file:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    images=$(grep -oE 'image: *[a-z0-9.-]+\.[a-z]+/[^ ]+' {{compose_file}} | sed -E 's/image: *//' | sort -u)
-    for image in $images; do
-        docker image inspect "$image" >/dev/null 2>&1 && continue
-        pulled=""
-        for attempt in 1 2 3 4 5; do
-            docker pull -q "$image" >/dev/null 2>&1 && { pulled=yes; break; }
-            [ "$attempt" = 5 ] && break
-            echo "pull of $image failed (attempt $attempt/5); retrying in $((attempt * 5))s" >&2
-            sleep $((attempt * 5))
-        done
-        if [ -n "$pulled" ]; then
-            echo "pulled $image"
-        else
-            echo "warning: could not pull $image; letting compose try" >&2
-        fi
-    done
+    python3 -I ci/pull-stack-images.py {{compose_file}}
 
 # Build the stack's own images once, under a fixed project, before any suite starts.
 #
@@ -411,6 +394,7 @@ _cloud proto impl args:
         [ -n "$cap" ] && skips+=(--skip "requires:$cap")
     done <<< "$caps"
     just venv
+    just _pull-stack-images cloud/{{proto}}/docker-compose.yaml
     ./.venv/bin/python -m robot \
         --outputdir "$outdir" --variable IMPL:{{impl}} "${skips[@]+"${skips[@]}"}" {{args}} \
         cloud/{{proto}}/tests/
