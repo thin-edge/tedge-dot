@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.18](https://github.com/thin-edge/tedge-dot/compare/0.0.17...0.0.18) (2026-10-15)
+
+
+### Features
+
+* **docs:** documentation site (Astro + Starlight) on GitHub Pages ([#77](https://github.com/thin-edge/tedge-dot/issues/77)) ([1452296](https://github.com/thin-edge/tedge-dot/commit/145229611a970320db8005b52becd1b3ef1fe8dd))
+
 ## [0.0.17](https://github.com/thin-edge/tedge-dot/compare/0.0.16...0.0.17) (2026-10-13)
 
 
