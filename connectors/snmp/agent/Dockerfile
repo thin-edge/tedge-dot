@@ -3,6 +3,7 @@
 #
 #   SNMP_AGENT_PORT   UDP port to serve on (default 161; the demo runs it host-networked on 1161)
 #   SNMP_ENGINE_ID    this agent's SNMPv3 engine ID, hex (default 80001f8880e2e0000000000001)
+# CI overrides BASE_REGISTRY with the GHCR mirror of .github/mirror-images.txt.
 ARG BASE_REGISTRY=public.ecr.aws/docker/library
 FROM ${BASE_REGISTRY}/python:3.12-slim
 COPY connectors/snmp/agent/requirements.txt /tmp/requirements.txt

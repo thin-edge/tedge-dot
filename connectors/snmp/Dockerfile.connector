@@ -3,6 +3,7 @@
 
 # Base images come from the AWS ECR Public mirror of the Docker Official Images (see
 # connectors/modbus/Dockerfile.connector); override BASE_REGISTRY to go back to docker.io.
+# CI overrides BASE_REGISTRY with the GHCR mirror of .github/mirror-images.txt.
 ARG BASE_REGISTRY=public.ecr.aws/docker/library
 # Accepted (and ignored) so the compose file can pass it to either implementation's
 # Dockerfile; the C build (connectors/_shared/Dockerfile.connector-c) selects its module with it.

@@ -11,5 +11,10 @@ updates:
       site:
         patterns: ["*"]
         exclude-patterns: ["astro", "@astrojs/*", "starlight-*"]
+    ignore:
+      # @astrojs/preact 6 peers on preact@^10, so a preact 11 bump fails `npm ci` with ERESOLVE
+      # and the whole group PR can never pass. Remove once @astrojs/preact accepts preact 11.
+      - dependency-name: "preact"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore(docs)"

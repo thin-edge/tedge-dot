@@ -5,6 +5,7 @@
 #
 # User-defined mappers need a thin-edge build newer than the demo image's release, so tedge is
 # installed from the `main` channel here. Build context is the repo root.
+# CI overrides BASE_REGISTRY with the GHCR mirror of .github/mirror-images.txt.
 ARG BASE_REGISTRY=public.ecr.aws/docker/library
 FROM ${BASE_REGISTRY}/debian:bookworm-slim
 

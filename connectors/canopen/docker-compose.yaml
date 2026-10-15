@@ -15,7 +15,7 @@ services:
     # the host's network namespace (vcan0), so they reach the broker over the host loopback.
     # No published port at all, which keeps the project parallel-safe.
     network_mode: host
-    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    image: ${BASE_REGISTRY:-public.ecr.aws/docker/library}/eclipse-mosquitto:2
     volumes:
       - ../_shared/mosquitto-anon.conf:/mosquitto/config/mosquitto.conf:ro
     command: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf", "-p", "13884"]
@@ -24,6 +24,8 @@ services:
     build:
       context: ../..
       dockerfile: connectors/canopen/sim/Dockerfile
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
     network_mode: host
     privileged: true
     depends_on:
@@ -45,6 +47,7 @@ services:
       context: ../..
       dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/canopen/Dockerfile.connector}
       args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
         PROTOCOL: canopen
     labels:
       # Marks the service DeviceLibrary treats as the device under test, so `Execute Command`

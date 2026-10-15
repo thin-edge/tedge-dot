@@ -20,6 +20,7 @@ services:
       context: ../..
       dockerfile: cloud/modbus/Dockerfile.tedge
       args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
         IMPL: ${IMPL:-rust}
     privileged: true
     labels:
@@ -39,6 +40,8 @@ services:
     build:
       context: ../..
       dockerfile: connectors/modbus/sim/Dockerfile
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080')"]

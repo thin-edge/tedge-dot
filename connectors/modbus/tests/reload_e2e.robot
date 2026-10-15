@@ -14,6 +14,11 @@ Documentation       SIGHUP reloads the connector configuration without restartin
 ...                 - a change a connector cannot adopt in place (its service name) restarts it.
 ...
 ...                 The process is PID 1 of the connector container: the entrypoint execs it.
+...
+...                 Because the directory is watched, a change need not wait for its SIGHUP: the
+...                 connector may act on the edit itself first (the C build has published the
+...                 restart within milliseconds of the write). Every test therefore clears the
+...                 message buffer BEFORE it edits a file, never between the edit and the reload.
 
 Resource            ../../_shared/stack.resource
 Library             Collections
@@ -54,9 +59,9 @@ A Changed Config Is Applied In Place
     ...                its connector: its service health never goes down. The connectors whose files
     ...                did not change are left alone entirely — their devices are not reconnected,
     ...                so no link status is published for them.
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=printf '\\n[[device.point]]\\nid = "reloaded_u16"\\ndatatype = "uint16"\\naddress = { table = "holding", address = 3, count = 1 }\\n' >> ${CONFIG_DIR}/plc-3.toml
-    Clear Messages
     Send Reload
     Wait For Sample    te/device/plc-3/ot/${PROTOCOL}/sample/reloaded_u16    timeout=${SAMPLE_TIMEOUT}
     Sleep    ${SETTLE}
@@ -86,9 +91,9 @@ A Removed Config File Stops Its Connector
 An Unusable Config Keeps The Running Connector
     [Documentation]    A file that no longer loads is reported, and its connector keeps running on
     ...                the configuration it had: still polling, never restarted.
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=cp ${CONFIG_DIR}/plc-5.toml /tmp/plc-5.toml && printf '[[[\\n' >> ${CONFIG_DIR}/plc-5.toml
-    Clear Messages
     Send Reload
     Sleep    ${SETTLE}
     Wait For Sample    te/device/plc-5/ot/${PROTOCOL}/sample/device_id    timeout=${SAMPLE_TIMEOUT}
@@ -100,9 +105,9 @@ A Changed Service Name Restarts The Connector
     ...                management topic, so a changed one cannot be adopted in place: the connector
     ...                restarts under the new name — the old service goes down, the new one comes up
     ...                — and polls its device again.
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=sed -i 's/^service_name *= *"tedge-dot-6"/service_name = "tedge-dot-6b"/' ${CONFIG_DIR}/plc-6.toml
-    Clear Messages
     Send Reload
     Wait For Message Containing    te/device/main/service/tedge-dot-6/status/health
     ...    "status":"down"    timeout=${SAMPLE_TIMEOUT}
@@ -113,8 +118,8 @@ A Changed Service Name Restarts The Connector
 A Config That Could Not Start Is Tried Again On Reload
     [Documentation]    A new file that does not load starts nothing; once it is fixed, the next
     ...                reload starts its connector.
-    DeviceLibrary.Execute Command    cmd=printf '[[[\\n' > ${CONFIG_DIR}/plc-12.toml
     Clear Messages
+    DeviceLibrary.Execute Command    cmd=printf '[[[\\n' > ${CONFIG_DIR}/plc-12.toml
     Send Reload
     Sleep    ${SETTLE}
     ${health}=    Get Messages    te/device/main/service/tedge-dot-12/status/health
