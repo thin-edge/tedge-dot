@@ -18,7 +18,7 @@ Build the connector once, and say where the demo point lists are:
 
 ```sh
 cargo build --manifest-path impl/rust/Cargo.toml
-export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
 ```
 
 > **Why the export.** Each config in [config/](config/) holds only what is
@@ -114,18 +114,18 @@ simulators; the installed package runs all the connectors under **one**
 systemd service.
 
 ```
-┌──────────────────────────── Linux device ────────────────────────────┐
+┌──────────────────────────── Linux device ─────────────────────────────┐
 │                                                                       │
 │  docker compose (simulators)              tedge-dot.service           │
 │  ┌─────────────────────────┐              (one systemd unit)          │
-│  │ modbus-sim    tcp :5020  │◄──────────── tedge-dot (modbus)         │
-│  │ opcua-sim     tcp :4840  │◄──────────── tedge-dot (opcua)          │
-│  │ canbus-sim    vcan0      │◄── socketcan─ tedge-dot (canbus)        │
-│  │ canopen-sim   vcan0      │◄── socketcan─ tedge-dot (canopen)       │
-│  │ profibus-sim  tcp :9200  │◄──── tcp ──── tedge-dot (profibus)      │
+│  │ modbus-sim    tcp :5020 │◄──────────── tedge-dot (modbus)          │
+│  │ opcua-sim     tcp :4840 │◄──────────── tedge-dot (opcua)           │
+│  │ canbus-sim    vcan0     │◄── socketcan─ tedge-dot (canbus)         │
+│  │ canopen-sim   vcan0     │◄── socketcan─ tedge-dot (canopen)        │
+│  │ profibus-sim  tcp :9200 │◄──── tcp ──── tedge-dot (profibus)       │
 │  └─────────────────────────┘                     │                    │
-│                                                   ▼                    │
-│                              mosquitto :1883 (thin-edge.io broker)     │
+│                                                  ▼                    │
+│                              mosquitto :1883 (thin-edge.io broker)    │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 

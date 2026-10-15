@@ -1,0 +1,43 @@
+---
+// Show a repository file, or the part of it between `site:start <marker>` / `site:end <marker>`
+// comments, as a code block that links to the file on GitHub. Read at build time: a change to
+// the file changes the guide.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { Code } from '@astrojs/starlight/components';
+import { selectSnippet } from '../lib/snippets';
+
+interface Props {
+  /** Path from the repository root, e.g. demo/config/modbus.toml */
+  path: string;
+  marker?: string;
+  lang?: string;
+  title?: string;
+  /** Line ranges or text to highlight, as Starlight's <Code mark=...> takes them. */
+  mark?: string | string[];
+}
+
+const { path, marker, lang, title, mark } = Astro.props;
+// Builds run from site/ (npm scripts), so the repository root is its parent.
+const text = readFileSync(resolve(process.cwd(), '..', path), 'utf8');
+const code = selectSnippet(text, marker, path);
+const language = lang ?? path.split('.').pop();
+const href = `https://github.com/thin-edge/tedge-dot/blob/main/${path}`;
+---
+
+<div class="repo-file">
+  <Code code={code} lang={language} title={title ?? path} mark={mark} />
+  <a class="repo-file-link" href={href}>View <code>{path}</code> on GitHub</a>
+</div>
+
+<style>
+  .repo-file-link {
+    display: inline-block;
+    margin-top: 0.35rem;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .repo-file-link:hover {
+    color: var(--sl-color-accent);
+  }
+</style>

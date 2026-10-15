@@ -1,0 +1,74 @@
+# The two tedge-dot packages, the default (tedge-dot-c) first: one data table for the install
+# guide's package table and the package picker. The table in doc/install.md is rendered from `packages[*].table` (the site
+# replaces it at build time, and a test fails when the copy in doc/install.md differs).
+
+packages:
+  - id: tedge-dot-c
+    implementation: C
+    source: impl/c/
+    table:
+      pick: >-
+        **Default.** ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol, including the PROFIBUS-DP preview.
+    architectures: [amd64, arm64, armhf]
+    glibc_min: "2.17"
+    binary_size: 457 KB
+    protocols: [modbus, opcua, canbus, canopen, snmp, profibus]
+    features: []
+  - id: tedge-dot-rs
+    implementation: Rust
+    source: impl/rust/
+    table:
+      pick: >-
+        When you need a feature only the Rust build has: SNMPv3 with SHA-2 or AES-192/256, OPC UA structured values, the deprecated Basic128Rsa15 policy, or CAN FD.
+    architectures: [amd64, arm64]
+    # Not pinned: the Rust build is not tested on old distributions.
+    glibc_min: null
+    binary_size: 12 MB
+    protocols: [modbus, opcua, canbus, canopen, snmp]
+    features:
+      - snmpv3-sha2
+      - opcua-basic128rsa15
+      - opcua-structures
+      - canbus-fd
+      - profibus-serial
+
+# What each feature id means, for the picker's questions and explanations.
+features:
+  snmpv3-sha2:
+    label: SNMPv3 with SHA-2 authentication or AES-192/256 privacy
+  opcua-basic128rsa15:
+    label: OPC UA servers that only offer the deprecated Basic128Rsa15 policy
+  opcua-structures:
+    label: OPC UA structured values (ExtensionObject fields, array elements)
+  canbus-fd:
+    label: CAN FD frames
+  profibus-serial:
+    label: PROFIBUS-DP on a serial RS-485 line (not through a device server)
+
+# Protocols in preview: tested in CI against simulators (a virtual SocketCAN bus, a PROFIBUS-DP
+# slave simulator) but not yet on real equipment. The landing page, the picker and the config
+# builder mark them (src/data/protocols.json repeats the flag; a test keeps the two equal).
+preview_protocols: [canbus, canopen, profibus]
+
+protocols:
+  modbus: Modbus TCP / RTU
+  opcua: OPC UA
+  snmp: SNMP
+  canbus: CAN bus (DBC)
+  canopen: CANopen
+  profibus: PROFIBUS-DP
+
+# Distribution choices for the picker, with the glibc each one ships.
+distributions:
+  - { id: debian8, label: "Debian 8 (jessie)", glibc: "2.19" }
+  - { id: debian9, label: "Debian 9 (stretch)", glibc: "2.24" }
+  - { id: debian10, label: "Debian 10 (buster)", glibc: "2.28" }
+  - { id: debian11, label: "Debian 11 or newer", glibc: "2.31" }
+  - { id: rhel7, label: "RHEL / CentOS 7", glibc: "2.17" }
+  - { id: rhel8, label: "RHEL 8 or newer", glibc: "2.28" }
+  - { id: ubuntu18, label: "Ubuntu 18.04", glibc: "2.27" }
+  - { id: ubuntu20, label: "Ubuntu 20.04 or newer", glibc: "2.31" }
+  - { id: yocto, label: "Yocto / Buildroot / other", glibc: null }
+
+# Below this glibc the Rust package is not tested; the picker says so when it is needed there.
+rust_glibc_comfort: "2.28"

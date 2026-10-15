@@ -525,3 +525,18 @@ c-package arch="arm64" version="0.0.0-dev":
             pkg -f impl/c/packaging/nfpm.yaml -p "$format" -t impl/c/dist/packages/
     done
     ls -l impl/c/dist/packages
+
+# --- Documentation site (site/) ------------------------------------------------
+#
+# An Astro + Starlight project with its own package.json; Node is needed for the site only.
+# Reference pages are generated from the repository's Markdown (site/docs-map.yaml) on every
+# run, so edit the file in doc/ (or wherever it lives), not the generated page.
+
+# Serve the documentation site locally with live reload (http://localhost:4321/tedge-dot/).
+docs:
+    cd site && npm ci --no-audit --no-fund && npm run dev
+
+# Build the documentation site into site/dist and run its checks (sync tests, tool tests,
+# link validation).
+docs-build:
+    cd site && npm ci --no-audit --no-fund && npm test && npm run build

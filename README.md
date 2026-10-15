@@ -8,6 +8,9 @@ MQTT broker.
 
 > **Status: alpha.** The MQTT contract, config format and packaging may still
 > change between releases.
+>
+> **AI-driven project.** tedge-dot is developed largely by AI coding agents. Check what it
+> does before you rely on it, and [report what you find](https://github.com/thin-edge/tedge-dot/issues).
 
 ## Two implementations, one contract
 
@@ -17,8 +20,12 @@ packages that both install `/usr/bin/tedge-dot`:
 
 | Package | Source | Pick it when |
 |---|---|---|
-| **`tedge-dot-rs`** | [impl/rust/](impl/rust/) | Default. Richest protocol support, one static binary, no shared-library dependencies. |
-| **`tedge-dot-c`** | [impl/c/](impl/c/) | Small or old devices: ~25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era), and it ships the PROFIBUS-DP connector the Rust package omits. |
+| **`tedge-dot-c`** | [impl/c/](impl/c/) | **Default.** ~25x smaller, a glibc 2.17 floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol, including the PROFIBUS-DP preview. |
+| **`tedge-dot-rs`** | [impl/rust/](impl/rust/) | When you need a feature only the Rust build has: SNMPv3 with SHA-2 or AES-192/256, OPC UA structured values, the deprecated Basic128Rsa15 policy, or CAN FD. |
+
+> **Not final yet:** both packages are maintained and released today, but whether both will remain
+> in the final product is not decided. They implement the same contract, so a config, a flow or a
+> cloud integration built for one carries over to the other.
 
 The two are mutually exclusive — a host installs one or the other — and a
 config, a flow or a cloud integration built against one works unchanged against
@@ -55,10 +62,15 @@ one protocol, selected by `connector.protocol` in its config file.
 |---|---|---|---|
 | Modbus (reference) | TCP + RTU | ✅ | ✅ |
 | OPC UA (None, Basic256Sha256, Aes128/Aes256 policies; username and X.509 users) | opc.tcp | ✅ | ✅ |
-| CAN bus | Linux SocketCAN + DBC | ✅ | ✅ |
-| CANopen | Linux SocketCAN (SDO) | ✅ | ✅ |
-| PROFIBUS-DP | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
 | SNMP (v1/v2c/v3: polling, writes, traps and informs) | UDP | ✅ | ✅ (no SHA-2 / AES-192/256) |
+| CAN bus *(preview)* | Linux SocketCAN + DBC | ✅ | ✅ |
+| CANopen *(preview)* | Linux SocketCAN (SDO) | ✅ | ✅ |
+| PROFIBUS-DP *(preview)* | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
+
+**Preview:** the CAN bus, CANopen and PROFIBUS-DP connectors are tested in CI against simulators
+(a virtual SocketCAN bus and a PROFIBUS-DP slave simulator) but not yet on real equipment, so
+expect rough edges and changes. If you try one on real hardware, please
+[tell us how it went](https://github.com/thin-edge/tedge-dot/issues).
 
 Rust modules: [connector-modbus](impl/rust/crates/connector-modbus/),
 [connector-opcua](impl/rust/crates/connector-opcua/),
@@ -87,7 +99,7 @@ device's link status says so; `tedge-dot pki trust <thumbprint>` trusts it, no r
 
 ## Install
 
-Install `tedge-dot-rs` (or `tedge-dot-c`) from the thin-edge.io
+Install `tedge-dot-c` (or `tedge-dot-rs`) from the thin-edge.io
 [community repository](https://thin-edge.github.io/thin-edge.io/install/#community-plugins),
 or grab a `.deb`/`.rpm`/`.apk` (or a plain binary archive) from the
 [releases page](https://github.com/thin-edge/tedge-dot/releases). The package depends on
@@ -189,7 +201,7 @@ poke — the CLI talks to the device directly:
 
 ```sh
 just sim modbus     # pymodbus simulator on 127.0.0.1:5020
-export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d   # where the demo point lists live in a checkout
+export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d   # where the demo point lists live in a checkout
 cargo run --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml                    # all devices, all readable points
 cargo run --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml -d plc1 -p 'temp_*' --poll   # keep polling (Ctrl-C stops)
 cargo run --manifest-path impl/rust/Cargo.toml -- run  -c demo/config/modbus.toml --output stdout --duration 10s  # sample JSON lines, no broker

@@ -1,0 +1,49 @@
+---
+// A landing-page section: a kicker, a heading, a short intro (default slot) and its body.
+interface Props {
+  kicker: string;
+  title: string;
+}
+const { kicker, title } = Astro.props;
+const id = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+---
+
+<section class="td-section" aria-labelledby={id}>
+  <div class="td-section-head">
+    <p class="td-section-kicker">{kicker}</p>
+    <h2 id={id}>{title}</h2>
+    <div class="td-section-intro"><slot /></div>
+  </div>
+  <div class="td-section-body"><slot name="body" /></div>
+</section>
+
+<style>
+  .td-section {
+    padding-block: 2.5rem;
+    border-top: 1px solid var(--td-border);
+  }
+  .td-section-head {
+    max-width: 44rem;
+    margin-bottom: 1.5rem;
+  }
+  .td-section-kicker {
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sl-color-accent);
+  }
+  h2 {
+    margin-top: 0.35rem !important;
+    font-size: clamp(var(--sl-text-2xl), 4vw, var(--sl-text-4xl));
+    font-weight: 800;
+    letter-spacing: -0.025em;
+  }
+  .td-section-intro {
+    margin-top: 0.75rem;
+    color: var(--sl-color-gray-2);
+  }
+  .td-section-intro :global(p) {
+    margin: 0;
+  }
+</style>

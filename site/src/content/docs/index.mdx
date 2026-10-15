@@ -1,0 +1,78 @@
+---
+title: Every fieldbus, one contract.
+description: tedge-dot connects Modbus, OPC UA, SNMP, CAN bus, CANopen and PROFIBUS-DP equipment to thin-edge.io through one neutral MQTT contract.
+template: splash
+tableOfContents: false
+editUrl: false
+hero:
+  tagline: >-
+    <strong>tedge-dot</strong> connects Modbus, OPC UA and SNMP equipment (with CAN bus, CANopen
+    and PROFIBUS-DP in preview) to <a href="https://thin-edge.io">thin-edge.io</a>. A lean driver publishes one
+    protocol-neutral MQTT contract; small JavaScript flows turn it into measurements, alarms and
+    device parameters in the cloud.
+  actions:
+    - text: Get started
+      link: /tedge-dot/get-started/overview/
+      icon: right-arrow
+    - text: Try it in 5 minutes
+      link: /tedge-dot/get-started/first-device/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/thin-edge/tedge-dot
+      icon: external
+      variant: minimal
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import ProtocolGrid from '../../components/landing/ProtocolGrid.astro';
+import TwoPackages from '../../components/landing/TwoPackages.astro';
+import QuickStart from '../../components/landing/QuickStart.astro';
+import Section from '../../components/landing/Section.astro';
+
+<Section kicker="Protocols" title="Six protocols, one shape of data">
+  Every connector publishes the same `sample`, `status` and `cmd` envelopes on
+  `te/device/<device>/ot/<protocol>/…`, so a flow, a dashboard or a cloud integration written
+  once works for all of them. The connectors marked *Preview* are tested against simulators but
+  not yet on real equipment.
+  <ProtocolGrid slot="body" />
+</Section>
+
+<Section kicker="Packages" title="Two packages, one contract">
+  The same `tedge-dot` exists twice, written in Rust and in C, released together and held to the
+  same test suites. Start with `tedge-dot-c`; configs and flows work unchanged on both. Whether
+  both remain in the final product is not decided yet.
+  <TwoPackages slot="body" />
+</Section>
+
+<Section kicker="Quick start" title="Read a PLC in a minute">
+  No gateway, broker or cloud needed for a first look: start the Modbus simulator and read it
+  with the CLI.
+  <QuickStart slot="body" />
+</Section>
+
+<Section kicker="Guides" title="Pick your scenario">
+  Each guide runs end to end against the demo simulators.
+  <div slot="body">
+    <CardGrid>
+      <LinkCard title="Modbus TCP PLC to Cumulocity" description="Install, point a connector at a PLC and watch measurements arrive." href="/tedge-dot/guides/modbus-to-cumulocity/" />
+      <LinkCard title="Secured OPC UA" description="Certificates, trust and the tedge-dot pki CLI." href="/tedge-dot/guides/secured-opcua/" />
+      <LinkCard title="CAN bus and CANopen (preview)" description="DBC signals and SDO objects over SocketCAN." href="/tedge-dot/guides/canbus-canopen/" />
+      <LinkCard title="SNMP network devices" description="Poll, SET, and receive traps and informs." href="/tedge-dot/guides/snmp/" />
+      <LinkCard title="A fleet of identical devices" description="One point library, many instances." href="/tedge-dot/guides/fleet-point-libraries/" />
+      <LinkCard title="Less data on a metered link" description="Report by exception, with a heartbeat." href="/tedge-dot/guides/reducing-data-volume/" />
+      <LinkCard title="Write to devices from the cloud" description="Device parameters, value maps and literal parameters." href="/tedge-dot/guides/writing-to-devices/" />
+      <LinkCard title="Small and old gateways" description="tedge-dot-c: 457 KB, down to glibc 2.17." href="/tedge-dot/guides/small-gateways/" />
+    </CardGrid>
+  </div>
+</Section>
+
+<Section kicker="Tools" title="Try it in the browser">
+  Checked in CI against the same schema and test vectors the connectors use.
+  <div slot="body">
+    <CardGrid>
+      <LinkCard title="Config builder" description="Build a valid connector config, validated as you type." href="/tedge-dot/tools/config-builder/" />
+      <LinkCard title="Package picker" description="tedge-dot-rs or tedge-dot-c? Answer four questions." href="/tedge-dot/tools/package-picker/" />
+      <LinkCard title="Report-policy playground" description="See what on_change, deadband and heartbeats publish." href="/tedge-dot/tools/report-playground/" />
+    </CardGrid>
+  </div>
+</Section>

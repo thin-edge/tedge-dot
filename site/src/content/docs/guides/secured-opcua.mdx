@@ -1,0 +1,203 @@
+---
+title: Connect to a secured OPC UA server
+description: Sign and encrypt the session, trust the server's certificate (pinned or through a CA with its CRL), log in as a user, and read the link status when something is refused.
+sidebar:
+  order: 2
+---
+
+import { Steps, Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+Most production OPC UA servers refuse anonymous, unencrypted sessions. tedge-dot connects to them
+with an application certificate of its own, and it only talks to a server whose certificate it
+trusts. Nothing is trusted implicitly.
+
+**What you'll build:** a device that connects to the demo's secured OPC UA simulator
+(`opcua-secure-sim`, `Basic256Sha256` with `sign_and_encrypt`, user `operator`). You'll see its first
+connection get refused because the server's certificate is unknown. Then you'll trust that
+certificate with `tedge-dot pki` and watch the device connect, with no restart.
+
+You need a Linux host with thin-edge.io and a tedge-dot package installed ([Install](/tedge-dot/get-started/install/)),
+and Docker for the simulator. Both packages support OPC UA security with the same PKI layout and
+trust rules.
+
+## Try it with the demo
+
+<Steps>
+
+1. **Start the secured simulator.** It is opt-in (compose profile `secure`) and listens on
+   `127.0.0.1:4841`:
+
+   ```sh
+   docker compose -f /usr/share/tedge-dot/demo/docker-compose.yaml --profile secure up -d opcua-secure-sim
+   ```
+
+   From a checkout, use `demo/docker-compose.yaml` instead.
+
+2. **Add the secured device.** Copy the demo OPC UA config into place:
+
+   ```sh
+   sudo cp /usr/share/tedge-dot/demo/opcua.toml /etc/tedge/plugins/ot/opcua.toml
+   ```
+
+   Then uncomment the `opc-secure` device at the end of the file:
+
+   <RepoFile path="demo/config/opcua.toml" marker="secure-device" title="/etc/tedge/plugins/ot/opcua.toml (uncomment)" />
+
+   The service applies the change within a few seconds. The first time a secured device is
+   configured, the connector generates its application certificate in
+   `/var/lib/tedge-dot/opcua/pki`.
+
+3. **Watch the link status.** Each device publishes its link status, retained, on
+   `te/device/<device>/ot/<protocol>/status/link`:
+
+   ```sh
+   tedge mqtt sub 'te/device/opc-secure/ot/opcua/status/link'
+   ```
+
+   The device is `disconnected`, with a reason starting with `certificate untrusted:`. The reason
+   names the server certificate's thumbprint and subject, and the command that trusts it. The
+   connector has also copied the certificate to `rejected/certs` for you to review.
+
+4. **Review and trust the server certificate.**
+
+   ```sh
+   sudo tedge-dot pki list rejected
+   sudo tedge-dot pki trust <first 8 digits of the thumbprint>
+   ```
+
+   The trust lists are read again on every connection attempt, so the device connects on its next
+   attempt. You don't need to reload or restart anything. The link status changes to `connected`,
+   and its `info` shows `"server_certificate": "trusted"` and the server's thumbprint.
+
+</Steps>
+
+## How the configuration works
+
+Security is set per device in `protocol_address`, with defaults in `[connection]`. The demo
+connection defaults to no security, and the secured device overrides it:
+
+<RepoFile path="demo/config/opcua.toml" marker="connection" />
+
+- **Policy and mode.** `security_policy` takes the policy name (`Basic256Sha256`,
+  `Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss`, …) and `security_mode` takes `none`, `sign` or
+  `sign_and_encrypt`. If a device sets a policy but no mode, it gets that policy's default mode
+  (`sign_and_encrypt`). The `None` policy requires the mode `none`. The deprecated `Basic128Rsa15`
+  and `Basic256` policies need `allow_deprecated_security = true`.
+- **Identity.** Each device uses exactly one identity: anonymous (no identity keys), `user` with
+  `password` or `password_file`, or an X.509 user (`user_certificate` and `user_private_key`). A
+  `password_file` keeps the secret out of a file that management commands may rewrite.
+- **Plaintext passwords are refused.** A password that would travel unprotected, for example on a
+  channel with no message security, fails with `plaintext password refused:` unless you set
+  `allow_plaintext_password = true`.
+- **The endpoint is dialled as configured.** The connector discovers the server's endpoints and
+  picks the one that matches the device's policy, mode and identity. It then always connects to
+  the host and port in `endpoint`, whatever URL the server advertises, which helps with servers
+  behind NAT or in containers.
+
+The full key tables are in the [OPC UA connector reference](/tedge-dot/reference/connectors/opcua/#3-configuration).
+
+## The PKI directory
+
+The connector keeps its certificates in `/var/lib/tedge-dot/opcua/pki` (set `pki_dir` in
+`[connection]` to change it):
+
+| Directory | Holds |
+| --- | --- |
+| `own/` | The application certificate (`own/certs/cert.der`) and its private key |
+| `trusted/certs/`, `trusted/crl/` | Pinned server certificates and trusted CAs, with the CAs' CRLs |
+| `issuers/certs/`, `issuers/crl/` | Intermediate CAs. They complete a chain but are never trusted on their own |
+| `rejected/certs/` | Server certificates that failed validation, for you to review |
+
+A server certificate is trusted in one of two ways:
+
+<Tabs>
+  <TabItem label="Pin the certificate">
+    Trust exactly this certificate. This suits a single server with a self-signed certificate,
+    as in the demo:
+
+    ```sh
+    sudo tedge-dot pki trust <thumbprint>          # a rejected certificate, by thumbprint
+    sudo tedge-dot pki trust ./server-cert.der     # or import a certificate file
+    ```
+
+  </TabItem>
+  <TabItem label="Trust a CA">
+    Trust every server certificate that a CA issued. A CA is only usable with a CRL, so add
+    one (an empty CRL if the CA has revoked nothing):
+
+    ```sh
+    sudo tedge-dot pki trust ./site-ca.pem          # the root CA, as trusted
+    sudo tedge-dot pki add-issuer ./intermediate.pem  # intermediates, if any
+    sudo tedge-dot pki add-crl ./site-ca.crl        # each CA's CRL
+    ```
+
+    If a CRL is missing, the device is refused with `certificate revoked:` and the reason says
+    "revocation unknown". To stop trusting one certificate from a trusted CA, revoke it in that
+    CA's CRL.
+
+  </TabItem>
+</Tabs>
+
+Servers often need to trust **your** certificate too. Export it (never the key) and give it to the
+server's administrator:
+
+```sh
+tedge-dot pki show                         # subject, thumbprint, validity, application URI
+tedge-dot pki export --pem -o tedge-dot.pem
+```
+
+<Aside type="caution" title="trust_any_server_certificate">
+  `trust_any_server_certificate = true` skips server certificate validation entirely. Messages are
+  still signed and encrypted, but you can no longer tell whether you're talking to the right
+  server. The connector logs a warning on every connection. Use it only on a test bench.
+</Aside>
+
+## `tedge-dot pki` at a glance
+
+`tedge-dot pki` works offline (no broker, no server). It uses the PKI directory from `--pki-dir`,
+or else from the `pki_dir` of `--config`, or else from `/etc/tedge/plugins/ot/opcua.toml`. Add
+`--json` for machine-readable output.
+
+| Command | Does |
+| --- | --- |
+| `show` | Shows the application certificate |
+| `export [--pem] [-o FILE]` | Writes the application certificate (never the key) |
+| `create [--application-uri URI] [--hostname NAME]... [--days N] [--force]` | Generates the application certificate. `--force` replaces an existing one and keeps the old one |
+| `list [trusted\|issuers\|rejected]` | Lists the certificates, with the CAs' CRL status |
+| `trust <thumbprint\|file>` | Trusts a rejected certificate, or imports a file as trusted |
+| `reject <thumbprint>` | Moves a trusted certificate to `rejected/` |
+| `remove <thumbprint> [--group G]` | Deletes a certificate |
+| `add-issuer <file>` | Imports intermediate CAs |
+| `add-crl <file>` | Stores a CRL next to the CA that issued it |
+
+A thumbprint can be a prefix of at least 8 hex digits. See the
+[reference](/tedge-dot/reference/connectors/opcua/#8-tedge-dot-pki) for the JSON fields and exit codes.
+
+## When a device stays disconnected
+
+The `reason` in the link status starts with a fixed prefix. Match on the prefix; the text after it
+is written for people:
+
+| Prefix | What to do |
+| --- | --- |
+| `certificate untrusted:` | Trust the server certificate, or its CA (see above). |
+| `application certificate rejected:` | The **server** refused **your** certificate. Run `tedge-dot pki export` and have the server trust it. |
+| `certificate invalid:` | The certificate is expired, its host name or application URI does not match, or its key is too short for the policy. Fix the server's certificate; trusting it won't help. |
+| `certificate revoked:` | It is revoked, or a CA's CRL is missing ("revocation unknown"). Add the CRL. |
+| `no matching endpoint:` | The server offers no endpoint with this policy and mode. The reason lists what it does offer. |
+| `identity rejected:` / `identity unsupported:` | Wrong user or password, or the endpoint doesn't accept this kind of identity. |
+| `plaintext password refused:` | Use a signed and encrypted mode, or allow plaintext passwords explicitly. |
+| `application certificate:` | Your own certificate could not be loaded or created, or it has expired. |
+
+Unsecured devices keep working while a secured device is refused. The full rules are in
+[Reasons (link status)](/tedge-dot/reference/connectors/opcua/#53-reasons-link-status).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="OPC UA connector reference" description="Every key, the validation steps and the PKI rules." href="/tedge-dot/reference/connectors/opcua/" />
+  <LinkCard title="A fleet of identical devices" description="Share one point list, and one namespace table, across many servers." href="/tedge-dot/guides/fleet-point-libraries/" />
+  <LinkCard title="Writing to devices from the cloud" description="Make writable nodes editable as Cumulocity device parameters." href="/tedge-dot/guides/writing-to-devices/" />
+  <LinkCard title="Reducing data volume" description="Report by exception, with a heartbeat that also proves the server is alive." href="/tedge-dot/guides/reducing-data-volume/" />
+</CardGrid>

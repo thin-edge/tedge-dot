@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # The documentation site's npm dependencies (site/ only; Node is not used by the packages).
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+    groups:
+      astro:
+        patterns: ["astro", "@astrojs/*", "starlight-*"]
+      site:
+        patterns: ["*"]
+        exclude-patterns: ["astro", "@astrojs/*", "starlight-*"]
+    commit-message:
+      prefix: "chore(docs)"

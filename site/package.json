@@ -1,0 +1,44 @@
+{
+  "name": "tedge-dot-site",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "The tedge-dot documentation site (Astro + Starlight)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview",
+    "test": "vitest run",
+    "check": "npm run test && npm run build && npm run check:budget",
+    "check:budget": "node scripts/check-budget.mjs",
+    "check:layout": "node scripts/check-layout.mjs"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "^7.3.2",
+    "@astrojs/preact": "^6.0.6",
+    "@astrojs/starlight": "^0.42.6",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "astro": "^7.3.8",
+    "github-slugger": "^2.0.0",
+    "mdast-util-from-markdown": "^2.1.0",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "preact": "^10.29.8",
+    "sharp": "^0.34.5",
+    "smol-toml": "^1.6.1",
+    "starlight-links-validator": "^0.27.0",
+    "unist-util-visit": "^5.1.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,145 @@
+---
+title: CAN bus and CANopen
+description: Decode CAN signals with a DBC file and poll CANopen object dictionaries over Linux SocketCAN, using the demo's virtual CAN bus.
+sidebar:
+  order: 3
+  badge:
+    text: Preview
+    variant: caution
+---
+
+import { Steps, Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+<Aside type="caution" title="Preview">
+Both CAN connectors are tested in CI against simulators on a virtual SocketCAN bus, but not yet
+on real equipment. Expect rough edges, and changes to their configuration. If you try them on
+real hardware, please [tell us how it went](https://github.com/thin-edge/tedge-dot/issues).
+</Aside>
+
+tedge-dot has two connectors for CAN, and both use Linux SocketCAN:
+
+- **`canbus`** listens to frames on the bus and decodes the signals you name. The signals are
+  defined in a [DBC](https://docs.vector.com/vctools/dbc_editor/dbc_spec.html) file. This
+  connector is push-based: a signal is published when its frame arrives.
+- **`canopen`** polls a CANopen node's object dictionary with expedited SDO transfers (up to 4
+  bytes), and writes to it the same way.
+
+**What you'll build:** both connectors running against the demo's simulators on one virtual bus,
+`vcan0`. `canbus-sim` broadcasts `ENGINE_STATUS` frames at 10 Hz, and `canopen-sim` is a CANopen
+node with node ID 1. Their CAN IDs don't collide, just as on real hardware.
+
+<Aside type="caution" title="Linux only">
+  SocketCAN is a Linux kernel feature. The demo needs a real Linux host or a Linux VM: Docker
+  Desktop on macOS has no CAN or vcan support. You need the kernel options `CONFIG_CAN`,
+  `CONFIG_CAN_RAW` and `CONFIG_CAN_VCAN`.
+</Aside>
+
+## Run the demo
+
+<Steps>
+
+1. **Start the CAN simulators.** Both run with host networking and privileges, because a CAN
+   interface belongs to the host's network namespace. `canbus-sim` creates `vcan0` if it does
+   not exist yet:
+
+   ```sh
+   docker compose -f /usr/share/tedge-dot/demo/docker-compose.yaml up -d canbus-sim canopen-sim
+   ```
+
+   On podman, create the interface yourself and start the containers directly:
+
+   ```sh
+   sudo modprobe vcan
+   sudo ip link add dev vcan0 type vcan
+   sudo ip link set up vcan0
+   sudo podman run -d --name canbus-sim  --network host --privileged \
+     --restart unless-stopped ghcr.io/thin-edge/tedge-dot/canbus-sim:latest
+   sudo podman run -d --name canopen-sim --network host --privileged \
+     --restart unless-stopped ghcr.io/thin-edge/tedge-dot/canopen-sim:latest
+   ```
+
+2. **Enable the demo configs.** The package ships them, together with the demo DBC file at
+   `/usr/share/tedge-dot/demo/can/test.dbc`:
+
+   ```sh
+   sudo cp /usr/share/tedge-dot/demo/canbus.toml /usr/share/tedge-dot/demo/canopen.toml /etc/tedge/plugins/ot/
+   ```
+
+   The service picks up new files within a few seconds.
+
+3. **Watch the measurements.**
+
+   ```sh
+   tedge mqtt sub 'te/+/+/+/+/m/+'
+   ```
+
+   You should see `rpm` and `coolant_temp` from the `engine` device, and `analog_in` and
+   `temperature` from the CANopen device `plc1`.
+
+</Steps>
+
+## CAN bus with a DBC file
+
+A `canbus` device is a SocketCAN interface plus the DBC file that describes its frames:
+
+<RepoFile path="demo/config/canbus.toml" marker="device" />
+
+A point names a DBC message and a signal. The DBC supplies the CAN ID, bit position, length and
+byte order, so a CAN point address is short:
+
+<RepoFile path="demo/points.d/canbus/demo-sim.toml" />
+
+Points to know:
+
+- **Names are resolved when the config loads.** If the DBC file doesn't contain the named message
+  or signal, the configuration is rejected.
+- **The connector doesn't apply DBC `factor` and `offset`.** Scale values with the point's
+  `transform`, or in a flow.
+- **The bit rate is set on the interface, not by the connector.** For a real bus, bring the
+  interface up first, for example with `ip link set can0 type can bitrate 500000`. `bitrate` in
+  `protocol_address` is only logged.
+- **Writes are read-modify-write.** Writing a signal (`access = "read_write"`, like
+  `brake_active`) sends its frame with that signal changed. The connector takes the rest of the
+  frame from the last copy it received, or from zeros if it hasn't received one.
+- **No heartbeat.** A CAN signal can't be read on demand, so `report.max_interval` has no effect.
+  A signal is published only when its frame arrives. Because buses repeat frames periodically,
+  `report = { on_change = true }` or a deadband usually saves the most.
+
+## CANopen over SDO
+
+The interface is shared by every node, so it goes in `[connection]`. Each node is a `[[device]]`
+with its `node_id` (1–127):
+
+<RepoFile path="demo/config/canopen.toml" marker="connection" />
+<RepoFile path="demo/config/canopen.toml" marker="device" />
+
+A point addresses an object dictionary entry by `index` and `subindex`, as in the demo node's
+point library:
+
+<RepoFile path="demo/points.d/canopen/demo-sim.toml" />
+
+For a real drive, the packaged default `/etc/tedge/plugins/ot/canopen.toml` has commented CiA 402
+examples (velocity actual value `0x606C`, controlword `0x6040`). The connector polls every `poll_interval`. Writes use SDO download, and a
+writable point becomes a Cumulocity device parameter (see
+[Writing to devices from the cloud](/tedge-dot/guides/writing-to-devices/)).
+
+<Aside>
+  Only expedited SDO transfers (up to 4 bytes) are supported, in both builds. Values are read by
+  SDO polling; PDOs are not used.
+</Aside>
+
+## Going to real hardware
+
+Change `vcan0` to your interface (for example `can0`), point `dbc_file` at your own DBC, and replace
+`points_from = ["demo-sim"]` with your points or with a [point library](/tedge-dot/guides/fleet-point-libraries/)
+for your device type. The packaged defaults in `/etc/tedge/plugins/ot/` contain commented examples.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="CAN bus connector reference" description="Bit extraction, Intel and Motorola byte order, and the acceptance vectors." href="/tedge-dot/reference/connectors/canbus/" />
+  <LinkCard title="Reducing data volume" description="Publish only what changed on a chatty bus." href="/tedge-dot/guides/reducing-data-volume/" />
+  <LinkCard title="Config builder" description="Build a canbus or canopen config in the browser." href="/tedge-dot/tools/config-builder/" />
+  <LinkCard title="Small and old gateways" description="Run the C build where the Rust one doesn't fit." href="/tedge-dot/guides/small-gateways/" />
+</CardGrid>

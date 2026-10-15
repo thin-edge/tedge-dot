@@ -1,0 +1,53 @@
+---
+// Replaces Starlight's Banner: every page says that the project is AI-driven and alpha, and a
+// page's own `banner` front matter (if any) follows it.
+const { banner } = Astro.locals.starlightRoute.entry.data;
+---
+
+<div class="td-notice" role="note" data-pagefind-ignore>
+  <span class="td-notice-tag">AI-driven</span>
+  <span>
+    tedge-dot is developed largely by AI coding agents, and it is alpha software. Check what it
+    does before you rely on it, and{' '}
+    <a href="https://github.com/thin-edge/tedge-dot/issues">report what you find</a>.
+  </span>
+</div>
+{banner && <div class="sl-banner" data-pagefind-ignore set:html={banner.content} />}
+
+<style>
+  .td-notice {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.35rem 0.6rem;
+    padding: 0.45rem var(--sl-nav-pad-x);
+    font-size: var(--sl-text-xs);
+    line-height: 1.5;
+    text-align: center;
+    text-wrap: balance;
+    color: var(--sl-color-gray-2);
+    background: color-mix(in srgb, var(--td-warn) 12%, var(--sl-color-black));
+    border-bottom: 1px solid color-mix(in srgb, var(--td-warn) 35%, transparent);
+  }
+  .td-notice-tag {
+    flex: none;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    padding: 0.05rem 0.5rem;
+    border-radius: 999px;
+    color: var(--sl-color-black);
+    background: var(--td-warn);
+  }
+  .td-notice a {
+    color: var(--sl-color-white);
+  }
+  .sl-banner {
+    padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+    background-color: var(--sl-color-bg-accent);
+    color: var(--sl-color-text-invert);
+    text-align: center;
+  }
+</style>

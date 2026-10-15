@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Implementable draft |
+| Status | Implementable draft. The connector is a **preview**: tested against a virtual SocketCAN bus, not yet on real equipment. |
 | Protocol id | `canbus` |
 | Crate | `connector-canbus` (feature `canbus`) |
 | Builds on | [`socketcan`](https://crates.io/crates/socketcan) v3 (Linux SocketCAN), [`can-dbc`](https://crates.io/crates/can-dbc) v4, [Connector SDK](../sdk/connector-sdk.md) |

@@ -12,7 +12,7 @@
 #     The points come from a packaged library, so from a checkout say where it is
 #     once (an installed package needs none of this):
 #
-#       export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+#       export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
 #       cargo run --manifest-path impl/rust/Cargo.toml -- read  -c demo/config/opcua.toml -d opc1 -p temperature -p count_u32 --json
 #       cargo run --manifest-path impl/rust/Cargo.toml -- write -c demo/config/opcua.toml -d opc1 -p setpoint --value 42
 #       cargo run --manifest-path impl/rust/Cargo.toml -- read  -c demo/config/opcua.toml -d opc1 -p bad_point  # exits 1 (bad quality)
@@ -72,17 +72,21 @@ report = { max_interval = "30m" }
 host = "127.0.0.1"
 port = 1883
 
+# site:start connection
 [connection]
 application_name  = "tedge-dot"
 security_policy   = "None"
 security_mode     = "none"
 connect_timeout_s = 10
+# site:end connection
 
+# site:start device
 [[device]]
 name             = "opc1"
 protocol_address = { endpoint = "opc.tcp://127.0.0.1:4840/", security_policy = "None", security_mode = "none" }
 default_mode     = "typed"
 points_from      = ["demo-sim"]
+# site:end device
 
   # The points come from the packaged point library
   # points.d/opcua/demo-sim.toml (contract §3.4): the simulator's data point
@@ -90,7 +94,7 @@ points_from      = ["demo-sim"]
   # installed package finds it automatically; from a source checkout point the
   # search path at the copy in this repo:
   #
-  #   export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d
+  #   export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
   #
   # A device may still add points of its own, or adjust an inherited one by
   # naming its id and only the fields to change, e.g.:
@@ -102,8 +106,10 @@ points_from      = ["demo-sim"]
 # The secured simulator (see the header). The connector generates its own certificate in
 # /var/lib/tedge-dot/opcua/pki on first start.
 #
+# site:start secure-device
 # [[device]]
 # name             = "opc-secure"
 # protocol_address = { endpoint = "opc.tcp://127.0.0.1:4841/", security_policy = "Basic256Sha256", security_mode = "sign_and_encrypt", user = "operator", password = "demo-password" }
 # default_mode     = "typed"
 # points_from      = ["demo-sim"]
+# site:end secure-device

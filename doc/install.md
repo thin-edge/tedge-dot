@@ -6,12 +6,19 @@ tedge-dot ships as **two interchangeable packages**, each containing the same
 `/usr/bin/tedge-dot` binary, the same systemd unit and the same `/etc/tedge/plugins/ot/` config
 layout. They speak the same [OT Connector Contract](contract/), so a config, a flow or a cloud
 integration built against one works unchanged against the other. Install **one or the other**:
-they declare each other as conflicting.
+they declare each other as conflicting. Start with **`tedge-dot-c`**; pick `tedge-dot-rs` when you
+need one of the features only the Rust build has.
 
+> **Not final yet:** both packages are maintained and released today, but whether both will remain
+> in the final product is not decided. They implement the same contract, so a config, a flow or a
+> cloud integration built for one carries over to the other.
+
+<!-- site:packages -->
 | Package | Implementation | Pick it when |
 |---|---|---|
-| `tedge-dot-rs` | Rust (`impl/rust/`) | Default. Richest protocol support, one static binary, no shared-library dependencies. |
-| `tedge-dot-c` | C (`impl/c/`) | Small or old devices: ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), and it additionally ships the **PROFIBUS-DP** connector. |
+| `tedge-dot-c` | C (`impl/c/`) | **Default.** ~25x smaller, a **glibc 2.17** floor (Debian 8 / RHEL 7 era), amd64, arm64 and armhf packages, and every protocol, including the PROFIBUS-DP preview. |
+| `tedge-dot-rs` | Rust (`impl/rust/`) | When you need a feature only the Rust build has: SNMPv3 with SHA-2 or AES-192/256, OPC UA structured values, the deprecated Basic128Rsa15 policy, or CAN FD. |
+<!-- /site:packages -->
 
 Where the two differ in behaviour, see the parity table in [impl/c/README.md](../impl/c/README.md).
 
@@ -31,11 +38,11 @@ writes). With that repository set up
 
 ```sh
 # Debian / Ubuntu
-sudo apt-get install -y tedge-dot-rs        # or tedge-dot-c
+sudo apt-get install -y tedge-dot-c         # or tedge-dot-rs
 sudo systemctl status tedge-dot
 
 # RPM distros
-sudo dnf install tedge-dot-rs               # or tedge-dot-c
+sudo dnf install tedge-dot-c                # or tedge-dot-rs
 ```
 
 ## Install a downloaded package
@@ -46,8 +53,8 @@ manager still resolves `tedge-parameter-plugin` from the community repository, s
 first:
 
 ```sh
-sudo apt-get install -y ./tedge-dot-rs_*_linux_amd64.deb    # or ./tedge-dot-c_*_amd64.deb
-sudo dnf install ./tedge-dot-rs_*_linux_amd64.rpm           # or ./tedge-dot-c_*_amd64.rpm
+sudo apt-get install -y ./tedge-dot-c_*_amd64.deb           # or ./tedge-dot-rs_*_linux_amd64.deb
+sudo dnf install ./tedge-dot-c_*_amd64.rpm                  # or ./tedge-dot-rs_*_linux_amd64.rpm
 ```
 
 > **Alpine:** the attached `.apk` files carry a version string apk-tools rejects
@@ -90,7 +97,7 @@ the old name, so installing either over an existing `tedge-dot` works and keeps 
 configuration:
 
 ```sh
-sudo apt-get install -y tedge-dot-rs
+sudo apt-get install -y tedge-dot-c    # or tedge-dot-rs: the same Rust build as the old package
 ```
 
 Two caveats:

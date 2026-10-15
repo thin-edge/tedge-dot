@@ -1,6 +1,7 @@
 # tedge-dot — Rust implementation
 
-The default implementation, packaged as **`tedge-dot-rs`**. A cargo workspace:
+One of the two implementations, packaged as **`tedge-dot-rs`** (the default package is the C
+build, `tedge-dot-c`; pick this one for the features only it has). A cargo workspace:
 the SDK (runtime, `Connector` trait, config model, decode helpers), one crate
 per protocol module, the conformance harness, and the `tedge-dot` binary.
 
@@ -33,7 +34,7 @@ just build                # cross-compile + package (goreleaser, this package on
 
 # or directly
 cargo test --manifest-path impl/rust/Cargo.toml --workspace
-export TEDGE_DOT_POINT_LIBRARY_PATH=demo/points.d   # the demo point lists (a package installs them)
+export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d   # the demo point lists (a package installs them)
 cargo run  --manifest-path impl/rust/Cargo.toml -- read -c demo/config/modbus.toml
 ```
 

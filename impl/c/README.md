@@ -5,13 +5,16 @@ A C11 implementation of the tedge-dot SDK framework plus all six connectors —
 minimal DBC parser), **CANopen** (expedited SDO client directly over SocketCAN),
 **PROFIBUS-DP** (a minimal built-in DP-V0 class-1 master, TCP transport), and
 **SNMP** (net-snmp, built from source as a minimal static library: polling, writes
-and v1/v2c/v3 traps and informs).
+and v1/v2c/v3 traps and informs). CAN bus, CANopen and PROFIBUS-DP are previews: tested
+against simulators only, not yet on real equipment (see the [README](../../README.md#protocols)).
 
 It is a **maintained peer of the [Rust implementation](../rust/)**, not a
 prototype: it ships as its own package (`tedge-dot-c`) from the same release,
-runs the same system tests, and is held to the same contract. Pick it when the
-device is small or old — it is roughly 25x smaller and installs on a glibc 2.17
-floor — and pick the Rust build (`tedge-dot-rs`) otherwise.
+runs the same system tests, and is held to the same contract. It is the
+**default package**: roughly 25x smaller, it installs on a glibc 2.17 floor and
+ships every protocol. Pick the Rust build (`tedge-dot-rs`) when you need one of
+the features it alone has (see the parity table below). Whether both
+implementations remain in the final product is not decided yet.
 
 Both packages install the same `/usr/bin/tedge-dot`, the same systemd unit and
 the same `/etc/tedge/plugins/ot/` layout, and they conflict with each other:

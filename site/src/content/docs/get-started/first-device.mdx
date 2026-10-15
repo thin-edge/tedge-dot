@@ -1,0 +1,138 @@
+---
+title: Your first device in 5 minutes
+description: Read and write a simulated Modbus PLC from your laptop with the tedge-dot CLI. No broker, no cloud, no install.
+---
+
+import { Aside, LinkCard, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+## What you'll build
+
+A Modbus TCP PLC simulator in Docker, and the `tedge-dot` command line reading its registers,
+writing a coil and printing the samples the connector would publish. It runs on Linux and macOS
+and needs no MQTT broker, no thin-edge.io and no cloud account: the `read` and `write` commands
+talk to the device directly.
+
+You need [Docker](https://docs.docker.com/get-docker/), [just](https://github.com/casey/just) and
+a checkout of the repository:
+
+```sh
+git clone https://github.com/thin-edge/tedge-dot.git
+cd tedge-dot
+```
+
+## Read the PLC
+
+<Steps>
+
+1. **Start the simulator.** `just sim modbus` starts the pymodbus simulator used by the Modbus
+   test stack and maps its port 502 to `127.0.0.1:5020`:
+
+   ```sh
+   just sim modbus
+   ```
+
+2. **Get the `tedge-dot` binary.**
+
+   <Tabs syncKey="binary">
+   <TabItem label="Build from source">
+   With a stable [Rust toolchain](https://rustup.rs):
+
+   ```sh
+   cargo build --manifest-path impl/rust/Cargo.toml
+   alias tedge-dot="$PWD/impl/rust/target/debug/tedge-dot"
+   ```
+   </TabItem>
+   <TabItem label="Release binary">
+   Download the `tedge-dot-rs` archive for your OS and architecture from the
+   [releases page](https://github.com/thin-edge/tedge-dot/releases), unpack it, and put the
+   `tedge-dot` binary on your `PATH`.
+   </TabItem>
+   </Tabs>
+
+3. **Say where the point lists are.** The demo config holds only the simulator's address; its
+   points come from a **point library**, `demo/points.d/modbus/demo-sim.toml`. An installed
+   package finds its libraries by itself, a checkout has to point at them:
+
+   ```sh
+   export TEDGE_DOT_POINT_LIBRARY_PATH=$PWD/demo/points.d
+   ```
+
+4. **Read everything.** Without `-d` and `-p`, `read` reads every readable point of every device
+   in the config, once:
+
+   ```sh
+   tedge-dot read -c demo/config/modbus.toml
+   ```
+
+   The simulator is seeded with known values: `temp_u16` is `17001`, `count_u32` is `617001`,
+   `level_f32` is `404.17`, and `temp_scaled` applies its own scaling to the same register to
+   give `17.001` °C. `boiler_state` maps that register to the label `heating`, and `bad_point`
+   reads an address the simulator answers with an exception, so it shows *bad* quality.
+
+5. **Pick points, and keep polling.** `-d` and `-p` take a name or a wildcard, and `-p` can be
+   repeated. `--json` prints the sample envelopes exactly as the connector publishes them:
+
+   ```sh
+   tedge-dot read -c demo/config/modbus.toml -d plc1 -p temp_u16 -p level_f32 --json
+   tedge-dot read -c demo/config/modbus.toml -p 'temp_*' --interval 500ms --count 5
+   ```
+
+</Steps>
+
+## Write to it
+
+`coil_rw` and `temp_u16` are writable (`access = "read_write"` in the library). Write a value and
+read it back:
+
+```sh
+tedge-dot write -c demo/config/modbus.toml -d plc1 -p coil_rw --value true
+tedge-dot write -c demo/config/modbus.toml -d plc1 -p temp_u16 --value 1234
+tedge-dot read  -c demo/config/modbus.toml -d plc1 -p temp_u16 -p boiler_state
+```
+
+`boiler_state` now reads `standby`: its value map labels everything up to `9999` that way.
+
+## Run the connector without a broker
+
+`run` is what the service does on a gateway. With `--output stdout` it prints each sample
+envelope as a JSON line instead of publishing it, so you can see the reporting policy at work:
+`temp_scaled` has a deadband and is published only when it moves.
+
+```sh
+tedge-dot run -c demo/config/modbus.toml --output stdout --duration 10s
+```
+
+## The config you just used
+
+The `[[device]]` entry is all there is to a device whose type has a point library: its name, its
+address and the library to take the points from.
+
+<RepoFile path="demo/config/modbus.toml" marker="device" />
+
+<Aside type="tip">
+Point a `[[device]]` at your own PLC's address and keep `points_from = ["demo-sim"]` to try the
+connection, then write a library for your device type. The
+[config builder](/tedge-dot/tools/config-builder/) helps with both.
+</Aside>
+
+When you are done, stop the simulator:
+
+```sh
+just sim-down modbus
+```
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Modbus TCP PLC to Cumulocity"
+    description="Install the package on a gateway and get the same points into the cloud."
+    href="/tedge-dot/guides/modbus-to-cumulocity/"
+  />
+  <LinkCard
+    title="The demo"
+    description="OPC UA and the other simulators, and the all-protocols demo on a Linux device."
+    href="/tedge-dot/reference/project/demo/"
+  />
+</CardGrid>

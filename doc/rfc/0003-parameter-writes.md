@@ -207,7 +207,7 @@ MQTT, and it has no notion of point state; on child devices it cannot run at all
 | CLI | `tedge-dot describe [<config-or-dir>...] [--config <config-or-dir>]... [--set] [--device] [--compact]` | `impl/rust/src/main.rs`, `impl/c/src/main.c` |
 | Flows | `ot-parameter-state` (new); `ot-command-forward` reshapes `parameter_update`, `ot-command-result` honours `origin.command`; `ot-registration` advertises `parameter_update` | `flows/` |
 | c8y glue | none — the tedge-parameter-plugin's template (installed by the cloud e2e image) | |
-| Tests | offline flow checks incl. the chain through shared mapper state (`just test-flows`); e2e: `access` in samples, batch semantics, and the flows-driven parameter round-trip on a cloud-free flows runner (`just test-e2e modbus|opcua`); cloud: DTM registration → fragment → operation → measurement (`cloud/modbus/tests/parameters_c8y.robot`) | |
+| Tests | offline flow checks incl. the chain through shared mapper state (`just test-flows`); e2e: `access` in samples, batch semantics, and the flows-driven parameter round-trip on a cloud-free flows runner (`just test-e2e modbus\|opcua`); cloud: DTM registration → fragment → operation → measurement (`cloud/modbus/tests/parameters_c8y.robot`) | |
 
 A simplification pass removed an earlier retained point-descriptor topic and two dedicated
 parameter flows in favour of the `access` sample field and the existing command flows.

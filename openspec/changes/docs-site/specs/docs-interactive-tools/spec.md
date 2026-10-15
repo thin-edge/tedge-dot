@@ -3,8 +3,11 @@
 ### Requirement: Config builder produces valid connector configs
 The site SHALL offer a config builder that runs entirely in the browser. It SHALL let a visitor
 choose a protocol, fill in the `[connector]` settings, devices and points, and emit TOML that it
-validates live against `doc/contract/schemas/config.schema.json`. A schema error SHALL be shown
-on the field it concerns. The output SHALL be copyable and downloadable. The builder SHALL say
+validates live against `doc/contract/schemas/config.schema.json`. Because that schema leaves the
+protocol-specific tables (`connection`, `protocol_address`, a point's `address`) to the connector
+specs, the builder SHALL also check the types of the keys it knows in those tables, from its own
+protocol shapes (`site/src/data/protocols.json`), while keeping any other key. A schema error
+SHALL be shown on the field it concerns. The output SHALL be copyable and downloadable. The builder SHALL say
 that schema validation is structural, and point to `tedge-dot describe` for full validation.
 
 #### Scenario: Valid config emitted
@@ -17,8 +20,10 @@ that schema validation is structural, and point to `tedge-dot describe` for full
 
 ### Requirement: Config builder loads the shipped configs
 The config builder SHALL be able to start from any file in `demo/config/`. CI SHALL check that
-every file in `demo/config/` and `packaging/config/` validates against the schema, and that it
-survives the builder's parse → emit round trip with the same meaning.
+every file in `demo/config/` and `packaging/config/` validates against the schema and the
+builder's protocol shapes, that every library in `demo/points.d/` validates against the
+point-library schema, and that each config survives the builder's parse → emit round trip with
+the same meaning.
 
 #### Scenario: Start from the demo
 - **WHEN** a visitor chooses "start from demo: opcua"

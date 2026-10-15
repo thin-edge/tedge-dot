@@ -1,0 +1,222 @@
+---
+// How tedge-dot fits thin-edge.io: OT devices → tedge-dot (transport, decode, per-point
+// transform/map/report) → the thin-edge.io broker → flows → the Cumulocity mapper → the cloud,
+// with writes travelling back as commands. Static SVG, colours from the theme tokens, a
+// vertical variant for phone widths.
+---
+
+<figure class="arch">
+  <svg class="arch-wide" viewBox="0 0 680 460" role="img" aria-labelledby="arch-title arch-desc">
+    <title id="arch-title">tedge-dot architecture</title>
+    <desc id="arch-desc">
+      OT devices (Modbus, OPC UA, SNMP, CAN bus, CANopen, PROFIBUS-DP) are read and written by
+      tedge-dot, which publishes protocol-neutral sample, status and command envelopes to the
+      thin-edge.io MQTT broker. thin-edge.io flows turn them into measurements, child devices,
+      alarms, events and parameters, and the Cumulocity mapper sends them to the cloud. Writes
+      and parameter edits travel back the same way as commands.
+    </desc>
+    <defs>
+      <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 10 5 0 10z" class="fill-line"></path>
+      </marker>
+    </defs>
+
+    <!-- Row 1: OT devices -> tedge-dot -->
+    <text x="10" y="22" class="label-head">OT devices</text>
+    {['Modbus TCP/RTU', 'OPC UA', 'SNMP', 'CAN bus', 'CANopen', 'PROFIBUS-DP'].map((name, i) => (
+      <g>
+        <rect x={10 + (i % 2) * 120} y={38 + Math.floor(i / 2) * 42} width="114" height="32" rx="8" class="box-device"></rect>
+        <text x={67 + (i % 2) * 120} y={59 + Math.floor(i / 2) * 42} text-anchor="middle" class="label label-device">{name}</text>
+      </g>
+    ))}
+    <path d="M248 100 H284" class="line" marker-end="url(#arch-arrow)"></path>
+
+    <rect x="288" y="30" width="382" height="140" rx="14" class="box-dot"></rect>
+    <text x="306" y="58" class="label-strong">tedge-dot</text>
+    <text x="392" y="58" class="label-muted">one binary, one contract</text>
+    {['transport', 'decode', 'transform · map', 'report by exception'].map((step, i) => (
+      <g>
+        <rect x={306 + (i % 2) * 178} y={76 + Math.floor(i / 2) * 40} width="168" height="30" rx="6" class="box-step"></rect>
+        <text x={390 + (i % 2) * 178} y={96 + Math.floor(i / 2) * 40} text-anchor="middle" class="label">{step}</text>
+      </g>
+    ))}
+
+    <!-- Row 2: thin-edge.io -> Cumulocity -->
+    <rect x="10" y="196" width="530" height="254" rx="14" class="box-tedge"></rect>
+    <text x="28" y="224" class="label-strong">thin-edge.io</text>
+    <rect x="28" y="254" width="494" height="32" rx="8" class="box-step"></rect>
+    <text x="275" y="275" text-anchor="middle" class="label">MQTT broker · te/device/…/ot/…</text>
+    <!-- envelopes between tedge-dot and the broker (drawn over the thin-edge.io box) -->
+    <path d="M440 172 V250" class="line" marker-end="url(#arch-arrow)"></path>
+    <text x="432" y="189" text-anchor="end" class="label-tiny">sample · status</text>
+    <path d="M520 250 V174" class="line dashed" marker-end="url(#arch-arrow)"></path>
+    <text x="528" y="189" class="label-tiny">cmd</text>
+
+    <path d="M275 288 V302" class="line" marker-end="url(#arch-arrow)"></path>
+    <rect x="28" y="306" width="494" height="88" rx="8" class="box-flows"></rect>
+    <text x="44" y="326" class="label-strong small">flows (JavaScript)</text>
+    {['measurement', 'registration', 'alarm · event', 'parameter state', 'command forward', 'command result'].map((name, i) => (
+      <g>
+        <rect x={44 + (i % 3) * 156} y={336 + Math.floor(i / 3) * 28} width="148" height="22" rx="11" class="chip"></rect>
+        <text x={118 + (i % 3) * 156} y={351 + Math.floor(i / 3) * 28} text-anchor="middle" class="label-tiny">{name}</text>
+      </g>
+    ))}
+    <path d="M275 396 V408" class="line" marker-end="url(#arch-arrow)"></path>
+    <rect x="28" y="412" width="494" height="28" rx="8" class="box-step"></rect>
+    <text x="275" y="431" text-anchor="middle" class="label">Cumulocity mapper</text>
+
+    <path d="M524 426 H566 C 590 426 609 418 609 400" class="line" marker-end="url(#arch-arrow)"></path>
+    <rect x="556" y="306" width="114" height="90" rx="14" class="box-cloud"></rect>
+    <text x="613" y="338" text-anchor="middle" class="label-strong small">Cumulocity</text>
+    <text x="613" y="360" text-anchor="middle" class="label-muted">devices · data</text>
+    <text x="613" y="378" text-anchor="middle" class="label-muted">parameters</text>
+  </svg>
+
+  <svg class="arch-narrow" viewBox="0 0 340 560" role="img" aria-labelledby="arch-title-n arch-desc-n">
+    <title id="arch-title-n">tedge-dot architecture</title>
+    <desc id="arch-desc-n">
+      OT devices are read and written by tedge-dot, which publishes protocol-neutral envelopes to
+      the thin-edge.io broker; flows shape them for the cloud, and writes travel back as commands.
+    </desc>
+    <defs>
+      <marker id="arch-arrow-n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 10 5 0 10z" class="fill-line"></path>
+      </marker>
+    </defs>
+    <rect x="10" y="10" width="320" height="76" rx="12" class="box-device"></rect>
+    <text x="170" y="38" text-anchor="middle" class="label-strong small">OT devices</text>
+    <text x="170" y="60" text-anchor="middle" class="label">Modbus · OPC UA · SNMP · CAN</text>
+    <text x="170" y="77" text-anchor="middle" class="label">CANopen · PROFIBUS-DP</text>
+    <path d="M170 88 V112" class="line" marker-end="url(#arch-arrow-n)"></path>
+    <rect x="10" y="116" width="320" height="96" rx="12" class="box-dot"></rect>
+    <text x="170" y="144" text-anchor="middle" class="label-strong">tedge-dot</text>
+    <text x="170" y="168" text-anchor="middle" class="label">transport · decode</text>
+    <text x="170" y="190" text-anchor="middle" class="label">transform · map · report</text>
+    <path d="M150 214 V244" class="line" marker-end="url(#arch-arrow-n)"></path>
+    <path d="M190 244 V216" class="line dashed" marker-end="url(#arch-arrow-n)"></path>
+    <text x="140" y="234" text-anchor="end" class="label-tiny">sample · status</text>
+    <text x="200" y="234" class="label-tiny">cmd</text>
+    <rect x="10" y="248" width="320" height="200" rx="12" class="box-tedge"></rect>
+    <text x="170" y="276" text-anchor="middle" class="label-strong">thin-edge.io</text>
+    <text x="170" y="302" text-anchor="middle" class="label">MQTT broker</text>
+    <rect x="28" y="316" width="284" height="80" rx="8" class="box-flows"></rect>
+    <text x="170" y="340" text-anchor="middle" class="label-strong small">flows</text>
+    <text x="170" y="362" text-anchor="middle" class="label-tiny">measurement · registration · alarm · event</text>
+    <text x="170" y="382" text-anchor="middle" class="label-tiny">parameter state · commands</text>
+    <text x="170" y="428" text-anchor="middle" class="label">Cumulocity mapper</text>
+    <path d="M170 450 V476" class="line" marker-end="url(#arch-arrow-n)"></path>
+    <rect x="70" y="480" width="200" height="66" rx="12" class="box-cloud"></rect>
+    <text x="170" y="508" text-anchor="middle" class="label-strong small">Cumulocity</text>
+    <text x="170" y="530" text-anchor="middle" class="label-muted">devices · data · parameters</text>
+  </svg>
+  <figcaption>
+    tedge-dot moves bytes; flows make meaning. Writes and parameter edits travel back as commands.
+  </figcaption>
+</figure>
+
+<style>
+  .arch {
+    margin: 1.5rem 0;
+  }
+  .arch svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    font-family: var(--sl-font);
+  }
+  .arch-narrow {
+    display: none !important;
+    max-width: 26rem;
+    margin-inline: auto;
+  }
+  @media (max-width: 40rem) {
+    .arch-wide {
+      display: none !important;
+    }
+    .arch-narrow {
+      display: block !important;
+    }
+  }
+  .arch figcaption {
+    margin-top: 0.5rem;
+    font-size: var(--sl-text-sm);
+    color: var(--td-muted);
+    text-align: center;
+  }
+  .box-device {
+    fill: var(--td-surface);
+    stroke: var(--td-border);
+  }
+  .box-dot {
+    fill: var(--sl-color-accent-low);
+    stroke: var(--sl-color-accent);
+    stroke-width: 1.5;
+  }
+  .box-step {
+    fill: var(--td-surface-raised);
+    stroke: var(--td-border);
+  }
+  .box-tedge {
+    fill: var(--td-surface);
+    stroke: var(--td-signal);
+    stroke-width: 1.5;
+  }
+  .box-flows {
+    fill: var(--td-surface-raised);
+    stroke: var(--td-signal);
+    stroke-dasharray: 4 3;
+  }
+  .box-cloud {
+    fill: var(--td-surface-raised);
+    stroke: var(--td-ok);
+    stroke-width: 1.5;
+  }
+  .chip {
+    fill: var(--td-surface);
+    stroke: var(--td-border);
+  }
+  .line {
+    stroke: var(--td-muted);
+    stroke-width: 1.6;
+    fill: none;
+  }
+  .line.dashed {
+    stroke-dasharray: 5 4;
+  }
+  .fill-line {
+    fill: var(--td-muted);
+  }
+  .label,
+  .label-strong,
+  .label-muted,
+  .label-tiny,
+  .label-head {
+    fill: var(--sl-color-white);
+    font-size: 13px;
+  }
+  .label-device {
+    font-size: 12px;
+  }
+  .label-strong {
+    font-weight: 700;
+    font-size: 16px;
+  }
+  .label-strong.small {
+    font-size: 14px;
+  }
+  .label-head {
+    font-weight: 700;
+    fill: var(--td-muted);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .label-muted {
+    fill: var(--td-muted);
+    font-size: 12px;
+  }
+  .label-tiny {
+    font-size: 11px;
+    fill: var(--sl-color-gray-2);
+  }
+</style>

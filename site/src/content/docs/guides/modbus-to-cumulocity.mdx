@@ -1,0 +1,151 @@
+---
+title: Modbus TCP PLC to Cumulocity
+description: Install tedge-dot on a thin-edge.io gateway, poll a Modbus TCP PLC and see its registers as a child device with measurements in Cumulocity.
+sidebar:
+  order: 1
+---
+
+import { Aside, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
+import RepoFile from '../../../components/RepoFile.astro';
+
+## What you'll build
+
+A thin-edge.io gateway that polls a Modbus TCP PLC every two seconds. The PLC appears in
+Cumulocity as a child device of the gateway, with its registers as measurements, a bad reading
+flagged as such, and its writable registers as device parameters.
+
+The guide uses the demo's **`modbus-sim`** service (a pymodbus simulator on port `5020`) as the
+PLC, so you can follow it without hardware. The last section shows what to change for a real
+PLC.
+
+**You need** a Linux gateway with [thin-edge.io](https://thin-edge.github.io/thin-edge.io/install/)
+installed and connected to Cumulocity (`tedge connect c8y`), and Docker on the same host for the
+simulator.
+
+## Set it up
+
+<Steps>
+
+1. **Install tedge-dot.** Set up the thin-edge.io
+   [community repository](https://thin-edge.github.io/thin-edge.io/install/#community-plugins),
+   then install the package. It also pulls in `tedge-parameter-plugin`, which serves the
+   Cumulocity *Parameters* tab:
+
+   ```sh
+   sudo apt-get install -y tedge-dot-c         # or tedge-dot-rs
+   sudo systemctl status tedge-dot
+   ```
+
+   The service starts with an empty config per protocol in `/etc/tedge/plugins/ot/`, and the
+   flows that map its data for Cumulocity are installed active in
+   `/etc/tedge/mappers/c8y/flows/`. See [Install](/tedge-dot/get-started/install/) for the other
+   routes and for choosing between the two packages.
+
+2. **Start the PLC simulator.** The package ships the demo compose file, which pulls the
+   prebuilt simulator images. Start only the Modbus one:
+
+   ```sh
+   docker compose -f /usr/share/tedge-dot/demo/docker-compose.yaml up -d modbus-sim
+   ```
+
+3. **Enable the Modbus demo config.** It replaces the empty default and points at the simulator
+   on `127.0.0.1:5020`:
+
+   ```sh
+   sudo cp /usr/share/tedge-dot/demo/modbus.toml /etc/tedge/plugins/ot/
+   ```
+
+   The service notices the change within a few seconds and starts polling; no restart is needed.
+   `sudo systemctl reload tedge-dot` applies it at once.
+
+4. **Watch the data on the gateway.** The connector publishes one sample envelope per point,
+   and the `ot-measurement` flow turns each number into a thin-edge.io measurement:
+
+   ```sh
+   tedge mqtt sub 'te/device/plc1/ot/modbus/#'    # what the connector publishes
+   tedge mqtt sub 'te/+/+/+/+/m/+'                # the measurements the flows make of it
+   ```
+
+5. **Find the device in Cumulocity.** The `ot-registration` flow registers `plc1` as a child
+   device of the gateway the first time its link is up. Open the gateway in Device management,
+   then *Child devices* → `plc1`: its *Measurements* tab shows the points, in a measurement
+   group named after the protocol (`modbus`).
+
+</Steps>
+
+<Aside type="tip" title="Nothing arrives?">
+`journalctl -u tedge-dot -f` shows the connector's log. `tedge mqtt sub 'te/device/plc1/ot/modbus/status/#'`
+shows the device's link status, including the reason when it cannot connect.
+</Aside>
+
+## What the config says
+
+The `[connector]` table names the protocol and polls every two seconds. Its `report` sets a
+heartbeat: a point whose value has not changed is still published every 30 minutes, so that
+Cumulocity keeps the device available.
+
+<RepoFile path="demo/config/modbus.toml" marker="connector" />
+
+The device holds only what is specific to this PLC: its address and the point library its
+points come from. The library, `/usr/share/tedge-dot/points.d/modbus/demo-sim.toml`, declares
+each register once for every device of that type, with its datatype, scaling, unit, value map
+and reporting policy.
+
+<RepoFile path="demo/config/modbus.toml" marker="device" />
+
+A few points in that library show what the connector can do before anything reaches the cloud:
+
+- `temp_scaled` applies `decimal_shift = -3` and the unit `°C` to a raw register, and publishes
+  only on a change of 0.5 °C or more (`report = { deadband = 0.5, min_interval = "10s" }`).
+- `boiler_state` maps the same register to `standby`, `heating` or `overheat`. A label is a
+  string, so it becomes no measurement, but alarms and events can match it.
+- `bad_point` reads an address the simulator rejects, so its samples have `bad` quality.
+- `temp_u16` and `coil_rw` are `read_write`, so they are device parameters. See
+  [Writing to devices from the cloud](/tedge-dot/guides/writing-to-devices/).
+
+## Connect your own PLC
+
+Add a `[[device]]` for each PLC to `/etc/tedge/plugins/ot/modbus.toml`, with its address in
+`protocol_address`, and give it points:
+
+- **inline**, as `[[device.point]]` entries under the device; or
+- **from a library** of your own in `/etc/tedge/plugins/ot/points.d/modbus/<name>.toml`,
+  referenced as `points_from = ["<name>"]`. A site's library shadows a packaged one of the same
+  name, and a device can add or adjust points on top of its libraries.
+
+A Modbus RTU device uses the serial settings in `[connection.serial]`. The address and point
+fields of both transports are in the [Modbus connector reference](/tedge-dot/reference/connectors/modbus/),
+and every other key in the [configuration reference](/tedge-dot/reference/configuration/config-file/).
+The [config builder](/tedge-dot/tools/config-builder/) writes and checks a file for you.
+
+Before you put a device into the service, check the connection and the points from the gateway
+with the CLI, which needs no broker:
+
+```sh
+tedge-dot read -c /etc/tedge/plugins/ot/modbus.toml -d plc1 --json
+```
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Writing to devices from the cloud"
+    description="Make writable registers editable in the Cumulocity Parameters tab."
+    href="/tedge-dot/guides/writing-to-devices/"
+  />
+  <LinkCard
+    title="A fleet of identical devices"
+    description="One point library for every PLC of a type."
+    href="/tedge-dot/guides/fleet-point-libraries/"
+  />
+  <LinkCard
+    title="Reducing data volume"
+    description="Publish on change, with a deadband and a heartbeat."
+    href="/tedge-dot/guides/reducing-data-volume/"
+  />
+  <LinkCard
+    title="Device-side flows"
+    description="Measurement groups, alarms and events, and how to change them."
+    href="/tedge-dot/reference/flows/flows/"
+  />
+</CardGrid>

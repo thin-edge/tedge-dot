@@ -1,0 +1,116 @@
+name: Docs
+
+# The documentation site (site/): built and checked on every pull request that touches what it
+# renders, and deployed to GitHub Pages from main, on every published release and on demand.
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "doc/**"
+      - "changes/**"
+      - "README.md"
+      - "demo/**"
+      - "packaging/config/**"
+      - "flows/README.md"
+      - "connectors/README.md"
+      - "operations/README.md"
+      - "impl/c/README.md"
+      - "impl/rust/README.md"
+      - ".github/workflows/docs.yaml"
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # What's new places each highlight under the first release tag that contains it.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install
+        working-directory: site
+        run: npm ci --no-audit --no-fund
+      # Sync script, the report-policy vectors, the config round trip, the package picker.
+      - name: Unit and tool tests
+        working-directory: site
+        run: npm test
+      # Generates the reference pages and What's new, builds, and fails on a broken link.
+      - name: Build
+        working-directory: site
+        env:
+          # Lists the GitHub releases (which tags were published) for What's new.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build
+      - name: Landing page JavaScript budget
+        working-directory: site
+        run: npm run check:budget
+      # Every page in a real browser at desktop and phone width: glued words, content spilling
+      # out of its box, mismatched button rows, sideways scroll, script errors, dead buttons.
+      - name: Layout check
+        working-directory: site
+        run: |
+          npx playwright install --with-deps chromium
+          npm run check:layout
+      - name: Lighthouse (performance and accessibility >= 95)
+        working-directory: site
+        run: |
+          npx astro preview --port 4321 > preview.log 2>&1 &
+          for _ in $(seq 30); do curl -sf http://localhost:4321/tedge-dot/ >/dev/null && break; sleep 1; done
+          npx --yes @lhci/cli@0.15.1 autorun
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request' && vars.DOCS_PAGES == 'true'
+        with:
+          path: site/dist
+
+  smoke:
+    name: Run the quick-start guide
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: site/.nvmrc
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: impl/rust
+      - uses: extractions/setup-just@v2
+      # Every command of "Your first device in 5 minutes", as written, against the Modbus
+      # simulator; fails when a command or a value the guide shows no longer holds.
+      - name: Smoke
+        run: site/scripts/smoke-guide.sh
+
+  # Off until GitHub Pages is enabled for the repository (source: GitHub Actions) and the
+  # repository variable DOCS_PAGES is set to "true"; until then the site is built and checked
+  # but not published.
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request' && vars.DOCS_PAGES == 'true'
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

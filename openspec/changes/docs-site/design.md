@@ -88,8 +88,10 @@ source file, not by line numbers.
 
 ### Interactive tools
 
-- **Config builder**: a form driven by `config.schema.json` (protocol, `[connector]`, one or
-  more `[[device]]`, points). It emits TOML with `smol-toml` (MIT) and validates it live with
+- **Config builder**: a form (protocol, `[connector]`, one or more `[[device]]`, points) driven
+  by `config.schema.json` plus small per-protocol shapes (`site/src/data/protocols.json`: the
+  types of the `protocol_address`, `address` and `connection` keys the connector specs define,
+  other keys allowed), because the contract schema leaves those tables open. It emits TOML with `smol-toml` (MIT) and validates it live with
   `ajv` (MIT). It can load any `demo/config/*.toml` as a starting point, and offers copy and
   download. CI checks that every config in `demo/config` and `packaging/config` validates and
   round-trips through the builder's parse → emit path.
@@ -137,6 +139,8 @@ release workflow makes, so the GitHub release and the site always agree.
     (`starlight-links-validator`), run the tool tests (vectors, config round-trip);
   - on push to `main`, on `release: published` and manually: the same, then
     `actions/upload-pages-artifact` + `actions/deploy-pages`.
+- The deploy job (and the Pages artifact upload) run only when the repository variable
+  `DOCS_PAGES` is `"true"`, so `main` stays green before Pages is enabled (Migration Plan step 1).
 - `astro.config` sets `site: https://thin-edge.github.io`, `base: /tedge-dot`.
 - `just docs` / `just docs-build` wrap the npm commands for contributors.
 
@@ -170,8 +174,11 @@ own throughout.
 
 ## Open Questions
 
-- Brand: reuse thin-edge.io's colours and logo, or give tedge-dot its own mark? (Default: the
-  thin-edge.io palette with a tedge-dot wordmark, pending a maintainer's OK.)
+- Brand: settled by a maintainer: the site matches thin-edge.io, as an extension of it. The
+  palette is taken from the thin-edge.io docs (github.com/thin-edge/tedge-docs): the wordmark's
+  navy `#181564` and yellow slash `#FFE400`, links in blue `#204a87` (light) and amber `#fcaf3e`
+  (dark). tedge-dot keeps its own small mark in those colours rather than reusing the
+  thin-edge.io logo.
 - Should the site live under the thin-edge.io docs (`thin-edge.github.io/thin-edge.io/`) later,
   rather than a separate project site? This design keeps the content portable (plain Markdown
   plus a few islands) so either works.
