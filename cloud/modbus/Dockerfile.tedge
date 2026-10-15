@@ -16,6 +16,7 @@
 # `just test-cloud modbus` / `just test-cloud-c modbus`.
 #
 # Build context is the repository root. Docker selects the correct arch via TARGETARCH.
+# CI overrides BASE_REGISTRY with the GHCR mirror of .github/mirror-images.txt.
 ARG BASE_REGISTRY=public.ecr.aws/docker/library
 ARG DEMO_IMAGE=ghcr.io/thin-edge/tedge-demo-main-systemd:latest
 ARG IMPL=rust
