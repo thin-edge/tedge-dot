@@ -1,0 +1,15 @@
+# Third-party images mirrored to ghcr.io/thin-edge/tedge-dot/mirror/<name>:<tag> by
+# .github/workflows/mirror-images.yaml. CI builds and runs its stacks from the mirror
+# (BASE_REGISTRY), so a CI pull never depends on an anonymous, shared-quota registry.
+#
+# One <name>:<tag> per line, as it appears after `${BASE_REGISTRY}/` in a Dockerfile `FROM`
+# or a compose `image:`. `just check-mirrored-images` fails when a referenced image is missing.
+alpine:3
+debian:bookworm
+debian:bookworm-slim
+eclipse-mosquitto:2
+python:3.11
+python:3.11-slim
+python:3.11-slim-bookworm
+python:3.12-slim
+rust:1-bookworm

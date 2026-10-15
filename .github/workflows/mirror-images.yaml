@@ -1,0 +1,78 @@
+# Mirror the third-party images CI builds and runs from into this repository's GHCR namespace:
+#
+#   ghcr.io/<owner>/<repo>/mirror/<name>:<tag>    e.g. .../mirror/eclipse-mosquitto:2
+#
+# CI points BASE_REGISTRY at that prefix, so its pulls come from GHCR (authenticated with the
+# workflow token, on GitHub's own network) instead of ECR Public / Docker Hub, whose anonymous
+# quotas are shared with every other Actions user on the runner's egress IP and regularly
+# answered CI with `429 toomanyrequests: Data limit exceeded`.
+#
+# The list lives in .github/mirror-images.txt. A copy that fails leaves the previous mirror tag
+# untouched, so CI keeps working on the last good copy; the run still fails so it gets noticed.
+name: Mirror images
+
+on:
+  schedule:
+    # Weekly, so base-image updates reach CI without anyone touching the list.
+    - cron: "17 3 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/mirror-images.txt"
+      - ".github/workflows/mirror-images.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy images
+        env:
+          MIRROR: ghcr.io/${{ github.repository }}/mirror
+        run: |
+          set -uo pipefail
+          # `imagetools create` copies the whole multi-arch index (the simulators are published
+          # for arm64 too, and arm64 developers may build from the mirror), not just this
+          # runner's platform.
+          copy() {
+            local src=$1 dst=$2 attempt
+            for attempt in 1 2 3 4 5; do
+              docker buildx imagetools create --tag "$dst" "$src" && return 0
+              [ "$attempt" = 5 ] && return 1
+              local delay=$((attempt * 30 + RANDOM % 15))
+              echo "copy of $src failed (attempt $attempt/5); retrying in ${delay}s" >&2
+              sleep "$delay"
+            done
+          }
+          failed=()
+          while read -r image; do
+            case "$image" in ''|'#'*) continue ;; esac
+            echo "::group::$image"
+            if copy "public.ecr.aws/docker/library/$image" "$MIRROR/$image" \
+              || copy "docker.io/library/$image" "$MIRROR/$image"; then
+              docker buildx imagetools inspect "$MIRROR/$image" | grep -E 'Platform:' | sort -u
+            else
+              echo "::error::could not mirror $image; the previous mirror tag is unchanged"
+              failed+=("$image")
+            fi
+            echo "::endgroup::"
+          done < .github/mirror-images.txt
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::failed to mirror: ${failed[*]}"
+            exit 1
+          fi
