@@ -820,6 +820,97 @@ static void check_inline_points_win(void) {
     scratch_free(&s);
 }
 
+/* A library of points p<first> .. p<last> (ids "p0150"), each with `unit` and the
+ * address `address_base` + its number; `repeat` names one more id to add at the
+ * end, or NULL. Returned malloc'd. */
+static char *numbered_library(int first, int last, const char *unit, int address_base,
+                              const char *repeat) {
+    size_t cap = 128 + (size_t)(last - first + 2) * 192;
+    char *text = malloc(cap);
+    size_t n = (size_t)snprintf(text, cap, "[library]\nprotocol = \"modbus\"\n");
+    for (int i = first; i <= last + (repeat ? 1 : 0); i++) {
+        char id[16];
+        if (i <= last)
+            snprintf(id, sizeof id, "p%04d", i);
+        else
+            snprintf(id, sizeof id, "%s", repeat);
+        n += (size_t)snprintf(text + n, cap - n,
+                              "\n[[point]]\nid = \"%s\"\ndatatype = \"uint16\"\nunit = \"%s\"\n"
+                              "address = { table = \"holding\", address = %d, count = 1 }\n",
+                              id, unit, address_base + i);
+    }
+    return text;
+}
+
+static void check_many_points_merge_in_order(void) {
+    /* Enough points for the id index to grow and rehash several times: two
+     * libraries that overlap on p0150..p0299, and inline overrides of a point
+     * only in the first, one in both and one only in the second. The result
+     * must be the same as merging them one at a time: first library's order,
+     * then the second's new points, then the inline-only one; later wins. */
+    scratch_t s;
+    scratch_init(&s);
+    char *first = numbered_library(0, 299, "A", 0, NULL);
+    char *second = numbered_library(150, 449, "B", 1000, NULL);
+    write_file(&s, "modbus/first.toml", first);
+    write_file(&s, "modbus/second.toml", second);
+    free(first);
+    free(second);
+
+    char err[256] = "";
+    tdot_config_t *cfg = load_with_libs(
+        &s, "\"first\", \"second\"",
+        "\n  [[device.point]]\n  id = \"p0010\"\n  unit = \"I\"\n"
+        "\n  [[device.point]]\n  id = \"p0200\"\n  unit = \"I\"\n"
+        "\n  [[device.point]]\n  id = \"p0449\"\n  unit = \"I\"\n"
+        "\n  [[device.point]]\n  id = \"z_new\"\n  datatype = \"uint16\"\n"
+        "  address = { table = \"holding\", address = 9, count = 1 }\n",
+        err, sizeof err);
+    if (!cfg) {
+        printf("FAIL many points: %s\n", err);
+        failures++;
+        scratch_free(&s);
+        return;
+    }
+    tdot_device_t *dev = &cfg->devices[0];
+    CHECK(dev->npoints == 451, "expected 450 library points + 1 inline, got %zu", dev->npoints);
+    for (size_t i = 0; i < dev->npoints && dev->npoints == 451; i++) {
+        char id[16];
+        if (i < 450)
+            snprintf(id, sizeof id, "p%04zu", i);
+        else
+            snprintf(id, sizeof id, "z_new");
+        CHECK(strcmp(dev->points[i].id, id) == 0, "point %zu should be %s, got %s", i, id,
+              dev->points[i].id);
+        if (i >= 450)
+            continue;
+        const char *unit = (i == 10 || i == 200 || i == 449) ? "I" : i < 150 ? "A" : "B";
+        CHECK(dev->points[i].unit && strcmp(dev->points[i].unit, unit) == 0,
+              "%s should have unit %s, got %s", id, unit,
+              dev->points[i].unit ? dev->points[i].unit : "(null)");
+        /* The address of the later library replaces the earlier one's. */
+        long want = i < 150 ? (long)i : 1000 + (long)i;
+        toml_datum_t addr = toml_int_in(dev->points[i].address, "address");
+        CHECK(addr.ok && addr.u.i == want, "%s should have address %ld, got %ld", id, want,
+              addr.ok ? (long)addr.u.i : -1L);
+    }
+    tdot_config_free(cfg);
+    scratch_free(&s);
+
+    /* A repeated id inside one large library is still an error, named. */
+    scratch_init(&s);
+    char *dup = numbered_library(0, 299, "A", 0, "p0020");
+    write_file(&s, "modbus/dup.toml", dup);
+    free(dup);
+    cfg = load_with_libs(&s, "\"dup\"", "", err, sizeof err);
+    CHECK(cfg == NULL, "a library repeating an id must not load");
+    CHECK(strstr(err, "declares point 'p0020' twice") != NULL,
+          "the repeated id must be named, got: %s", err);
+    if (cfg)
+        tdot_config_free(cfg);
+    scratch_free(&s);
+}
+
 static void check_meta_merges_and_address_replaces(void) {
     scratch_t s;
     scratch_init(&s);
@@ -2491,6 +2582,7 @@ int main(void) {
     check_libraries_apply_in_order();
     check_repeated_id_patches();
     check_inline_points_win();
+    check_many_points_merge_in_order();
     check_meta_merges_and_address_replaces();
     check_one_library_shared_by_two_devices();
     check_bad_references_are_reported();
