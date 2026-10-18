@@ -827,17 +827,30 @@ static char *numbered_library(int first, int last, const char *unit, int address
                               const char *repeat) {
     size_t cap = 128 + (size_t)(last - first + 2) * 192;
     char *text = malloc(cap);
-    size_t n = (size_t)snprintf(text, cap, "[library]\nprotocol = \"modbus\"\n");
-    for (int i = first; i <= last + (repeat ? 1 : 0); i++) {
+    if (!text) {
+        perror("malloc");
+        exit(2);
+    }
+    size_t n = 0;
+    for (int i = first - 1; i <= last + (repeat ? 1 : 0); i++) {
         char id[16];
-        if (i <= last)
+        if (i < first)
+            id[0] = '\0';
+        else if (i <= last)
             snprintf(id, sizeof id, "p%04d", i);
         else
             snprintf(id, sizeof id, "%s", repeat);
-        n += (size_t)snprintf(text + n, cap - n,
-                              "\n[[point]]\nid = \"%s\"\ndatatype = \"uint16\"\nunit = \"%s\"\n"
-                              "address = { table = \"holding\", address = %d, count = 1 }\n",
-                              id, unit, address_base + i);
+        int w = i < first
+                    ? snprintf(text + n, cap - n, "[library]\nprotocol = \"modbus\"\n")
+                    : snprintf(text + n, cap - n,
+                               "\n[[point]]\nid = \"%s\"\ndatatype = \"uint16\"\nunit = \"%s\"\n"
+                               "address = { table = \"holding\", address = %d, count = 1 }\n",
+                               id, unit, address_base + i);
+        if (w < 0 || (size_t)w >= cap - n) {
+            fprintf(stderr, "numbered_library: buffer too small\n");
+            exit(2);
+        }
+        n += (size_t)w;
     }
     return text;
 }
