@@ -1222,7 +1222,6 @@ done:
     toml_free(root);
 }
 
-/* Validate a parsed library document and return its [[point]] array. */
 /* An index from id to position, so an id is found in constant time: a device
  * of 30,000 points is merged in one pass, not in 30,000 searches. Open
  * addressing; a slot holds the position + 1, 0 is empty. The keys stay in the
@@ -1235,10 +1234,10 @@ typedef struct {
 } idx_t;
 
 static size_t idx_hash(const char *s) {
-    size_t h = 1469598103934665603u; /* FNV-1a */
+    uint64_t h = 14695981039346656037ULL; /* FNV-1a, 64 bit on every target */
     for (; *s; s++)
-        h = (h ^ (unsigned char)*s) * 1099511628211u;
-    return h;
+        h = (h ^ (unsigned char)*s) * 1099511628211ULL;
+    return (size_t)h;
 }
 
 /* The position of `id`, or SIZE_MAX. */
@@ -1292,6 +1291,7 @@ static const char *point_key(const void *base, size_t i) {
     return ((const tdot_point_t *)base)[i].id;
 }
 
+/* Validate a parsed library document and return its [[point]] array. */
 static toml_array_t *library_points(toml_table_t *root, const char *path,
                                     const char *protocol, char *err,
                                     size_t errlen) {
