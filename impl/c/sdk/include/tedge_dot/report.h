@@ -145,6 +145,21 @@ bool tdot_report_offer(tdot_report_state_t *st, const tdot_report_item_t *item,
 bool tdot_report_due(tdot_report_state_t *st, int64_t now, bool pushed,
                      tdot_report_item_t *out, bool *read);
 
+/* The earliest monotonic time at which tdot_report_due could do anything for
+ * this state -- return true, ask for a heartbeat read, or move or drop a held
+ * reading -- as long as the state does not change and `pushed` stays as it is;
+ * INT64_MAX when nothing is pending, a candidate or a heartbeat is armed.
+ * Before that time a pass over the point is a no-op, so the runtime may skip it.
+ * The result is exact for the rules of tdot_report_due; a caller must treat it
+ * as a lower bound and fall back to "now" whenever it is unsure. */
+int64_t tdot_report_next_due(const tdot_report_state_t *st, bool pushed);
+
+/* Lower `*bound`, the runtime's per-device bound for "nothing is due before
+ * this", to the point's next due time. It only ever lowers: it never raises the
+ * bound, and a later time needs no update, because the bound only has to stay a
+ * lower bound. Call it after every change of the state (an offer, a pass). */
+void tdot_report_lower_bound(int64_t *bound, const tdot_report_state_t *st, bool pushed);
+
 #ifdef __cplusplus
 }
 #endif

@@ -182,6 +182,12 @@ typedef struct tdot_device {
     size_t nreported;
     size_t npushed;        /* points delivered by push */
     double fastest_push_s; /* their fastest sampling interval; <0: none */
+    /* The runtime's bound for the reporting pass: no reported point has
+     * anything due before this monotonic time (report.h, tdot_report_next_due),
+     * so the pass skips the device until then. 0 -- the initial value, and what
+     * a reset, a rebuild of the lists or a failed pass leave -- means "look
+     * now". It only ever has to be a lower bound. */
+    int64_t report_next;
 } tdot_device_t;
 
 typedef struct tdot_config {
