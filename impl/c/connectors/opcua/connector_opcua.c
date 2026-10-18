@@ -2533,14 +2533,18 @@ static UA_StatusCode monitor_point(tdot_device_t *dev, tdot_point_t *pt,
  * Every UA_RETRY_INTERVAL_S, from drain_subscriptions(). */
 static void retry_pending(tdot_device_t *dev) {
     ua_device_t *ua = dev->proto;
+    /* The interval first: this runs on every runtime tick, and looking for a
+     * pending point visits every point of the device. */
+    if (mono_s() < ua->retry_at)
+        return;
     bool any = false;
     for (size_t j = 0; j < dev->npoints && !any; j++) {
         const ua_point_t *up = dev->points[j].proto;
         any = up && up->pending;
     }
-    if (!any || mono_s() < ua->retry_at)
-        return;
     ua->retry_at = mono_s() + UA_RETRY_INTERVAL_S;
+    if (!any)
+        return;
     translate_device(dev, true);
     char added[512] = "";
     for (size_t j = 0; j < dev->npoints; j++) {
