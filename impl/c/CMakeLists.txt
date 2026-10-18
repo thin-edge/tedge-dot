@@ -319,6 +319,12 @@ add_test(NAME report-vectors
          COMMAND tedge-dot-report
                  ${CMAKE_CURRENT_SOURCE_DIR}/../../doc/contract/test-vectors/report/vectors.json)
 
+# The reporting pass skips a device until its next due time: skipping must be invisible
+# (a random script run with and without the bound publishes the same readings).
+add_executable(tedge-dot-report-next-due tests/report_next_due.c)
+target_link_libraries(tedge-dot-report-next-due PRIVATE tedge_dot_sdk)
+add_test(NAME report-next-due COMMAND tedge-dot-report-next-due)
+
 # Value mapping (contract §4.3): the shared vectors the Rust SDK's map.rs runs too.
 add_executable(tedge-dot-map tests/map.c)
 target_link_libraries(tedge-dot-map PRIVATE tedge_dot_sdk)
