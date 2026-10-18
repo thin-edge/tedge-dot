@@ -35,7 +35,7 @@
 //! device by reference alone.
 
 use crate::config::ConnectorConfig;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use toml::value::Table;
 use toml::Value;
@@ -630,6 +630,7 @@ fn expand(doc: &mut Value, base_dir: &Path) -> Result<(), String> {
         }
 
         let mut points: Vec<Value> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
         let mut device_type: Option<String> = None;
         for reference in &refs {
             let path = locate(reference, &protocol, base_dir, &search_path)
@@ -647,7 +648,7 @@ fn expand(doc: &mut Value, base_dir: &Path) -> Result<(), String> {
                 device_type.clone_from(&library.device_type);
             }
             for point in &library.points {
-                merge_point(&mut points, point.clone());
+                merge_point(&mut points, &mut index, point.clone());
             }
         }
         // Inline points come last: a device's own definition wins over every library it
@@ -669,7 +670,7 @@ fn expand(doc: &mut Value, base_dir: &Path) -> Result<(), String> {
         };
         let inline_count = inline.len();
         for point in inline {
-            merge_point(&mut points, point);
+            merge_point(&mut points, &mut index, point);
         }
 
         let table = device
@@ -1054,7 +1055,7 @@ fn read_library(path: &Path, protocol: &str) -> Result<Library, String> {
 
     // Within one library a repeated id is a mistake, not an override: there is no meaningful
     // order to apply and the second definition would silently win.
-    let mut seen: Vec<&str> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     for point in points {
         check_point_keys(point)
             .and_then(|()| check_point_fields(point))
@@ -1063,12 +1064,11 @@ fn read_library(path: &Path, protocol: &str) -> Result<Library, String> {
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("point library '{where_}': a point is missing its id"))?;
-        if seen.contains(&id) {
+        if !seen.insert(id) {
             return Err(format!(
                 "point library '{where_}' declares point '{id}' twice"
             ));
         }
-        seen.push(id);
     }
     // Each point carries the `[library]` table its address belongs to, so a protocol can read
     // the library's address settings per point after the points of several libraries and the
@@ -1093,22 +1093,26 @@ fn read_library(path: &Path, protocol: &str) -> Result<Library, String> {
 }
 
 /// Add `incoming` to `points`, or merge it into the existing point with the same id.
-fn merge_point(points: &mut Vec<Value>, incoming: Value) {
+///
+/// `index` maps the id of each point in `points` to its position, so a point is found in
+/// constant time: a device of 30,000 points is merged in one pass, not 30,000 searches.
+fn merge_point(points: &mut Vec<Value>, index: &mut HashMap<String, usize>, incoming: Value) {
     let id = incoming.get("id").and_then(Value::as_str).map(str::to_string);
-    let existing = id.and_then(|id| {
-        points
-            .iter_mut()
-            .find(|p| p.get("id").and_then(Value::as_str) == Some(id.as_str()))
-    });
-    match existing {
-        Some(base) => {
+    match id.as_ref().and_then(|id| index.get(id)).copied() {
+        Some(at) => {
+            let base = &mut points[at];
             if let (Some(base), Some(over)) = (base.as_table_mut(), incoming.as_table()) {
                 merge_point_table(base, over);
             } else {
                 *base = incoming;
             }
         }
-        None => points.push(incoming),
+        None => {
+            if let Some(id) = id {
+                index.insert(id, points.len());
+            }
+            points.push(incoming);
+        }
     }
 }
 
