@@ -1222,6 +1222,75 @@ done:
     toml_free(root);
 }
 
+/* An index from id to position, so an id is found in constant time: a device
+ * of 30,000 points is merged in one pass, not in 30,000 searches. Open
+ * addressing; a slot holds the position + 1, 0 is empty. The keys stay in the
+ * caller's array (`key` reads one), so the table never owns a string and
+ * survives the array being reallocated. */
+typedef const char *(*idx_key_fn)(const void *base, size_t i);
+typedef struct {
+    size_t *slot;
+    size_t cap, n;
+} idx_t;
+
+static size_t idx_hash(const char *s) {
+    uint64_t h = 14695981039346656037ULL; /* FNV-1a, 64 bit on every target */
+    for (; *s; s++)
+        h = (h ^ (unsigned char)*s) * 1099511628211ULL;
+    return (size_t)h;
+}
+
+/* The position of `id`, or SIZE_MAX. */
+static size_t idx_find(const idx_t *ix, idx_key_fn key, const void *base, const char *id) {
+    if (!ix->cap)
+        return SIZE_MAX;
+    for (size_t h = idx_hash(id) & (ix->cap - 1); ix->slot[h]; h = (h + 1) & (ix->cap - 1))
+        if (strcmp(key(base, ix->slot[h] - 1), id) == 0)
+            return ix->slot[h] - 1;
+    return SIZE_MAX;
+}
+
+static void idx_put(idx_t *ix, idx_key_fn key, const void *base, size_t at) {
+    size_t h = idx_hash(key(base, at)) & (ix->cap - 1);
+    while (ix->slot[h])
+        h = (h + 1) & (ix->cap - 1);
+    ix->slot[h] = at + 1;
+    ix->n++;
+}
+
+/* Record the key at position `at` (not yet in the index). A position without a
+ * key is not indexed. Returns -1 when out of memory. */
+static int idx_add(idx_t *ix, idx_key_fn key, const void *base, size_t at) {
+    if (!key(base, at))
+        return 0;
+    if ((ix->n + 1) * 2 > ix->cap) {
+        idx_t grown = {.cap = ix->cap ? ix->cap * 2 : 64};
+        grown.slot = calloc(grown.cap, sizeof *grown.slot);
+        if (!grown.slot)
+            return -1;
+        for (size_t h = 0; h < ix->cap; h++)
+            if (ix->slot[h])
+                idx_put(&grown, key, base, ix->slot[h] - 1);
+        free(ix->slot);
+        *ix = grown;
+    }
+    idx_put(ix, key, base, at);
+    return 0;
+}
+
+static void idx_free(idx_t *ix) {
+    free(ix->slot);
+    *ix = (idx_t){0};
+}
+
+static const char *ids_key(const void *base, size_t i) {
+    return ((char *const *)base)[i];
+}
+
+static const char *point_key(const void *base, size_t i) {
+    return ((const tdot_point_t *)base)[i].id;
+}
+
 /* Validate a parsed library document and return its [[point]] array. */
 static toml_array_t *library_points(toml_table_t *root, const char *path,
                                     const char *protocol, char *err,
@@ -1274,6 +1343,7 @@ static toml_array_t *library_points(toml_table_t *root, const char *path,
      * no order to apply it in and the second definition would silently win. */
     int n = toml_array_nelem(points);
     char **ids = calloc(n ? (size_t)n : 1, sizeof *ids);
+    idx_t seen = {0};
     const char *dup = NULL;
     bool missing_id = false, bad_key = false;
     for (int i = 0; i < n && !dup && !missing_id && !bad_key; i++) {
@@ -1291,12 +1361,17 @@ static toml_array_t *library_points(toml_table_t *root, const char *path,
             break;
         }
         ids[i] = id.u.s;
-        for (int j = 0; j < i; j++)
-            if (strcmp(ids[j], id.u.s) == 0) {
-                dup = id.u.s;
-                break;
-            }
+        if (idx_find(&seen, ids_key, ids, id.u.s) != SIZE_MAX) {
+            dup = id.u.s;
+            break;
+        }
+        if (idx_add(&seen, ids_key, ids, (size_t)i) != 0) {
+            snprintf(err, errlen, "point library '%s': out of memory", path);
+            bad_key = true;
+            break;
+        }
     }
+    idx_free(&seen);
     if (dup)
         snprintf(err, errlen, "point library '%s' declares point '%s' twice", path, dup);
     else if (missing_id)
@@ -1401,13 +1476,14 @@ static toml_array_t *load_library(tdot_config_t *cfg, const char *path,
 
 /* Add one point definition to a device's growing point list: a definition
  * whose id is already present patches it, a new id is appended. */
-static int merge_point(tdot_device_t *dev, toml_table_t *pt,
+static int merge_point(tdot_device_t *dev, idx_t *ix, toml_table_t *pt,
                        toml_table_t *library, tdot_mode_t device_mode, char *err,
                        size_t errlen) {
     toml_datum_t id = toml_string_in(pt, "id");
     tdot_point_t *existing = NULL;
     if (id.ok) {
-        existing = tdot_device_point(dev, id.u.s);
+        size_t at = idx_find(ix, point_key, dev->points, id.u.s);
+        existing = at == SIZE_MAX ? NULL : &dev->points[at];
         free(id.u.s);
     }
     if (existing) {
@@ -1425,6 +1501,10 @@ static int merge_point(tdot_device_t *dev, toml_table_t *pt,
     tdot_point_t *point = &dev->points[dev->npoints++];
     init_point(point, dev->poll_interval_s, device_mode);
     apply_point_table(pt, point, library);
+    if (idx_add(ix, point_key, dev->points, dev->npoints - 1) != 0) {
+        snprintf(err, errlen, "out of memory");
+        return -1;
+    }
     return 0;
 }
 
@@ -1448,10 +1528,10 @@ static void free_point(tdot_point_t *p) {
 /* Resolve `points_from` for one device: every library in order, then the
  * device's own inline points, which therefore win. That ordering is what lets
  * a site extend a packaged list without editing the packaged file. */
-static int resolve_device_points(tdot_config_t *cfg, tdot_device_t *dev,
-                                 toml_table_t *dt, toml_table_t *connector,
-                                 tdot_mode_t device_mode, const char *base_dir,
-                                 char *err, size_t errlen) {
+static int resolve_device_points_in(tdot_config_t *cfg, tdot_device_t *dev, idx_t *ix,
+                                    toml_table_t *dt, toml_table_t *connector,
+                                    tdot_mode_t device_mode, const char *base_dir,
+                                    char *err, size_t errlen) {
     /* The device's own definitions are checked before anything is resolved,
      * as the Rust loader checks them; a library's are checked as it loads. */
     toml_array_t *own = toml_array_in(dt, "point");
@@ -1525,7 +1605,7 @@ static int resolve_device_points(tdot_config_t *cfg, tdot_device_t *dev,
             }
             for (int j = 0; j < toml_array_nelem(points); j++) {
                 toml_table_t *pt = toml_table_at(points, j);
-                if (pt && merge_point(dev, pt, toml_table_in(lib_root, "library"),
+                if (pt && merge_point(dev, ix, pt, toml_table_in(lib_root, "library"),
                                       device_mode, err, errlen) != 0) {
                     search_path_free(&sp);
                     return -1;
@@ -1544,7 +1624,7 @@ static int resolve_device_points(tdot_config_t *cfg, tdot_device_t *dev,
     int ninline = inline_points ? toml_array_nelem(inline_points) : 0;
     for (int j = 0; j < ninline; j++) {
         toml_table_t *pt = toml_table_at(inline_points, j);
-        if (pt && merge_point(dev, pt, NULL, device_mode, err, errlen) != 0)
+        if (pt && merge_point(dev, ix, pt, NULL, device_mode, err, errlen) != 0)
             return -1;
     }
 
@@ -1591,6 +1671,19 @@ static int resolve_device_points(tdot_config_t *cfg, tdot_device_t *dev,
         dev->points = calloc(1, sizeof *dev->points);
 
     return 0;
+}
+
+/* Resolve `points_from` and the inline points of one device; see
+ * resolve_device_points_in. The id index lives for this call only. */
+static int resolve_device_points(tdot_config_t *cfg, tdot_device_t *dev,
+                                 toml_table_t *dt, toml_table_t *connector,
+                                 tdot_mode_t device_mode, const char *base_dir,
+                                 char *err, size_t errlen) {
+    idx_t ix = {0};
+    int rc = resolve_device_points_in(cfg, dev, &ix, dt, connector, device_mode,
+                                      base_dir, err, errlen);
+    idx_free(&ix);
+    return rc;
 }
 
 /* True when the point's `meta.event.every` is true: an event per reading. */
