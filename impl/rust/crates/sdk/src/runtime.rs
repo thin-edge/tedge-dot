@@ -4051,6 +4051,9 @@ protocol_address = {}
             "{ deadband = 1.5, debounce = \"200ms\", max_interval = \"2500ms\" }",
         ];
         const POINTS: usize = 4;
+        /// The decisions of `decide`.
+        const NO_DATA: usize = 1;
+        const BAD_READING: usize = 2;
 
         #[derive(Clone, Debug)]
         enum Ev {
@@ -4111,8 +4114,9 @@ protocol_address = {}
         }
 
         /// A decision both runs must take alike: a function of the step and the point only.
-        fn decide(step: usize, point: usize, one_in: usize, salt: usize) -> bool {
-            (step * 2654435761 + point * 40503 + salt * 97).is_multiple_of(one_in)
+        /// `which` tells the decisions of one step apart (no data, bad reading).
+        fn decide(step: usize, point: usize, one_in: usize, which: usize) -> bool {
+            (step * 2654435761 + point * 40503 + which * 97).is_multiple_of(one_in)
         }
 
         /// Run the script; `skipping` keeps the reporter's bound, otherwise every pass is full.
@@ -4166,10 +4170,10 @@ protocol_address = {}
                     for point in points {
                         batch.push(format!("read {device_index} {}", point.id));
                         let k: usize = point.id[1..].parse().unwrap();
-                        if decide(step, k, 6, 1) {
+                        if decide(step, k, 6, NO_DATA) {
                             reporter.no_data("srv", &point.id);
                         } else {
-                            let bad = decide(step, k, 9, 2);
+                            let bad = decide(step, k, 9, BAD_READING);
                             let sample = reading(&refs[k], ((step / 5 + k * 3) % 4) as i8, bad);
                             if let Some(s) = reporter.offer_at(sample, now) {
                                 batch.push(format!("heartbeat {} {:?}", s.point, s.value));
