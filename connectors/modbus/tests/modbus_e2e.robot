@@ -499,9 +499,9 @@ A Config Edit Is Applied On Reload
     # Inserted into plc1's own point list, right after its `points_from` (matched by plc1's
     # library, not just the key: the disabled plc-off has a `points_from` too), so it lands on plc1
     # whatever devices the file declares after it.
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=sed -i '/^points_from.*"plc-sim"/a [[device.point]]\\nid = "reloaded_u16"\\ndatatype = "uint16"\\naddress = { table = "holding", address = 3, count = 1 }' /etc/connector.toml
-    Clear Messages
     DeviceLibrary.Execute Command    cmd=kill -HUP 1
     Wait For Sample    ${SAMPLE_PREFIX}/reloaded_u16    timeout=${SAMPLE_TIMEOUT}
     ${health}=    Get Messages    ${HEALTH_TOPIC}
@@ -521,9 +521,9 @@ A Parameter Removed On Reload Leaves The Twin
     # republished only when a value in the set changes, which its read-only point does not do.
     ${before}=    Fetch Retained    ${PARAM_TWIN}
     Should Contain    ${before}    "twin_only_u16":
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=sed -i '/^ *id *= *"twin_only_u16"/s/twin_only_u16/renamed_u16/' /etc/connector.toml
-    Clear Messages
     DeviceLibrary.Execute Command    cmd=kill -HUP 1
     ${link}=    Wait For Message Containing    ${LINK_TOPIC}    "renamed_u16"    timeout=${SAMPLE_TIMEOUT}
     Should Not Contain    ${link}    "twin_only_u16"
@@ -538,9 +538,9 @@ A Point Switched Off On Reload Leaves Its Device
     ...                to it fails as an unknown point, and `describe` stops rendering it — while the
     ...                service health never goes down. The next tests check the twin, then switch
     ...                it back on.
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=sed -i '/^ *id *= *"coil_rw"/a enabled = false' /etc/connector.toml
-    Clear Messages
     DeviceLibrary.Execute Command    cmd=kill -HUP 1
     Wait Until Keyword Succeeds    ${SAMPLE_TIMEOUT}s    1s    Link Status Should List    coil_rw    ${False}
     # A poll already in flight when the reload landed may still publish once.
@@ -571,9 +571,9 @@ A Parameter Switched Off On Reload Leaves The Twin
 A Point Switched Back On On Reload Returns To Its Device
     [Documentation]    Replacing `enabled = false` with `enabled = true` switches coil_rw back on at the
     ...                next reload: it is listed on the link status and sampled again.
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=sed -i 's/^enabled = false$/enabled = true/' /etc/connector.toml
-    Clear Messages
     DeviceLibrary.Execute Command    cmd=kill -HUP 1
     Wait Until Keyword Succeeds    ${SAMPLE_TIMEOUT}s    1s    Link Status Should List    coil_rw    ${True}
     ${payload}=    Wait For Sample    ${SAMPLE_PREFIX}/coil_rw    timeout=${SAMPLE_TIMEOUT}
@@ -591,9 +591,9 @@ A Connector That Cannot Restart After A Reload Is Retried
     ...                next reload of a usable file brings the connector back. It is the only
     ...                connector, so a service that stopped with its last connector would be gone.
     ${started}=    DeviceLibrary.Execute Command    cmd=cut -d' ' -f22 /proc/1/stat
+    Clear Messages
     DeviceLibrary.Execute Command
     ...    cmd=cp /etc/connector.toml /tmp/connector.toml && sed -i 's/^port *= *1883$/port = 1/' /etc/connector.toml
-    Clear Messages
     DeviceLibrary.Execute Command    cmd=kill -HUP 1
     Wait For Message Containing    ${HEALTH_TOPIC}    "status":"down"    timeout=${SAMPLE_TIMEOUT}
     # Past the 5s restart delay, so a failed restart has been retried (and failed) again.

@@ -24,6 +24,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read
 
 # The suites generate their own device id per run (DeviceLibrary, "TST_*") and delete the
 # device and its user at teardown, so no DEVICE_ID is configured here and no cleanup step is
@@ -39,6 +40,8 @@ env:
   # FieldbusLibrary, ParameterLibrary, and the cleanup step below). Optional only if
   # C8Y_USER is stored as `tenant/user`.
   C8Y_TENANT: ${{ secrets.C8Y_TENANT }}
+  # Third-party images from the GHCR mirror, as in ci.yaml (see the comment there).
+  BASE_REGISTRY: ghcr.io/thin-edge/tedge-dot/mirror
 
 jobs:
   cloud-e2e:
@@ -46,6 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v2
+      - name: Log in to GHCR (image mirror)
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Only the Rust image installs a package; the C image compiles impl/c/ in a build stage.
       - name: Build connector package (.deb)

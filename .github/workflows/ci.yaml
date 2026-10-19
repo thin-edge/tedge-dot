@@ -11,8 +11,20 @@ concurrency:
   cancel-in-progress: true
 
 # No job writes to the repository; artifact uploads use the runtime token, not GITHUB_TOKEN.
+# `packages: read` lets the Docker jobs pull the image mirror authenticated.
 permissions:
   contents: read
+  packages: read
+
+# Third-party images (Dockerfile `FROM`s, the broker) come from this repository's GHCR mirror
+# (.github/mirror-images.txt, refreshed by mirror-images.yaml) instead of ECR Public / Docker
+# Hub, whose anonymous quotas are shared with every other Actions user on the runner's egress
+# IP and failed whole runs with `429 toomanyrequests: Data limit exceeded`. If the mirror lacks
+# an image, `just _pull-stack-images` falls back to those registries (ci/pull-stack-images.py).
+# Spelled out, not github.repository: CI on a fork's own branches must use this (public) mirror
+# too, not the fork's empty namespace.
+env:
+  BASE_REGISTRY: ghcr.io/thin-edge/tedge-dot/mirror
 
 jobs:
   test:
@@ -70,6 +82,16 @@ jobs:
       - uses: extractions/setup-just@v2
       - run: just check-release-versions
 
+  # CI pulls third-party images from the GHCR mirror; one that is referenced but not mirrored
+  # would silently fall back to the shared-quota registries the mirror exists to avoid.
+  mirrored-images:
+    name: Mirrored image consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - run: just check-mirrored-images
+
   flows:
     name: Flow tests (tedge flows test)
     runs-on: ubuntu-latest
@@ -114,6 +136,14 @@ jobs:
         protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
+      # Best effort: the mirror is public, so a failed login still pulls (anonymously).
+      - name: Log in to GHCR (image mirror)
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: extractions/setup-just@v2
       - name: Install C toolchain + libraries
         run: |
@@ -210,6 +240,14 @@ jobs:
         protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
+      # Best effort: the mirror is public, so a failed login still pulls (anonymously).
+      - name: Log in to GHCR (image mirror)
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Load vcan kernel module (SocketCAN suites)
         if: matrix.protocol == 'canbus' || matrix.protocol == 'canopen'
         run: |
@@ -244,6 +282,14 @@ jobs:
         protocol: [modbus, opcua, canbus, canopen, profibus, snmp]
     steps:
       - uses: actions/checkout@v4
+      # Best effort: the mirror is public, so a failed login still pulls (anonymously).
+      - name: Log in to GHCR (image mirror)
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Load vcan kernel module (SocketCAN suites)
         if: matrix.protocol == 'canbus' || matrix.protocol == 'canopen'
         run: |
@@ -274,6 +320,14 @@ jobs:
         impl: [rust, c]
     steps:
       - uses: actions/checkout@v4
+      # Best effort: the mirror is public, so a failed login still pulls (anonymously).
+      - name: Log in to GHCR (image mirror)
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: extractions/setup-just@v2
       - name: Run the OPC UA interop suite
         run: just test-interop${{ matrix.impl == 'c' && '-c' || '' }} opcua

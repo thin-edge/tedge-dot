@@ -41,7 +41,7 @@ x-notifier: &notifier
 
 services:
   broker:
-    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    image: ${BASE_REGISTRY:-public.ecr.aws/docker/library}/eclipse-mosquitto:2
     volumes:
       - ../_shared/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     ports:
@@ -54,6 +54,8 @@ services:
     build:
       context: ../..
       dockerfile: connectors/snmp/agent/Dockerfile
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
     environment:
       SNMP_ENGINE_ID: 80001f8880e2e0000000000001
     ports:
@@ -96,6 +98,8 @@ services:
     build:
       context: ../..
       dockerfile: connectors/snmp/sim/Dockerfile
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
     environment:
       TRAP_TARGET: connector:162
       TRAP_ENGINE_ID: 80001f8880e2e000000000a001
@@ -127,6 +131,7 @@ services:
       context: ../..
       dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/snmp/Dockerfile.connector}
       args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
         PROTOCOL: snmp
     labels:
       # Marks the service DeviceLibrary treats as the device under test, so `Execute Command`
@@ -163,6 +168,7 @@ services:
       context: ../..
       dockerfile: connectors/_shared/Dockerfile.flows
       args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
         PROTOCOL: snmp
     depends_on:
       broker:

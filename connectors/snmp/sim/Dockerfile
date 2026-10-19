@@ -7,6 +7,7 @@
 # udp/162 and forwarding everything there (see entrypoint.sh).
 #
 # (The agent the connector polls is a separate image: connectors/snmp/agent.)
+# CI overrides BASE_REGISTRY with the GHCR mirror of .github/mirror-images.txt.
 ARG BASE_REGISTRY=public.ecr.aws/docker/library
 FROM ${BASE_REGISTRY}/debian:bookworm-slim
 RUN apt-get update \

@@ -11,7 +11,7 @@
 #   PROFIBUS_SIM_PORT
 services:
   broker:
-    image: public.ecr.aws/docker/library/eclipse-mosquitto:2
+    image: ${BASE_REGISTRY:-public.ecr.aws/docker/library}/eclipse-mosquitto:2
     volumes:
       - ../_shared/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     ports:
@@ -22,6 +22,8 @@ services:
     build:
       context: ../..
       dockerfile: connectors/profibus/sim/Dockerfile
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
     ports:
       - target: 9200
         published: "${PROFIBUS_SIM_PORT:-}"
@@ -42,6 +44,7 @@ services:
       context: ../..
       dockerfile: ${CONNECTOR_DOCKERFILE:-connectors/profibus/Dockerfile.connector}
       args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-public.ecr.aws/docker/library}
         PROTOCOL: profibus
     labels:
       # Marks the service DeviceLibrary treats as the device under test, so `Execute Command`
