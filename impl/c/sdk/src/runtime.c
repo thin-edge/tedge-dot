@@ -1,6 +1,7 @@
 #include "tedge_dot/runtime.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
 #include <signal.h>
@@ -92,7 +93,25 @@ typedef struct {
      * point (tdot_schedule_tick_ms), so a pushed value does not sit in the
      * protocol socket for a whole 200 ms tick. */
     int tick_ms;
+    /* Counters of the periodic statistics line, since the connector started.
+     * `suppressed` readings were dropped or held back by the report policy (a
+     * held one counts again as `published` when released). */
+    struct {
+        uint64_t received, suppressed, published, publish_failed, reconnects;
+    } stats;
 } rt_t;
+
+/* TEDGE_DOT_STATS_INTERVAL (whole seconds, default 60, 0 = off): how often the
+ * statistics line is logged. Mirrors stats_interval_from_env in the Rust
+ * runtime. */
+static unsigned stats_interval_s(void) {
+    const char *v = getenv("TEDGE_DOT_STATS_INTERVAL");
+    if (!v || *v < '0' || *v > '9')
+        return 60;
+    char *end;
+    unsigned long n = strtoul(v, &end, 10);
+    return *end ? 60 : (unsigned)n;
+}
 
 static void logmsg(const char *level, const char *fmt, ...) {
     char ts[40];
@@ -167,8 +186,11 @@ static void publish_item(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
         char topic[256];
         snprintf(topic, sizeof topic, "te/device/%s/ot/%s/sample/%s",
                  dev->name, rt->cfg->protocol, pt->id);
-        mosquitto_publish(rt->mosq, NULL, topic, (int)strlen(json), json, 0,
-                          false);
+        if (mosquitto_publish(rt->mosq, NULL, topic, (int)strlen(json), json, 0,
+                              false) == MOSQ_ERR_SUCCESS)
+            rt->stats.published++;
+        else
+            rt->stats.publish_failed++;
     }
     free(json);
 }
@@ -187,12 +209,15 @@ static void emit_sample(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
     tdot_now_rfc3339(item.ts, sizeof item.ts);
     item.ts_ms = tdot_now_ms();
     int64_t now = mono_ns();
+    rt->stats.received++;
     tdot_report_state_t *st = report_state(pt, now);
     if (st) {
         tdot_report_obs_t obs;
         tdot_report_obs_of(&item.sample, &obs);
-        if (!tdot_report_offer(st, &item, &obs, item.sample.quality, now))
+        if (!tdot_report_offer(st, &item, &obs, item.sample.quality, now)) {
+            rt->stats.suppressed++;
             return;
+        }
     }
     publish_item(rt, dev, pt, &item);
 }
@@ -923,6 +948,7 @@ static void on_connect(struct mosquitto *mosq, void *ud, int rc) {
     if (!rt->mqtt_resume)
         return;
     rt->mqtt_resume = false;
+    rt->stats.reconnects++;
     logmsg("info", "reconnected to MQTT broker %s:%d", rt->cfg->mqtt_host,
            rt->cfg->mqtt_port);
     subscribe_commands(rt);
@@ -1870,6 +1896,9 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
      * before its file was read, so a reload requested since is applied now. */
     unsigned seen_gen = ctl ? ctl->start_gen : atomic_load(&g_reload_gen);
     int result = RUN_STOPPED;
+    /* MQTT mode only, as in the Rust build. */
+    unsigned stats_every = rt.output == TDOT_OUTPUT_MQTT ? stats_interval_s() : 0;
+    double stats_at = tdot_mono() + stats_every;
 
     while (!stop_requested(ctl)) {
         double now = tdot_mono();
@@ -1961,6 +1990,16 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
         }
 
         report_pass(&rt, ctl);
+
+        if (stats_every > 0 && tdot_mono() >= stats_at) {
+            logmsg("info",
+                   "stats {\"connector\":\"%s\",\"in\":%" PRIu64
+                   ",\"suppressed\":%" PRIu64 ",\"published\":%" PRIu64
+                   ",\"publish_failed\":%" PRIu64 ",\"reconnects\":%" PRIu64 "}",
+                   cfg->protocol, rt.stats.received, rt.stats.suppressed,
+                   rt.stats.published, rt.stats.publish_failed, rt.stats.reconnects);
+            stats_at = tdot_mono() + stats_every;
+        }
 
         if (rt.output == TDOT_OUTPUT_MQTT)
             mqtt_service(&rt);

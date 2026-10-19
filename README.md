@@ -149,6 +149,10 @@ on every reload; the service keeps running meanwhile. The same goes for a broker
 accept the connection within 10 seconds, such as one still starting at boot: the connector
 starts once it does.
 
+Each connector logs a statistics line every `TEDGE_DOT_STATS_INTERVAL` seconds (default 60, `0` =
+off), in MQTT mode: `stats {"connector":"opcua","in":..,"suppressed":..,"published":..,"publish_failed":..,"reconnects":..}`.
+`in` counts readings offered to the report policy and `suppressed` those it held back or dropped.
+
 ## One point list, many devices
 
 A device's point list belongs to its *type*, not to the instance: every ACME meter of the same
