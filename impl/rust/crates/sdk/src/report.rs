@@ -392,6 +392,33 @@ impl<T> ReportState<T> {
         Due { publish: out, read }
     }
 
+    /// The earliest time at which [`due`](Self::due) could do anything for this state -- publish
+    /// a held reading, move or drop one, or ask for a heartbeat read -- as long as the state does
+    /// not change and `pushed` stays as it is; `None` when nothing is held or armed. Before that
+    /// time a pass over the point is a no-op, so the runtime may skip it. Each time is a
+    /// condition of `due` solved for `now`, so it is exact; a caller must still treat it as a
+    /// lower bound and fall back to "look now" whenever it is unsure.
+    pub fn next_due(&self, pushed: bool) -> Option<Duration> {
+        let later = |a: Duration, b: Duration| a.checked_add(b).unwrap_or(Duration::MAX);
+        let published_at = self.last_published.unwrap_or(self.origin);
+        let mut at: Option<Duration> = None;
+        let mut arm = |t: Duration| at = Some(at.map_or(t, |a| a.min(t)));
+        if let (Some(min), Some(_)) = (self.policy.min_interval, &self.pending) {
+            arm(later(published_at, min));
+        }
+        if let (Some(debounce), Some(c)) = (self.policy.debounce, &self.candidate) {
+            arm(later(c.since, debounce));
+        }
+        // Only a pushed point is read on demand, and not an unreadable one.
+        if let Some(max) = self.policy.max_interval {
+            if pushed && !self.unreadable {
+                let reference = published_at.max(self.last_read.unwrap_or(self.origin));
+                arm(later(reference, max));
+            }
+        }
+        at
+    }
+
     fn publish_if_changed(&mut self, item: T, obs: Obs, now: Duration) -> Option<T> {
         let (last_obs, quality) = self.last.as_ref()?;
         if self.policy.filters_changes() && !self.policy.changed(&obs, last_obs) {
@@ -535,6 +562,73 @@ mod tests {
         assert!(warning.is_some());
         let fine = serde_json::json!({ "min_interval": "10s", "max_interval": "30m" });
         assert!(effective(fine.as_object().unwrap()).1.is_none());
+    }
+
+    /// `next_due` is the exact instant: `due` does nothing one nanosecond before it and acts at
+    /// it, for each of the three timers (the proptests meet these instants only by chance).
+    #[test]
+    fn next_due_is_the_exact_instant_of_each_timer() {
+        let ms = Duration::from_millis;
+        let ns = Duration::from_nanos;
+        let policy = |min: Option<u64>, debounce: Option<u64>, max: Option<u64>| ReportPolicy {
+            on_change: true,
+            deadband: None,
+            min_interval: min.map(ms),
+            max_interval: max.map(ms),
+            debounce: debounce.map(ms),
+        };
+        let num = |n: f64| Obs::Number(n);
+        let good = Quality::Good;
+
+        // A held reading: min_interval after the last publish.
+        let mut st: ReportState<u8> =
+            ReportState::new(policy(Some(500), None, None), Duration::ZERO);
+        assert_eq!(st.next_due(true), None, "nothing held, nothing due");
+        assert_eq!(st.offer(1, num(1.0), good, ms(1000)), Some(1));
+        assert_eq!(st.offer(2, num(2.0), good, ms(1100)), None, "held");
+        let t = st.next_due(true).unwrap();
+        assert_eq!(t, ms(1500));
+        assert!(st.due(t - ns(1), true).publish.is_none());
+        assert_eq!(st.due(t, true).publish, Some(2));
+
+        // A debounced change: debounce after it first appeared.
+        let mut st: ReportState<u8> =
+            ReportState::new(policy(None, Some(800), None), Duration::ZERO);
+        assert_eq!(st.offer(1, num(1.0), good, ms(1000)), Some(1));
+        assert_eq!(st.offer(2, num(2.0), good, ms(2000)), None, "a candidate");
+        let t = st.next_due(true).unwrap();
+        assert_eq!(t, ms(2800));
+        assert!(st.due(t - ns(1), true).publish.is_none());
+        assert_eq!(st.due(t, true).publish, Some(2));
+
+        // A heartbeat read: max_interval after the last publish, for a pushed point only.
+        let mut st: ReportState<u8> =
+            ReportState::new(policy(None, None, Some(4000)), Duration::ZERO);
+        assert_eq!(st.offer(1, num(1.0), good, ms(1000)), Some(1));
+        let t = st.next_due(true).unwrap();
+        assert_eq!(t, ms(5000));
+        assert!(!st.due(t - ns(1), true).read);
+        assert_eq!(
+            st.next_due(false),
+            None,
+            "a polled point has no heartbeat read of its own"
+        );
+        assert!(!st.due(t, false).read);
+        assert!(st.due(t, true).read);
+        // After the read the reference moves to it.
+        assert_eq!(st.next_due(true), Some(t + ms(4000)));
+        st.no_data();
+        assert_eq!(
+            st.next_due(true),
+            None,
+            "an unreadable point is not asked again"
+        );
+
+        // A policy with nothing between samples has nothing due.
+        let mut st: ReportState<u8> = ReportState::new(policy(None, None, None), Duration::ZERO);
+        st.offer(1, num(1.0), good, ms(1000));
+        st.offer(2, num(2.0), good, ms(1100));
+        assert_eq!(st.next_due(true), None);
     }
 
     #[test]

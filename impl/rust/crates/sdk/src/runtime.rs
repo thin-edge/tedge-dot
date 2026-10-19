@@ -898,6 +898,7 @@ pub async fn run_until_reloadable(
                                     .or_insert_with(ReconnectEntry::new);
                             }
                             schedule = build_schedule(&config, &subscribed);
+                            reporter.invalidate();
                         }
                     }
                 }
@@ -1198,6 +1199,7 @@ pub async fn run_stdout_until(
                                     .or_insert_with(ReconnectEntry::new);
                             }
                             schedule = build_schedule(&config, &subscribed);
+                            reporter.invalidate();
                         }
                     }
                 }
@@ -1222,6 +1224,9 @@ struct Reporter {
     states: HashMap<(String, String), ReportState<Sample>>,
     /// How to read each of those points on demand, keyed like `states`.
     points: HashMap<(String, String), (usize, PointRef)>,
+    /// Nothing is due before this time (since `epoch`), so a pass can be skipped until then; a
+    /// lower bound, `Duration::ZERO` meaning "look now". See [`ReportState::next_due`].
+    next: Duration,
 }
 
 impl Reporter {
@@ -1255,7 +1260,7 @@ impl Reporter {
                 points.insert(key, (device_index, point_ref(point, device.default_mode)));
             }
         }
-        Reporter { epoch, states, points }
+        Reporter { epoch, states, points, next: Duration::ZERO }
     }
 
     fn now(&self) -> Duration {
@@ -1265,21 +1270,50 @@ impl Reporter {
     /// The sample to publish now for this reading, if any.
     fn offer(&mut self, sample: Sample) -> Option<Sample> {
         let now = self.now();
+        self.offer_at(sample, now)
+    }
+
+    fn offer_at(&mut self, sample: Sample, now: Duration) -> Option<Sample> {
         match self.states.get_mut(&(sample.device.clone(), sample.point.clone())) {
             None => Some(sample),
             Some(state) => {
                 let obs = Obs::of(&sample);
                 let quality = sample.quality;
-                state.offer(sample, obs, quality, now)
+                let out = state.offer(sample, obs, quality, now);
+                // The offer may have held the reading or armed a debounce. Whether the point is
+                // pushed is not known here, so its heartbeat is assumed armed: an earlier bound
+                // only costs a pass, and the next pass computes it with the real push state.
+                if let Some(at) = state.next_due(true) {
+                    self.next = self.next.min(at);
+                }
+                out
             }
         }
+    }
+
+    /// The subscriptions changed: which points are pushed decides which heartbeats are read.
+    fn invalidate(&mut self) {
+        self.next = Duration::ZERO;
     }
 
     /// Held readings to publish now, and the heartbeat reads due, per device index.
     fn due(&mut self, subscribed: &HashSet<(usize, String)>) -> (Vec<Sample>, HashMap<usize, Vec<PointRef>>) {
         let now = self.now();
+        self.due_at(now, subscribed)
+    }
+
+    fn due_at(
+        &mut self,
+        now: Duration,
+        subscribed: &HashSet<(usize, String)>,
+    ) -> (Vec<Sample>, HashMap<usize, Vec<PointRef>>) {
         let mut publish = Vec::new();
         let mut reads: HashMap<usize, Vec<PointRef>> = HashMap::new();
+        // Nothing of any point is due yet: a pass would visit every point to find that out.
+        if now < self.next {
+            return (publish, reads);
+        }
+        let mut next = Duration::MAX;
         for (key, state) in self.states.iter_mut() {
             let (device_index, point) = &self.points[key];
             let pushed = subscribed.contains(&(*device_index, point.id.clone()));
@@ -1288,7 +1322,11 @@ impl Reporter {
             if due.read {
                 reads.entry(*device_index).or_default().push(point.clone());
             }
+            if let Some(at) = state.next_due(pushed) {
+                next = next.min(at);
+            }
         }
+        self.next = next;
         (publish, reads)
     }
 
@@ -1353,19 +1391,29 @@ impl Reporter {
     /// The device reconnected: publish each of its points' next reading.
     fn reset_device(&mut self, device: &str) {
         let now = self.now();
+        self.reset_device_at(device, now);
+    }
+
+    fn reset_device_at(&mut self, device: &str, now: Duration) {
         for ((d, _), state) in self.states.iter_mut() {
             if d == device {
                 state.reset(now);
             }
         }
+        self.next = Duration::ZERO; // every state of the device starts over: look at once
     }
 
     /// The broker session was restored: a reading published while it was away may be lost.
     fn reset_all(&mut self) {
         let now = self.now();
+        self.reset_all_at(now);
+    }
+
+    fn reset_all_at(&mut self, now: Duration) {
         for state in self.states.values_mut() {
             state.reset(now);
         }
+        self.next = Duration::ZERO;
     }
 }
 
@@ -3980,6 +4028,209 @@ protocol_address = {}
         assert!(!reporter.states.get_mut(&key).unwrap().due(later, true).read);
         let temp = ("srv".to_string(), "temp".to_string());
         assert!(reporter.states.get_mut(&temp).unwrap().due(later, true).read);
+    }
+
+    /// The reporting pass may be skipped until the reporter's bound (`Reporter::next`): the same
+    /// random script of readings, resets and push-state changes is run through two reporters over
+    /// points with mixed policies, one forced to make a full pass on every tick (as before) and
+    /// one that skips; both must publish the same readings and ask for the same heartbeat reads.
+    mod skipping_passes {
+        use super::*;
+        use proptest::prelude::*;
+
+        const POLICIES: [&str; 8] = [
+            "{ on_change = true }",
+            "{ deadband = 1.5 }",
+            "{ min_interval = \"800ms\" }",
+            "{ max_interval = \"2s\" }",
+            "{ on_change = true, debounce = \"300ms\" }",
+            "{ on_change = true, min_interval = \"1s\", max_interval = \"3s\" }",
+            "{ debounce = \"500ms\", min_interval = \"1500ms\", max_interval = \"4s\" }",
+            "{ deadband = 1.5, debounce = \"200ms\", max_interval = \"2500ms\" }",
+        ];
+        const POINTS: usize = 4;
+
+        #[derive(Clone, Debug)]
+        enum Ev {
+            Offer { point: usize, value: i8, bad: bool },
+            ResetAll,
+            ResetDevice,
+            TogglePushed(usize),
+            Advance(u16),
+        }
+
+        fn events() -> impl Strategy<Value = Vec<Ev>> {
+            prop::collection::vec(
+                prop_oneof![
+                    6 => (0..POINTS, -3i8..3, prop::bool::weighted(0.05))
+                        .prop_map(|(point, value, bad)| Ev::Offer { point, value, bad }),
+                    1 => Just(Ev::ResetAll),
+                    1 => Just(Ev::ResetDevice),
+                    1 => (0..POINTS).prop_map(Ev::TogglePushed),
+                    8 => (1u16..1500).prop_map(Ev::Advance),
+                ],
+                1..160,
+            )
+        }
+
+        fn reporter_for(policies: &[usize]) -> (ConnectorConfig, Reporter) {
+            let mut toml = String::from(
+                "[connector]\nprotocol = \"opcua\"\n\n[[device]]\nname = \"srv\"\nprotocol_address = {}\n",
+            );
+            for (i, p) in policies.iter().enumerate() {
+                toml.push_str(&format!(
+                    "\n  [[device.point]]\n  id = \"p{i}\"\n  datatype = \"float64\"\n  address = {{}}\n  report = {}\n",
+                    POLICIES[*p]
+                ));
+            }
+            let config: ConnectorConfig = toml::from_str(&toml).unwrap();
+            let reporter = Reporter::new(&config);
+            (config, reporter)
+        }
+
+        fn reading(point: &PointRef, value: i8, bad: bool) -> Sample {
+            Sample {
+                ts: OffsetDateTime::UNIX_EPOCH,
+                device: "srv".to_string(),
+                protocol: "opcua",
+                point: point.id.clone(),
+                mode: point.mode,
+                datatype: point.datatype,
+                value: (!bad).then_some(crate::model::Value::Number(value as f64)),
+                raw: Vec::new(),
+                raw_group: 1,
+                quality: if bad { Quality::Bad } else { Quality::Good },
+                unit: None,
+                addr: serde_json::json!({}),
+                seq: None,
+                error: bad.then(|| "bad".to_string()),
+                source_value: None,
+            }
+        }
+
+        /// A decision both runs must take alike: a function of the step and the point only.
+        fn decide(step: usize, point: usize, one_in: usize, salt: usize) -> bool {
+            (step * 2654435761 + point * 40503 + salt * 97).is_multiple_of(one_in)
+        }
+
+        /// Run the script; `skipping` keeps the reporter's bound, otherwise every pass is full.
+        /// Returns the log of what was published or asked for, one sorted batch per tick.
+        fn run(policies: &[usize], script: &[Ev], skipping: bool) -> (Vec<String>, usize) {
+            let (_config, mut reporter) = reporter_for(policies);
+            let refs: Vec<PointRef> = (0..POINTS)
+                .map(|i| {
+                    reporter.points[&("srv".to_string(), format!("p{i}"))]
+                        .1
+                        .clone()
+                })
+                .collect();
+            let mut subscribed: HashSet<(usize, String)> =
+                (0..POINTS).map(|i| (0, format!("p{i}"))).collect();
+            let mut now = Duration::from_secs(1);
+            let (mut log, mut full_passes) = (Vec::new(), 0usize);
+            for (step, ev) in script.iter().enumerate() {
+                let mut batch: Vec<String> = Vec::new();
+                match ev {
+                    Ev::Advance(ms) => now += Duration::from_millis(*ms as u64),
+                    Ev::Offer { point, value, bad } => {
+                        if let Some(s) =
+                            reporter.offer_at(reading(&refs[*point], *value, *bad), now)
+                        {
+                            batch.push(format!("offer {} {:?}", s.point, s.value));
+                        }
+                    }
+                    Ev::ResetAll => reporter.reset_all_at(now),
+                    Ev::ResetDevice => reporter.reset_device_at("srv", now),
+                    Ev::TogglePushed(point) => {
+                        let key = (0, format!("p{point}"));
+                        if !subscribed.remove(&key) {
+                            subscribed.insert(key);
+                        }
+                        reporter.invalidate();
+                    }
+                }
+                // The tick: a pass of the reporting policy, then the heartbeat reads it asks for.
+                if !skipping {
+                    reporter.next = Duration::ZERO;
+                }
+                if reporter.next <= now {
+                    full_passes += 1;
+                }
+                let (held, reads) = reporter.due_at(now, &subscribed);
+                for s in held {
+                    batch.push(format!("held {} {:?}", s.point, s.value));
+                }
+                for (device_index, points) in reads {
+                    for point in points {
+                        batch.push(format!("read {device_index} {}", point.id));
+                        let k: usize = point.id[1..].parse().unwrap();
+                        if decide(step, k, 6, 1) {
+                            reporter.no_data("srv", &point.id);
+                        } else {
+                            let bad = decide(step, k, 9, 2);
+                            let sample = reading(&refs[k], ((step / 5 + k * 3) % 4) as i8, bad);
+                            if let Some(s) = reporter.offer_at(sample, now) {
+                                batch.push(format!("heartbeat {} {:?}", s.point, s.value));
+                            }
+                        }
+                    }
+                }
+                batch.sort();
+                log.extend(batch.into_iter().map(|line| format!("{step} {line}")));
+            }
+            (log, full_passes)
+        }
+
+        proptest! {
+            #[test]
+            fn skipping_a_pass_changes_nothing(
+                policies in prop::collection::vec(0..POLICIES.len(), POINTS),
+                script in events(),
+            ) {
+                let (full, _) = run(&policies, &script, false);
+                let (skip, _) = run(&policies, &script, true);
+                prop_assert_eq!(full, skip);
+            }
+        }
+
+        /// A reset makes an unreadable point readable again, so its heartbeat comes back: earlier
+        /// than the bound the reporter had computed while the point was unreadable (there was
+        /// none). The random script meets this only rarely.
+        #[test]
+        fn a_reset_rearms_the_heartbeat_of_an_unreadable_point() {
+            let (_config, mut reporter) = reporter_for(&[3, 3, 3, 3]); // a heartbeat every 2 s
+            let subscribed: HashSet<(usize, String)> =
+                (0..POINTS).map(|i| (0, format!("p{i}"))).collect();
+            let secs = Duration::from_secs;
+            let (_, reads) = reporter.due_at(secs(2), &subscribed);
+            assert_eq!(
+                reads.values().map(Vec::len).sum::<usize>(),
+                POINTS,
+                "every point is asked at 2 s"
+            );
+            for i in 0..POINTS {
+                reporter.no_data("srv", &format!("p{i}")); // none of them can be read on demand
+            }
+            let (_, reads) = reporter.due_at(secs(4), &subscribed);
+            assert!(reads.is_empty(), "unreadable points are not asked again");
+            assert_eq!(reporter.next, Duration::MAX, "nothing is due any more");
+            reporter.reset_all_at(secs(10));
+            let (_, reads) = reporter.due_at(secs(12), &subscribed);
+            assert_eq!(
+                reads.values().map(Vec::len).sum::<usize>(),
+                POINTS,
+                "readable again, asked at 12 s"
+            );
+        }
+
+        /// The test above must not be vacuous: with these policies the bound does let ticks go by.
+        #[test]
+        fn the_bound_skips_most_passes() {
+            let policies = [3, 3, 3, 3]; // a heartbeat only
+            let script: Vec<Ev> = (0..200).map(|_| Ev::Advance(50)).collect();
+            let (_, full) = run(&policies, &script, true);
+            assert!(full < 20, "{full} full passes in {} ticks", script.len());
+        }
     }
 
     #[test]
