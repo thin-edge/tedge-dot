@@ -119,7 +119,7 @@ A custom Astro page with:
 
 Constraints that keep it professional: pure SVG/CSS animation (no video, no canvas libraries),
 `prefers-reduced-motion` respected, under 100 kB of JS on the landing page, Lighthouse
-performance and accessibility ≥ 95, and theme tokens shared with Starlight so that light and
+performance ≥ 90 and accessibility ≥ 95, and theme tokens shared with Starlight so that light and
 dark mode both work.
 
 ### What's new from `changes/`
