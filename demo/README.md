@@ -330,7 +330,6 @@ drop-in, e.g. `systemctl edit tedge-dot.service`):
 | Variable                  | Default | Purpose                              |
 |---------------------------|---------|--------------------------------------|
 | `TEDGE_DOT_RESTART_DELAY` | `5`     | Per-connector restart backoff (sec)  |
-| `TEDGE_DOT_STATS_INTERVAL` | `60`   | Statistics log line every N sec (`0` = off) |
 | `RUST_LOG`                | per-config `log_level` | Log filter override   |
 
 The config directory is the `ExecStart` argument in

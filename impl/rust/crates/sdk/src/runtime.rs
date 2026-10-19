@@ -700,11 +700,8 @@ pub async fn run_until_reloadable(
     let mut reporter = Reporter::new(&config);
     let mut stats = Stats::default();
     let stats_every = stats_interval_from_env();
-    let mut stats_tick = tokio::time::interval_at(
-        tokio::time::Instant::now() + stats_every.unwrap_or(Duration::from_secs(3600)),
-        stats_every.unwrap_or(Duration::from_secs(3600)),
-    );
-    stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let period = stats_every.unwrap_or(Duration::from_secs(3600)); // unused while off
+    let mut stats_tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     let mut point_health = PointHealth::default();
     let mut seq_counters: HashMap<(String, String), u64> = HashMap::new();
     // Devices whose transport needs re-establishing, keyed by device name.
@@ -1700,27 +1697,20 @@ fn envelope_with_meta(sample: &Sample, meta_index: &MetaIndex) -> serde_json::Va
     envelope
 }
 
-/// How often the connector logs its counters (`TEDGE_DOT_STATS_INTERVAL`, whole seconds, default 60;
-/// `0` switches the line off). Mirrors `stats_interval_s` in the C runtime.
-const DEFAULT_STATS_INTERVAL_SECS: u64 = 60;
-
+/// `TEDGE_DOT_STATS_INTERVAL` (whole seconds, default 60, 0 = off): how often the statistics
+/// line is logged. Mirrors `stats_interval_s` in the C runtime.
 fn stats_interval_from_env() -> Option<Duration> {
     parse_stats_interval(std::env::var("TEDGE_DOT_STATS_INTERVAL").ok().as_deref())
 }
 
 fn parse_stats_interval(value: Option<&str>) -> Option<Duration> {
-    let secs = value
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_STATS_INTERVAL_SECS);
+    let secs = value.and_then(|v| v.parse::<u64>().ok()).unwrap_or(60);
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
-/// What the main loop did since the connector started, for the periodic statistics line. Plain
-/// counters owned by the loop: `received` readings were offered to the reporting policy,
-/// `suppressed` of them were dropped or held back by it (a held reading counts again as
-/// `published` when it is released), `published` samples were taken by the MQTT client,
-/// `publish_failed` were dropped (broker offline, client error or timeout) and `reconnects` is
-/// the number of times the broker session was re-established.
+/// Counters of the periodic statistics line, since the connector started. `suppressed` readings
+/// were dropped or held back by the report policy (a held one counts again as `published` when
+/// released).
 #[derive(Default)]
 struct Stats {
     received: u64,
@@ -1735,9 +1725,7 @@ impl Stats {
     fn offer(&mut self, reporter: &mut Reporter, sample: Sample) -> Option<Sample> {
         self.received += 1;
         let out = reporter.offer(sample);
-        if out.is_none() {
-            self.suppressed += 1;
-        }
+        self.suppressed += u64::from(out.is_none());
         out
     }
 

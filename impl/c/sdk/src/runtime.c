@@ -1,6 +1,7 @@
 #include "tedge_dot/runtime.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
 #include <signal.h>
@@ -16,7 +17,6 @@
 #include "mosquitto.h"
 #include "tedge_dot/health.h"
 #include "tedge_dot/schedule.h"
-#include "tedge_dot/stats.h"
 #include "tedge_dot/watch.h"
 
 #define TICK_MS TDOT_TICK_MAX_MS
@@ -93,9 +93,25 @@ typedef struct {
      * point (tdot_schedule_tick_ms), so a pushed value does not sit in the
      * protocol socket for a whole 200 ms tick. */
     int tick_ms;
-    /* The counters of the periodic statistics line (stats.h). */
-    tdot_stats_t stats;
+    /* Counters of the periodic statistics line, since the connector started.
+     * `suppressed` readings were dropped or held back by the report policy (a
+     * held one counts again as `published` when released). */
+    struct {
+        uint64_t received, suppressed, published, publish_failed, reconnects;
+    } stats;
 } rt_t;
+
+/* TEDGE_DOT_STATS_INTERVAL (whole seconds, default 60, 0 = off): how often the
+ * statistics line is logged. Mirrors stats_interval_from_env in the Rust
+ * runtime. */
+static unsigned stats_interval_s(void) {
+    const char *v = getenv("TEDGE_DOT_STATS_INTERVAL");
+    if (!v || *v < '0' || *v > '9')
+        return 60;
+    char *end;
+    unsigned long n = strtoul(v, &end, 10);
+    return *end ? 60 : (unsigned)n;
+}
 
 static void logmsg(const char *level, const char *fmt, ...) {
     char ts[40];
@@ -1880,9 +1896,8 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
      * before its file was read, so a reload requested since is applied now. */
     unsigned seen_gen = ctl ? ctl->start_gen : atomic_load(&g_reload_gen);
     int result = RUN_STOPPED;
-    /* The statistics line: MQTT mode only, as in the Rust build. */
-    unsigned stats_every =
-        rt.output == TDOT_OUTPUT_MQTT ? tdot_stats_interval(getenv(TDOT_STATS_INTERVAL_ENV)) : 0;
+    /* MQTT mode only, as in the Rust build. */
+    unsigned stats_every = rt.output == TDOT_OUTPUT_MQTT ? stats_interval_s() : 0;
     double stats_at = tdot_mono() + stats_every;
 
     while (!stop_requested(ctl)) {
@@ -1977,9 +1992,12 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
         report_pass(&rt, ctl);
 
         if (stats_every > 0 && tdot_mono() >= stats_at) {
-            char line[256];
-            tdot_stats_format(&rt.stats, cfg->protocol, line, sizeof line);
-            logmsg("info", "stats %s", line);
+            logmsg("info",
+                   "stats {\"connector\":\"%s\",\"in\":%" PRIu64
+                   ",\"suppressed\":%" PRIu64 ",\"published\":%" PRIu64
+                   ",\"publish_failed\":%" PRIu64 ",\"reconnects\":%" PRIu64 "}",
+                   cfg->protocol, rt.stats.received, rt.stats.suppressed,
+                   rt.stats.published, rt.stats.publish_failed, rt.stats.reconnects);
             stats_at = tdot_mono() + stats_every;
         }
 

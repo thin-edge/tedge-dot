@@ -48,7 +48,6 @@ add_library(tedge_dot_sdk STATIC
   sdk/src/map.c
   sdk/src/runtime.c
   sdk/src/schedule.c
-  sdk/src/stats.c
   sdk/src/watch.c
   sdk/src/factory.c
 )
@@ -343,11 +342,6 @@ add_test(NAME config COMMAND tedge-dot-config)
 add_executable(tedge-dot-watch tests/watch.c)
 target_link_libraries(tedge-dot-watch PRIVATE tedge_dot_sdk)
 add_test(NAME watch COMMAND tedge-dot-watch)
-
-# The periodic statistics line (stats.h): the interval setting and the line's keys.
-add_executable(tedge-dot-stats tests/stats.c)
-target_link_libraries(tedge-dot-stats PRIVATE tedge_dot_sdk)
-add_test(NAME stats COMMAND tedge-dot-stats)
 
 # Which points a pass of the main loop visits, and how long it waits (schedule.h).
 add_executable(tedge-dot-schedule tests/schedule.c)
