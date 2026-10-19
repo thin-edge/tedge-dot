@@ -1292,6 +1292,8 @@ impl Reporter {
     }
 
     /// The subscriptions changed: which points are pushed decides which heartbeats are read.
+    /// A re-subscribe is always preceded by `reset_device`, which zeroes the bound too, so this
+    /// guards against a caller that changes the subscriptions without such a reset.
     fn invalidate(&mut self) {
         self.next = Duration::ZERO;
     }
