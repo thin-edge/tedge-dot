@@ -698,6 +698,13 @@ pub async fn run_until_reloadable(
     let mut schedule = build_schedule(&config, &subscribed);
     let mut meta_index = build_meta_index(&config);
     let mut reporter = Reporter::new(&config);
+    let mut stats = Stats::default();
+    let stats_every = stats_interval_from_env();
+    let mut stats_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + stats_every.unwrap_or(Duration::from_secs(3600)),
+        stats_every.unwrap_or(Duration::from_secs(3600)),
+    );
+    stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut point_health = PointHealth::default();
     let mut seq_counters: HashMap<(String, String), u64> = HashMap::new();
     // Devices whose transport needs re-establishing, keyed by device name.
@@ -723,6 +730,9 @@ pub async fn run_until_reloadable(
                 info!("shutdown requested");
                 break;
             }
+            _ = stats_tick.tick(), if stats_every.is_some() => {
+                info!("stats {}", stats.line(&protocol));
+            }
             _ = tick.tick() => {
                 let now = Instant::now();
                 // Gather due points grouped by device.
@@ -742,8 +752,8 @@ pub async fn run_until_reloadable(
                                 // connectors routinely leave `device` empty, and the sample
                                 // topic + meta lookup are keyed by the configured name.
                                 s.device = device.clone();
-                                if let Some(mut s) = reporter.offer(map_sample(s.clone(), &meta_index)) {
-                                    publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index)
+                                if let Some(mut s) = stats.offer(&mut reporter, map_sample(s.clone(), &meta_index)) {
+                                    publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index, &mut stats)
                                         .await;
                                 }
                             }
@@ -811,7 +821,7 @@ pub async fn run_until_reloadable(
                 // the heartbeat reads of pushed points that have been quiet too long.
                 let (held, reads) = reporter.due(&subscribed);
                 for mut s in held {
-                    publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index).await;
+                    publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index, &mut stats).await;
                 }
                 for (device_index, points) in reads {
                     let device = config.devices[device_index].name.clone();
@@ -826,8 +836,8 @@ pub async fn run_until_reloadable(
                         point_health.note(&device, &samples, true);
                     }
                     for s in samples {
-                        if let Some(mut s) = reporter.offer(map_sample(s, &meta_index)) {
-                            publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index).await;
+                        if let Some(mut s) = stats.offer(&mut reporter, map_sample(s, &meta_index)) {
+                            publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index, &mut stats).await;
                         }
                     }
                     // A heartbeat read is evidence about the device like a poll is.
@@ -904,13 +914,14 @@ pub async fn run_until_reloadable(
             }
             Some(sample) = sample_rx.recv() => {
                 point_health.note(&sample.device.clone(), std::slice::from_ref(&sample), false);
-                if let Some(mut sample) = reporter.offer(map_sample(sample, &meta_index)) {
-                    publish_sample(&client, &protocol, &mut sample, &mut seq_counters, &meta_index)
+                if let Some(mut sample) = stats.offer(&mut reporter, map_sample(sample, &meta_index)) {
+                    publish_sample(&client, &protocol, &mut sample, &mut seq_counters, &meta_index, &mut stats)
                         .await;
                 }
                 progress.mark();
             }
             _ = reconnected.notified() => {
+                stats.reconnects += 1;
                 // A reading published while the broker was away is lost, so the next reading of
                 // every point is published whatever its policy.
                 reporter.reset_all();
@@ -1689,6 +1700,60 @@ fn envelope_with_meta(sample: &Sample, meta_index: &MetaIndex) -> serde_json::Va
     envelope
 }
 
+/// How often the connector logs its counters (`TEDGE_DOT_STATS_INTERVAL`, whole seconds, default 60;
+/// `0` switches the line off). Mirrors `stats_interval_s` in the C runtime.
+const DEFAULT_STATS_INTERVAL_SECS: u64 = 60;
+
+fn stats_interval_from_env() -> Option<Duration> {
+    parse_stats_interval(std::env::var("TEDGE_DOT_STATS_INTERVAL").ok().as_deref())
+}
+
+fn parse_stats_interval(value: Option<&str>) -> Option<Duration> {
+    let secs = value
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_STATS_INTERVAL_SECS);
+    (secs > 0).then(|| Duration::from_secs(secs))
+}
+
+/// What the main loop did since the connector started, for the periodic statistics line. Plain
+/// counters owned by the loop: `received` readings were offered to the reporting policy,
+/// `suppressed` of them were dropped or held back by it (a held reading counts again as
+/// `published` when it is released), `published` samples were taken by the MQTT client,
+/// `publish_failed` were dropped (broker offline, client error or timeout) and `reconnects` is
+/// the number of times the broker session was re-established.
+#[derive(Default)]
+struct Stats {
+    received: u64,
+    suppressed: u64,
+    published: u64,
+    publish_failed: u64,
+    reconnects: u64,
+}
+
+impl Stats {
+    /// [`Reporter::offer`], counting the reading and whether the policy kept it back.
+    fn offer(&mut self, reporter: &mut Reporter, sample: Sample) -> Option<Sample> {
+        self.received += 1;
+        let out = reporter.offer(sample);
+        if out.is_none() {
+            self.suppressed += 1;
+        }
+        out
+    }
+
+    fn line(&self, protocol: &str) -> String {
+        serde_json::json!({
+            "connector": protocol,
+            "in": self.received,
+            "suppressed": self.suppressed,
+            "published": self.published,
+            "publish_failed": self.publish_failed,
+            "reconnects": self.reconnects,
+        })
+        .to_string()
+    }
+}
+
 /// Stamp the per-point sequence number and publish one sample. Shared by the polling loop and
 /// the subscription channel so both paths get identical seq/meta/topic handling.
 async fn publish_sample(
@@ -1697,6 +1762,7 @@ async fn publish_sample(
     sample: &mut Sample,
     seq_counters: &mut HashMap<(String, String), u64>,
     meta_index: &MetaIndex,
+    stats: &mut Stats,
 ) {
     let counter = seq_counters
         .entry((sample.device.clone(), sample.point.clone()))
@@ -1707,6 +1773,7 @@ async fn publish_sample(
         // With the broker unreachable a queued sample cannot be sent, and it would take the room
         // the state messages need in the client's request queue (see `publish_retained`). A
         // sample is a reading of the moment: it is dropped, and the gap shows in `seq`.
+        stats.publish_failed += 1;
         return;
     }
     let topic = format!(
@@ -1716,13 +1783,19 @@ async fn publish_sample(
     let payload = envelope_with_meta(sample, meta_index).to_string();
     let publish = client.publish(&topic, QoS::AtMostOnce, false, payload);
     match tokio::time::timeout(PUBLISH_TIMEOUT, publish).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => error!("failed to publish sample: {e}"),
+        Ok(Ok(())) => stats.published += 1,
+        Ok(Err(e)) => {
+            stats.publish_failed += 1;
+            error!("failed to publish sample: {e}");
+        }
         // The connection is gone but the event loop has not noticed yet (a half-open socket).
-        Err(_) => warn!(
-            "dropping a sample on {topic}: the MQTT client did not take it within {}s",
-            PUBLISH_TIMEOUT.as_secs()
-        ),
+        Err(_) => {
+            stats.publish_failed += 1;
+            warn!(
+                "dropping a sample on {topic}: the MQTT client did not take it within {}s",
+                PUBLISH_TIMEOUT.as_secs()
+            );
+        }
     }
 }
 
@@ -3926,6 +3999,74 @@ protocol_address = {}
         read_only.command_verbs = vec![];
         augment_batch_caps(&mut read_only);
         assert!(read_only.command_verbs.is_empty());
+    }
+
+    /// `TEDGE_DOT_STATS_INTERVAL` is whole seconds: unset or unreadable means the default, `0`
+    /// switches the line off.
+    #[test]
+    fn stats_interval_defaults_and_switches_off() {
+        assert_eq!(parse_stats_interval(None), Some(Duration::from_secs(60)));
+        assert_eq!(parse_stats_interval(Some("15")), Some(Duration::from_secs(15)));
+        assert_eq!(parse_stats_interval(Some("0")), None);
+        assert_eq!(parse_stats_interval(Some("soon")), Some(Duration::from_secs(60)));
+        assert_eq!(parse_stats_interval(Some("")), Some(Duration::from_secs(60)));
+    }
+
+    /// A reading the policy keeps back counts as received and suppressed, one it passes only as
+    /// received; the line carries every counter under its documented name.
+    #[test]
+    fn stats_count_what_the_policy_keeps_back() {
+        let config: ConnectorConfig = toml::from_str(
+            r#"
+[connector]
+protocol = "opcua"
+report = { on_change = true }
+
+[[device]]
+name = "srv"
+protocol_address = {}
+
+  [[device.point]]
+  id = "temp"
+  datatype = "float64"
+  address = {}
+"#,
+        )
+        .unwrap();
+        let mut reporter = Reporter::new(&config);
+        let mut stats = Stats::default();
+        let reading = |value: f64| Sample {
+            ts: OffsetDateTime::UNIX_EPOCH,
+            device: "srv".into(),
+            protocol: "opcua",
+            point: "temp".into(),
+            mode: Mode::Typed,
+            datatype: Some(DataType::Float64),
+            value: Some(crate::model::Value::Number(value)),
+            raw: vec![],
+            raw_group: 0,
+            quality: Quality::Good,
+            unit: None,
+            addr: serde_json::Value::Null,
+            seq: None,
+            error: None,
+            source_value: None,
+        };
+        assert!(stats.offer(&mut reporter, reading(1.0)).is_some()); // first reading
+        assert!(stats.offer(&mut reporter, reading(1.0)).is_none()); // unchanged
+        assert!(stats.offer(&mut reporter, reading(1.0)).is_none());
+        assert!(stats.offer(&mut reporter, reading(2.0)).is_some()); // changed
+        stats.published = 2;
+        stats.publish_failed = 1;
+        stats.reconnects = 3;
+        let line: serde_json::Value = serde_json::from_str(&stats.line("opcua")).unwrap();
+        assert_eq!(
+            line,
+            serde_json::json!({
+                "connector": "opcua", "in": 4, "suppressed": 2,
+                "published": 2, "publish_failed": 1, "reconnects": 3,
+            })
+        );
     }
 
     /// The published capability descriptor carries the configuration's parameter keys (§7) —

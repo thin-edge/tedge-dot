@@ -16,6 +16,7 @@
 #include "mosquitto.h"
 #include "tedge_dot/health.h"
 #include "tedge_dot/schedule.h"
+#include "tedge_dot/stats.h"
 #include "tedge_dot/watch.h"
 
 #define TICK_MS TDOT_TICK_MAX_MS
@@ -92,6 +93,8 @@ typedef struct {
      * point (tdot_schedule_tick_ms), so a pushed value does not sit in the
      * protocol socket for a whole 200 ms tick. */
     int tick_ms;
+    /* The counters of the periodic statistics line (stats.h). */
+    tdot_stats_t stats;
 } rt_t;
 
 static void logmsg(const char *level, const char *fmt, ...) {
@@ -167,8 +170,11 @@ static void publish_item(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
         char topic[256];
         snprintf(topic, sizeof topic, "te/device/%s/ot/%s/sample/%s",
                  dev->name, rt->cfg->protocol, pt->id);
-        mosquitto_publish(rt->mosq, NULL, topic, (int)strlen(json), json, 0,
-                          false);
+        if (mosquitto_publish(rt->mosq, NULL, topic, (int)strlen(json), json, 0,
+                              false) == MOSQ_ERR_SUCCESS)
+            rt->stats.published++;
+        else
+            rt->stats.publish_failed++;
     }
     free(json);
 }
@@ -187,12 +193,15 @@ static void emit_sample(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
     tdot_now_rfc3339(item.ts, sizeof item.ts);
     item.ts_ms = tdot_now_ms();
     int64_t now = mono_ns();
+    rt->stats.received++;
     tdot_report_state_t *st = report_state(pt, now);
     if (st) {
         tdot_report_obs_t obs;
         tdot_report_obs_of(&item.sample, &obs);
-        if (!tdot_report_offer(st, &item, &obs, item.sample.quality, now))
+        if (!tdot_report_offer(st, &item, &obs, item.sample.quality, now)) {
+            rt->stats.suppressed++;
             return;
+        }
     }
     publish_item(rt, dev, pt, &item);
 }
@@ -923,6 +932,7 @@ static void on_connect(struct mosquitto *mosq, void *ud, int rc) {
     if (!rt->mqtt_resume)
         return;
     rt->mqtt_resume = false;
+    rt->stats.reconnects++;
     logmsg("info", "reconnected to MQTT broker %s:%d", rt->cfg->mqtt_host,
            rt->cfg->mqtt_port);
     subscribe_commands(rt);
@@ -1870,6 +1880,10 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
      * before its file was read, so a reload requested since is applied now. */
     unsigned seen_gen = ctl ? ctl->start_gen : atomic_load(&g_reload_gen);
     int result = RUN_STOPPED;
+    /* The statistics line: MQTT mode only, as in the Rust build. */
+    unsigned stats_every =
+        rt.output == TDOT_OUTPUT_MQTT ? tdot_stats_interval(getenv(TDOT_STATS_INTERVAL_ENV)) : 0;
+    double stats_at = tdot_mono() + stats_every;
 
     while (!stop_requested(ctl)) {
         double now = tdot_mono();
@@ -1961,6 +1975,13 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
         }
 
         report_pass(&rt, ctl);
+
+        if (stats_every > 0 && tdot_mono() >= stats_at) {
+            char line[256];
+            tdot_stats_format(&rt.stats, cfg->protocol, line, sizeof line);
+            logmsg("info", "stats %s", line);
+            stats_at = tdot_mono() + stats_every;
+        }
 
         if (rt.output == TDOT_OUTPUT_MQTT)
             mqtt_service(&rt);
