@@ -366,3 +366,44 @@ bool tdot_report_due(tdot_report_state_t *st, int64_t now, bool pushed,
     }
     return published;
 }
+
+/* ---- when something becomes due ---------------------------------------------- */
+
+static int64_t add_sat(int64_t a, int64_t b) {
+    return a > INT64_MAX - b ? INT64_MAX : a + b;
+}
+
+/* The times below are the conditions of tdot_report_due, solved for `now`: it
+ * tests `since_published(now) >= min_interval` (that is, now - ref >= interval
+ * once now is past ref), `now - cand_since >= debounce` and
+ * `idle >= max_interval`, so each fires at reference + interval. */
+int64_t tdot_report_next_due(const tdot_report_state_t *st, bool pushed) {
+    const tdot_report_policy_t *p = &st->policy;
+    int64_t at = INT64_MAX;
+    int64_t published_at = st->has_last ? st->last_published : st->origin;
+    if (p->min_interval > 0 && st->has_pending) {
+        int64_t t = add_sat(published_at, p->min_interval);
+        if (t < at)
+            at = t;
+    }
+    if (p->debounce > 0 && st->has_candidate) {
+        int64_t t = add_sat(st->cand_since, p->debounce);
+        if (t < at)
+            at = t;
+    }
+    /* Only a pushed point is read on demand, and not an unreadable one. */
+    if (p->max_interval > 0 && pushed && !st->unreadable) {
+        int64_t read_at = st->has_read ? st->last_read : st->origin;
+        int64_t reference = published_at > read_at ? published_at : read_at;
+        int64_t t = add_sat(reference, p->max_interval);
+        if (t < at)
+            at = t;
+    }
+    return at;
+}
+
+void tdot_report_lower_bound(int64_t *bound, const tdot_report_state_t *st, bool pushed) {
+    int64_t at = tdot_report_next_due(st, pushed);
+    if (at < *bound)
+        *bound = at;
+}

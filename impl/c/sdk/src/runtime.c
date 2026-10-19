@@ -124,6 +124,14 @@ static void publish(rt_t *rt, const char *topic, const char *payload,
 /* The policy's clock: monotonic nanoseconds. */
 static int64_t mono_ns(void) { return (int64_t)llround(tdot_mono() * 1e9); }
 
+/* Whether a point is delivered by push: only those are read on demand for their
+ * heartbeat, a polled one's next scheduled read is its heartbeat. A link drop
+ * clears `subscribed`, so during an outage the point is polled instead, as in
+ * Rust the heartbeat read reports the dead source. */
+static bool report_pushed(const tdot_point_t *pt) {
+    return pt->subscribed && (pt->access & TDOT_ACCESS_READ);
+}
+
 /* The reporting state of a point, created on first use -- its origin, the
  * heartbeat's reference before anything is published, is then. NULL for the
  * passthrough policy, which publishes every reading exactly as before. */
@@ -145,6 +153,7 @@ static void reset_device_reports(tdot_device_t *dev) {
     for (size_t j = 0; j < dev->npoints; j++)
         if (dev->points[j].report_state)
             tdot_report_reset(dev->points[j].report_state, now);
+    dev->report_next = 0; /* every state starts over: look at once */
 }
 
 static void reset_all_reports(rt_t *rt) {
@@ -191,7 +200,11 @@ static void emit_sample(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
     if (st) {
         tdot_report_obs_t obs;
         tdot_report_obs_of(&item.sample, &obs);
-        if (!tdot_report_offer(st, &item, &obs, item.sample.quality, now))
+        bool publish_now = tdot_report_offer(st, &item, &obs, item.sample.quality, now);
+        /* The offer may have held the reading or armed a debounce: the device's
+         * reporting pass must look no later than this point's next due time. */
+        tdot_report_lower_bound(&dev->report_next, st, report_pushed(pt));
+        if (!publish_now)
             return;
     }
     publish_item(rt, dev, pt, &item);
@@ -1733,29 +1746,33 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
     int64_t now = mono_ns();
     for (size_t i = 0; i < rt->cfg->ndevices && !stop_requested(ctl); i++) {
         tdot_device_t *dev = &rt->cfg->devices[i];
+        /* Nothing of this device is due yet (report.h, tdot_report_next_due):
+         * a pass would visit every point to find that out. */
+        if (now < dev->report_next)
+            continue;
         bool transport_down = false;
         size_t bad = 0, read = 0;
+        int64_t next = INT64_MAX; /* the earliest due time of the points visited */
         /* Only the points with a policy (schedule.h): the others publish every
          * reading as it comes and have nothing to do here. */
         size_t n = dev->reported ? dev->nreported : dev->npoints;
-        for (size_t k = 0; k < n && !transport_down; k++) {
+        size_t k;
+        for (k = 0; k < n && !transport_down; k++) {
             tdot_point_t *pt = &dev->points[dev->reported ? dev->reported[k] : k];
             tdot_report_state_t *st = report_state(pt, now);
             if (!st)
                 continue;
-            /* Only a pushed point is read on demand: a polled one's next
-             * scheduled read is its heartbeat. A link drop clears `subscribed`,
-             * so during an outage the point is polled instead, as in Rust the
-             * heartbeat read reports the dead source. */
-            bool pushed = pt->subscribed && (pt->access & TDOT_ACCESS_READ);
+            bool pushed = report_pushed(pt);
             tdot_report_item_t held;
             bool due_read = false;
             if (tdot_report_due(st, now, pushed, &held, &due_read)) {
                 publish_item(rt, dev, pt, &held);
                 tdot_report_item_release(&held);
             }
-            if (!due_read)
+            if (!due_read) {
+                tdot_report_lower_bound(&next, st, pushed);
                 continue;
+            }
             tdot_sample_t s;
             tdot_sample_init(&s);
             int rc = conn->read_point(conn, dev, pt, &s);
@@ -1763,18 +1780,23 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
                 /* Cannot be read on demand (a trap, a CAN frame): no heartbeat,
                  * and no retry until the point's next reset. */
                 tdot_report_no_data(st);
+                tdot_report_lower_bound(&next, st, pushed);
                 continue;
             }
             if (pt->mode == TDOT_MODE_RAW)
                 s.value.kind = TDOT_VAL_NONE; /* raw: bytes only */
             hold_reading(pt, &s);
             emit_sample(rt, dev, pt, &s);
+            tdot_report_lower_bound(&next, st, pushed);
             read++;
             if (s.quality == TDOT_Q_BAD)
                 bad++;
             if (rc != 0)
                 transport_down = true;
         }
+        /* The pass saw every point only if it ran to the end; after a transport
+         * failure the rest were not looked at, so look at them next time. */
+        dev->report_next = k < n ? 0 : next;
         /* Only a transport failure speaks against the device, as in Rust: a
          * heartbeat pass usually reads one point, and one unreadable node
          * must not degrade a device whose other points deliver. */

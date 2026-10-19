@@ -14,6 +14,9 @@ void tdot_schedule_rebuild(tdot_device_t *dev) {
 
     dev->npolled = dev->nreported = dev->npushed = 0;
     dev->fastest_push_s = -1;
+    /* A point's push state decides whether its heartbeat is read on demand, so
+     * a change of it invalidates the reporting pass's bound. */
+    dev->report_next = 0;
     for (size_t j = 0; j < dev->npoints; j++) {
         const tdot_point_t *pt = &dev->points[j];
         if (pt->subscribed) {

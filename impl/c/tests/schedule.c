@@ -2,6 +2,7 @@
  * (schedule.h): the lists must name exactly the points a full scan would act
  * on, through every change of push state the runtime makes (subscribe,
  * transport drop, reload). */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,6 +159,22 @@ static void check_lists_follow_push_state(void) {
     tdot_config_free(cfg);
 }
 
+/* The reporting pass skips a device until dev->report_next (report.h); a change of
+ * push state decides which heartbeats are read on demand, so a rebuild must
+ * make the next pass look. */
+static void check_rebuild_invalidates_report_bound(void) {
+    tdot_config_t *cfg = load("50ms");
+    tdot_device_t *dev = &cfg->devices[0];
+    CHECK(dev->report_next == 0, "a loaded device starts at 0, got %lld",
+          (long long)dev->report_next);
+    dev->report_next = INT64_MAX;
+    set_pushed(dev, true);
+    tdot_schedule_rebuild(dev);
+    CHECK(dev->report_next == 0, "a rebuild must reset the bound, got %lld",
+          (long long)dev->report_next);
+    tdot_config_free(cfg);
+}
+
 static void check_tick_bounds(void) {
     struct {
         const char *interval;
@@ -182,6 +199,7 @@ static void check_tick_bounds(void) {
 
 int main(void) {
     check_lists_follow_push_state();
+    check_rebuild_invalidates_report_bound();
     check_tick_bounds();
     if (failures) {
         printf("%d check(s) failed\n", failures);
