@@ -62,6 +62,8 @@ ${BURST_TOPIC}              te/device/opc4/ot/${PROTOCOL}/sample/burst
 ${BURST_LATEST_TOPIC}       te/device/opc5/ot/${PROTOCOL}/sample/burst
 ${BULK_PREFIX}              te/device/opc6/ot/${PROTOCOL}/sample
 ${BULK_LINK_TOPIC}          te/device/opc6/ot/${PROTOCOL}/status/link
+# opc7 polls 1200 of the same nodes.
+${POLLED_BULK_PREFIX}       te/device/opc7/ot/${PROTOCOL}/sample
 # OPC UA methods and a write-only point (openspec opcua-method-calls), on the `machine` device.
 ${METHOD_PREFIX}            te/device/machine/ot/${PROTOCOL}/cmd/call-method
 ${MACHINE_WRITE_PREFIX}     te/device/machine/ot/${PROTOCOL}/cmd/write
@@ -221,6 +223,19 @@ A Device With Thousands Of Points Subscribes
         Wait Until Keyword Succeeds    ${READY_TIMEOUT}s    1s
         ...    Get Message    ${BULK_PREFIX}/bulk${i}
         ${sample}=    Get Message    ${BULK_PREFIX}/bulk${i}
+        Sample Should Be Good    ${sample}
+        ${value}=    Get Json Field    ${sample}    value
+        Should Be Equal As Numbers    ${value}    ${i}
+    END
+
+A Device With Many Polled Points Reads Them In Blocks
+    [Documentation]    opc7 polls 1200 points. The connector reads them in blocks of 500 nodes, one
+    ...                Read each (issue #97), so every point must get its own node's value: the
+    ...                first and last point of each block, where an off-by-one would show.
+    FOR    ${i}    IN    0    499    500    999    1000    1199
+        Wait Until Keyword Succeeds    ${READY_TIMEOUT}s    1s
+        ...    Get Message    ${POLLED_BULK_PREFIX}/bulk${i}
+        ${sample}=    Get Message    ${POLLED_BULK_PREFIX}/bulk${i}
         Sample Should Be Good    ${sample}
         ${value}=    Get Json Field    ${sample}    value
         Should Be Equal As Numbers    ${value}    ${i}

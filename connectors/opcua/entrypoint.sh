@@ -33,5 +33,14 @@ if [ -f /etc/ot/connector-load.toml ]; then
         printf '\n  [[device.point]]\n  id = "bulk%d"\n  datatype = "float64"\n  address = { node_id = "ns=2;s=Bulk%d" }\n' "$i" "$i"
         i=$((i + 1))
     done >> /etc/ot/connector-load.toml
+    # opc7 polls the first 1200 of them: three Read blocks (500, 500, 200). Every 5 s, not
+    # hourly like the file's default, so a test that subscribes after start-up sees a pass.
+    printf '\n[[device]]\nname = "opc7"\nprotocol_address = { endpoint = "opc.tcp://load-simulator:4840/" }\ndefault_mode = "typed"\npoll_interval = "5s"\n' \
+        >> /etc/ot/connector-load.toml
+    i=0
+    while [ "$i" -lt 1200 ]; do
+        printf '\n  [[device.point]]\n  id = "bulk%d"\n  datatype = "float64"\n  subscribe = false\n  address = { node_id = "ns=2;s=Bulk%d" }\n' "$i" "$i"
+        i=$((i + 1))
+    done >> /etc/ot/connector-load.toml
 fi
 exec /usr/bin/tedge-dot /etc/ot
