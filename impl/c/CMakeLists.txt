@@ -383,6 +383,11 @@ if(TDOT_OPCUA)
   target_link_libraries(tedge-dot-opcua-namespaces PRIVATE tedge_dot_sdk)
   add_test(NAME opcua-namespaces COMMAND tedge-dot-opcua-namespaces)
 
+  add_executable(tedge-dot-opcua-blocks tests/opcua_blocks.c)
+  target_include_directories(tedge-dot-opcua-blocks PRIVATE connectors/opcua)
+  target_link_libraries(tedge-dot-opcua-blocks PRIVATE tedge_dot_sdk ${_tdot_ua_lib})
+  add_test(NAME opcua-blocks COMMAND tedge-dot-opcua-blocks)
+
   add_executable(tedge-dot-opcua-pki tests/opcua_pki.c)
   target_include_directories(tedge-dot-opcua-pki PRIVATE connectors/opcua)
   target_link_libraries(tedge-dot-opcua-pki PRIVATE tedge_dot_sdk)

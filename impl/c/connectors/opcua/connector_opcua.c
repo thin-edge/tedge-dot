@@ -26,6 +26,7 @@
 #include "tedge_dot/decode.h"
 #include "push_ring.h"
 #include "ua_pki.h"
+#include "ua_blocks.h"
 #include "ua_sampling.h"
 
 /* Per-point parsed address (pt->proto, flat). */
@@ -1932,25 +1933,24 @@ static int variant_to_sample(const UA_Variant *v, tdot_point_t *pt,
     return 0;
 }
 
-/* read_point's outcome for a node the point is ready to read: *node is set,
- * and *out is untouched. */
-#define UA_READ_NODE 2
-
-/* Everything read_point does before its Read: the node `pt` reads, or with
- * *out a bad sample the outcome read_point returns (0, -1). */
-static int point_read_node(tdot_device_t *dev, tdot_point_t *pt, UA_NodeId *node,
-                           tdot_sample_t *out) {
+/* Everything read_point does before its Read: true with the node `pt` reads,
+ * or false with *out a bad sample and *rc the outcome read_point returns (0,
+ * -1). */
+static bool point_read_node(tdot_device_t *dev, tdot_point_t *pt, UA_NodeId *node,
+                            tdot_sample_t *out, int *rc) {
     ua_device_t *ua = dev->proto;
     ua_point_t *up = pt->proto;
 
     if (up && up->is_method) {
         /* Never offered by the runtime; an explicitly named CLI read. */
         tdot_sample_bad(out, "point %s is a method", pt->id);
-        return 0;
+        *rc = 0;
+        return false;
     }
     if (!ua->client) {
         tdot_sample_bad(out, "device not connected");
-        return -1;
+        *rc = -1;
+        return false;
     }
 
     /* A point whose namespace this session has not translated is tried again
@@ -1965,14 +1965,16 @@ static int point_read_node(tdot_device_t *dev, tdot_point_t *pt, UA_NodeId *node
     }
     if (!node_text) {
         tdot_sample_bad(out, "%s", reason);
-        return ua->renew_session ? -1 : 0;
+        *rc = ua->renew_session ? -1 : 0;
+        return false;
     }
 
     if (UA_NodeId_parse(node, UA_STRING(node_text)) != UA_STATUSCODE_GOOD) {
         tdot_sample_bad(out, "invalid node id: %s", up->node_id);
-        return 0;
+        *rc = 0;
+        return false;
     }
-    return UA_READ_NODE;
+    return true;
 }
 
 /* A read that failed with `rc`: whether the link is gone (the server answered
@@ -2003,8 +2005,8 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
     (void)self;
     ua_device_t *ua = dev->proto;
     UA_NodeId node;
-    int r = point_read_node(dev, pt, &node, out);
-    if (r != UA_READ_NODE)
+    int r;
+    if (!point_read_node(dev, pt, &node, out, &r))
         return r;
 
     UA_Variant value;
@@ -2020,8 +2022,7 @@ static int read_point(tdot_connector_t *self, tdot_device_t *dev,
 
 /* What UA_Client_readValueAttribute would return for `dv`, one result of a
  * Read whose service call succeeded: its status, or BadUnexpectedError when
- * a good result carries no value. The same per-point outcome, read alone or
- * in a block. */
+ * a good result carries no value. */
 static UA_StatusCode result_status(const UA_DataValue *dv) {
     if (!UA_StatusCode_isEqualTop(dv->status, UA_STATUSCODE_GOOD))
         return dv->status;
@@ -2030,18 +2031,17 @@ static UA_StatusCode result_status(const UA_DataValue *dv) {
     return dv->status;
 }
 
-/* One Read of the `nnodes` nodes in nodes[], for the points pts[at[j]]: fills
- * out[] and rc[] for them. Returns the index of the first point whose rc is
- * -1, or n when there is none. Clears nodes[]. */
-static size_t read_block(ua_device_t *ua, UA_ReadValueId *nodes, size_t nnodes,
-                         const size_t *at, tdot_point_t *const *pts, size_t n,
-                         tdot_sample_t *out, int *rc) {
+/* One Read of the `nnodes` nodes in nodes[], for the points at[j]: fills rc[]
+ * for them. Returns the first of them whose rc is -1, or n when there is none.
+ * Clears nodes[]. */
+static size_t read_block(const tdot_ua_blocks_t *io, UA_ReadValueId *nodes,
+                         size_t nnodes, const size_t *at, size_t n, int *rc) {
     UA_ReadRequest req;
     UA_ReadRequest_init(&req);
     req.nodesToRead = nodes;
     req.nodesToReadSize = nnodes;
     req.timestampsToReturn = UA_TIMESTAMPSTORETURN_NEITHER;
-    UA_ReadResponse resp = UA_Client_Service_read(ua->client, req);
+    UA_ReadResponse resp = io->read(io->ctx, &req);
     UA_StatusCode service = resp.responseHeader.serviceResult;
     if (service == UA_STATUSCODE_GOOD && resp.resultsSize != nnodes)
         service = UA_STATUSCODE_BADUNEXPECTEDERROR;
@@ -2050,16 +2050,68 @@ static size_t read_block(ua_device_t *ua, UA_ReadValueId *nodes, size_t nnodes,
     for (size_t j = 0; j < nnodes; j++) {
         size_t k = at[j];
         if (service != UA_STATUSCODE_GOOD)
-            rc[k] = read_result(service, NULL, pts[k], &out[k]);
+            rc[k] = io->result(io->ctx, k, service, NULL);
         else
-            rc[k] = read_result(result_status(&resp.results[j]),
-                                &resp.results[j].value, pts[k], &out[k]);
+            rc[k] = io->result(io->ctx, k, result_status(&resp.results[j]),
+                               &resp.results[j].value);
         if (rc[k] == -1 && lost == n)
             lost = k;
         UA_ReadValueId_clear(&nodes[j]);
     }
     UA_ReadResponse_clear(&resp);
     return lost;
+}
+
+size_t tdot_ua_read_blocks(const tdot_ua_blocks_t *io, size_t n, size_t block,
+                           UA_ReadValueId *nodes, size_t *at, int *rc) {
+    size_t k = 0;
+    while (k < n) {
+        size_t nnodes = 0;
+        size_t stop = n;
+        for (; k < n && nnodes < block; k++) {
+            UA_NodeId node;
+            if (io->prepare(io->ctx, k, &node, &rc[k])) {
+                UA_ReadValueId_init(&nodes[nnodes]);
+                nodes[nnodes].nodeId = node; /* owns it now */
+                nodes[nnodes].attributeId = UA_ATTRIBUTEID_VALUE;
+                at[nnodes++] = k;
+            } else if (rc[k] == -1) {
+                stop = k++;
+                break;
+            }
+        }
+        if (nnodes > 0) {
+            size_t lost = read_block(io, nodes, nnodes, at, n, rc);
+            if (lost < stop)
+                stop = lost;
+        }
+        if (stop < n)
+            return stop + 1;
+    }
+    return n;
+}
+
+/* read_points' points, for the tdot_ua_blocks_t callbacks below. */
+typedef struct {
+    tdot_device_t *dev;
+    tdot_point_t *const *pts;
+    tdot_sample_t *out;
+} poll_ctx_t;
+
+static bool poll_prepare(void *ctx, size_t k, UA_NodeId *node, int *rc) {
+    poll_ctx_t *c = ctx;
+    return point_read_node(c->dev, c->pts[k], node, &c->out[k], rc);
+}
+
+static UA_ReadResponse poll_read(void *ctx, UA_ReadRequest *req) {
+    poll_ctx_t *c = ctx;
+    ua_device_t *ua = c->dev->proto;
+    return UA_Client_Service_read(ua->client, *req);
+}
+
+static int poll_result(void *ctx, size_t k, UA_StatusCode status, const UA_Variant *value) {
+    poll_ctx_t *c = ctx;
+    return read_result(status, value, c->pts[k], &c->out[k]);
 }
 
 /* Poll pts[0..n) in blocks of at most ua->nodes_per_read nodes, one Read per
@@ -2069,8 +2121,9 @@ static size_t read_block(ua_device_t *ua, UA_ReadValueId *nodes, size_t nnodes,
 static size_t read_points(tdot_connector_t *self, tdot_device_t *dev,
                           tdot_point_t *const *pts, size_t n, tdot_sample_t *out,
                           int *rc) {
-    (void)self;
     ua_device_t *ua = dev->proto;
+    /* 0 until a session has read the server's limit; a block of 0 would never
+     * read anything. */
     size_t block = ua->nodes_per_read ? ua->nodes_per_read : UA_NODES_PER_READ;
     if (block > n)
         block = n;
@@ -2087,38 +2140,13 @@ static size_t read_points(tdot_connector_t *self, tdot_device_t *dev,
         }
         return n;
     }
-
-    size_t k = 0;
-    while (k < n) {
-        size_t nnodes = 0;
-        size_t stop = n;
-        for (; k < n && nnodes < block; k++) {
-            UA_NodeId node;
-            rc[k] = point_read_node(dev, pts[k], &node, &out[k]);
-            if (rc[k] == UA_READ_NODE) {
-                UA_ReadValueId_init(&nodes[nnodes]);
-                nodes[nnodes].nodeId = node; /* owns it now */
-                nodes[nnodes].attributeId = UA_ATTRIBUTEID_VALUE;
-                at[nnodes++] = k;
-            } else if (rc[k] == -1) {
-                stop = k++;
-                break;
-            }
-        }
-        if (nnodes > 0) {
-            size_t lost = read_block(ua, nodes, nnodes, at, pts, n, out, rc);
-            if (lost < stop)
-                stop = lost;
-        }
-        if (stop < n) {
-            free(nodes);
-            free(at);
-            return stop + 1;
-        }
-    }
+    poll_ctx_t c = {.dev = dev, .pts = pts, .out = out};
+    tdot_ua_blocks_t io = {
+        .ctx = &c, .prepare = poll_prepare, .read = poll_read, .result = poll_result};
+    size_t got = tdot_ua_read_blocks(&io, n, block, nodes, at, rc);
     free(nodes);
     free(at);
-    return n;
+    return got;
 }
 
 static int write_point(tdot_connector_t *self, tdot_device_t *dev,
