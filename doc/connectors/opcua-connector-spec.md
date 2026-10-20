@@ -295,8 +295,9 @@ to 65535 elements, where async-opcua's default limit of 1000 used to refuse such
 nodes, or the server's `OperationLimits.MaxNodesPerRead` when that is lower. The limit is read
 once per session; a limit below 500 is logged as an `info` line naming the device. A pass over
 30,000 points thus takes 60 requests. A request the server refuses makes only its own points
-bad. A request that times out or finds the connection gone ends the pass and takes the link
-down.
+bad. A request that times out or finds the connection gone ends the pass: no further request
+is sent, and the link goes down at once. When it was the pass's first request, every point of
+the pass is bad; when earlier requests succeeded, their points are published.
 
 The C build buffers pushed values between two runtime ticks in a queue per device. The queue
 starts with room for twice the device's subscribed points, so every point's initial value

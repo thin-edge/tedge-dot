@@ -960,7 +960,7 @@ impl Connector for OpcuaConnector {
             // waiting to resurrect the session, and an unbounded await here would wedge the
             // runtime's poll loop instead of reporting the outage.
             let timeout = Duration::from_secs(self.conn.request_timeout_s.max(1));
-            let values = read_in_blocks(reads, block, |chunk| {
+            let (values, lost) = read_in_blocks(reads, block, |chunk| {
                 let session = session.clone();
                 async move {
                     match tokio::time::timeout(
@@ -983,8 +983,10 @@ impl Connector for OpcuaConnector {
             })
             .await;
             for (id, model, slot) in &known {
-                match &values[*slot] {
-                    Ok(dv) => {
+                match values.get(*slot) {
+                    // Not read: the link was lost before its block.
+                    None => {}
+                    Some(Ok(dv)) => {
                         let mut sample = build_sample(id, model, dv, &types);
                         // Contract §5: polled samples carry the read-completion time. Servers
                         // may return a (stale) source timestamp even for TimestampsToReturn::
@@ -992,8 +994,11 @@ impl Connector for OpcuaConnector {
                         sample.ts = OffsetDateTime::now_utc();
                         out.push(sample);
                     }
-                    Err(reason) => out.push(bad_sample(id, Some(model), reason)),
+                    Some(Err(reason)) => out.push(bad_sample(id, Some(model), reason)),
                 }
+            }
+            if let Some(reason) = lost {
+                return Err(ConnectorError::LinkLost { samples: out, reason });
             }
         }
         Ok(out)
@@ -2176,10 +2181,16 @@ fn link_lost(status: StatusCode) -> bool {
 }
 
 /// Read `items` through `read` in blocks of at most `block`, one after the other, and return one
-/// result per item, in order. A block the server refuses fails only its own items. A block that
-/// finds the link gone fails every item from there on with its reason, and nothing after it is
-/// sent. A block answered with fewer values than it asked for fails the missing ones.
-async fn read_in_blocks<T, R, F, Fut>(items: Vec<T>, block: usize, mut read: F) -> Vec<Result<R, String>>
+/// result per item, in order. A block the server refuses fails only its own items. A block
+/// answered with fewer values than it asked for fails the missing ones. A block that finds the
+/// link gone ends it, and nothing after it is sent: before any value was read, every item fails
+/// with its reason; after one was, the results end before that block and its reason is returned
+/// too (`read_points` then reports [`ConnectorError::LinkLost`]).
+async fn read_in_blocks<T, R, F, Fut>(
+    items: Vec<T>,
+    block: usize,
+    mut read: F,
+) -> (Vec<Result<R, String>>, Option<String>)
 where
     F: FnMut(Vec<T>) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<R>, BlockFailure>>,
@@ -2196,16 +2207,17 @@ where
                 results.extend(values.into_iter().take(asked).map(Ok));
                 results.extend((got..asked).map(|_| Err("no value returned".to_string())));
             }
-            Err(failure) => {
-                let failed = if failure.link_lost { total - results.len() } else { asked };
-                results.extend((0..failed).map(|_| Err(failure.reason.clone())));
-                if failure.link_lost {
-                    break;
+            Err(failure) if failure.link_lost => {
+                if results.iter().any(Result::is_ok) {
+                    return (results, Some(failure.reason));
                 }
+                results.extend((results.len()..total).map(|_| Err(failure.reason.clone())));
+                break;
             }
+            Err(failure) => results.extend((0..asked).map(|_| Err(failure.reason.clone()))),
         }
     }
-    results
+    (results, None)
 }
 
 fn revised(requested: Duration, revised_ms: f64) -> Option<Duration> {
@@ -2637,14 +2649,14 @@ mod tests {
         })
         .await;
         assert_eq!(sizes, vec![500, 500, 200]);
-        assert_eq!(results, (0..1200).map(Ok).collect::<Vec<Result<u32, String>>>());
+        assert_eq!(results, ((0..1200).map(Ok).collect::<Vec<Result<u32, String>>>(), None));
     }
 
     /// A block the server refuses fails its own items only; the next blocks are still read.
     #[tokio::test]
     async fn a_refused_block_fails_only_its_items() {
         let mut calls = 0;
-        let results = read_in_blocks((0..1200).collect(), 500, |block: Vec<u32>| {
+        let (results, lost) = read_in_blocks((0..1200).collect(), 500, |block: Vec<u32>| {
             calls += 1;
             let n = calls;
             async move {
@@ -2656,6 +2668,7 @@ mod tests {
             }
         })
         .await;
+        assert_eq!(lost, None);
         assert_eq!(calls, 3);
         assert_eq!(results.len(), 1200);
         assert!(results[..500].iter().all(Result::is_ok));
@@ -2663,17 +2676,39 @@ mod tests {
         assert_eq!(results[1000..], (1000..1200).map(Ok).collect::<Vec<_>>()[..]);
     }
 
-    /// A block that finds the link gone fails every item from there on, and nothing after it is
-    /// sent: each further block would only wait for its own timeout.
+    /// A block that finds the link gone ends the read, and nothing after it is sent: each further
+    /// block would only wait for its own timeout. Before any value was read, every item fails
+    /// with the reason, as one failed request did.
     #[tokio::test]
-    async fn a_lost_link_fails_the_rest_unsent() {
+    async fn a_lost_link_fails_every_item_unsent() {
+        let mut calls = 0;
+        let (results, lost) = read_in_blocks((0..1200).collect(), 500, |_: Vec<u32>| {
+            calls += 1;
+            async move {
+                Err::<Vec<u32>, _>(BlockFailure {
+                    reason: "read timed out after 1s (transport down?)".into(),
+                    link_lost: true,
+                })
+            }
+        })
+        .await;
+        assert_eq!(lost, None, "nothing was read, so every item fails instead");
+        assert_eq!(calls, 1, "nothing is sent after the link is gone");
+        assert_eq!(results.len(), 1200);
+        assert!(results.iter().all(|r| r == &Err("read timed out after 1s (transport down?)".to_string())));
+    }
+
+    /// A link lost after a block was read ends the results before the failed block and returns
+    /// the reason, for `read_points` to report the points read so far as `LinkLost`.
+    #[tokio::test]
+    async fn a_link_lost_mid_read_returns_what_was_read() {
         let mut calls = 0;
         let results = read_in_blocks((0..1200).collect(), 500, |block: Vec<u32>| {
             calls += 1;
             let n = calls;
             async move {
                 if n == 2 {
-                    Err(BlockFailure { reason: "read timed out after 1s (transport down?)".into(), link_lost: true })
+                    Err(BlockFailure { reason: "read failed: BadConnectionClosed".into(), link_lost: true })
                 } else {
                     Ok(block)
                 }
@@ -2681,9 +2716,8 @@ mod tests {
         })
         .await;
         assert_eq!(calls, 2, "nothing is sent after the link is gone");
-        assert_eq!(results.len(), 1200);
-        assert!(results[..500].iter().all(Result::is_ok));
-        assert!(results[500..].iter().all(|r| r == &Err("read timed out after 1s (transport down?)".to_string())));
+        assert_eq!(results.0, (0..500).map(Ok).collect::<Vec<Result<u32, String>>>());
+        assert_eq!(results.1, Some("read failed: BadConnectionClosed".to_string()));
     }
 
     /// A block answered with fewer values than it asked for fails the missing ones, and one
@@ -2697,7 +2731,8 @@ mod tests {
                 Ok([block.clone(), vec![99]].concat())
             }
         })
-        .await;
+        .await
+        .0;
         let expected: Vec<Result<u32, String>> =
             vec![Ok(0), Ok(1), Err("no value returned".into()), Ok(3), Ok(4), Ok(5)];
         assert_eq!(results, expected);
