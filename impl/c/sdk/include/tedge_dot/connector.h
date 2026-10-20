@@ -25,6 +25,9 @@ typedef struct tdot_connector tdot_connector_t;
  * (contract §5.3) the point gets no heartbeat until its next reset. */
 #define TDOT_READ_NO_DATA 1
 
+/* The most points the runtime hands to one read_points() call. */
+#define TDOT_READ_POINTS_MAX 500
+
 /* Sink a module hands pushed samples to, one call per sample. Supplied by the
  * runtime to drain_subscriptions() and only valid for the duration of that
  * call; the sample is borrowed and must not be retained past it. */
@@ -66,6 +69,19 @@ struct tdot_connector {
      * has nothing to read on demand or no new data since its previous read. */
     int (*read_point)(tdot_connector_t *self, tdot_device_t *dev,
                       tdot_point_t *pt, tdot_sample_t *out);
+
+    /* Optional: read the due points pts[0..n) of one device together, the C
+     * rendering of the Rust trait's `read_points`, for a protocol that can
+     * read many points in one request (OPC UA). n is at most
+     * TDOT_READ_POINTS_MAX. For each point k it fills out[k] and rc[k] exactly
+     * as read_point() would, in order, and stops after the first point whose
+     * rc is -1: the runtime takes the link down there, as it does on a
+     * read_point() returning -1. Returns how many points it filled. The
+     * samples arrive initialised (tdot_sample_init). NULL means the runtime
+     * polls through read_point(), one point at a time. */
+    size_t (*read_points)(tdot_connector_t *self, tdot_device_t *dev,
+                          tdot_point_t *const *pts, size_t n, tdot_sample_t *out,
+                          int *rc);
 
     /* Execute a typed "write" command. Returns 0 on success, -1 with err. */
     int (*write_point)(tdot_connector_t *self, tdot_device_t *dev,

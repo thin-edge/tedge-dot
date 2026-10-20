@@ -92,6 +92,11 @@ typedef struct {
      * point (tdot_schedule_tick_ms), so a pushed value does not sit in the
      * protocol socket for a whole 200 ms tick. */
     int tick_ms;
+    /* A read_points() call's arguments, TDOT_READ_POINTS_MAX each: allocated
+     * at the first one, NULL for a module without the hook. */
+    tdot_point_t **batch;
+    tdot_sample_t *batch_out;
+    int *batch_rc;
 } rt_t;
 
 static void logmsg(const char *level, const char *fmt, ...) {
@@ -1721,6 +1726,13 @@ static bool stop_requested(const run_ctl_t *ctl) {
     return g_stop || (ctl && atomic_load(&ctl->stop));
 }
 
+/* Heartbeat for the stall watchdog: stamped at the top of every tick, so it
+ * stops advancing exactly when a protocol call below does not return. */
+static void beat(rt_t *rt) {
+    if (rt->progress)
+        atomic_store(&rt->progress->beat_ms, (long long)(tdot_mono() * 1000.0));
+}
+
 /* A pass of the reporting policy (§5.3) over every point: publish the held
  * readings whose interval ended and the debounced ones that settled, and read
  * a pushed point on demand when its heartbeat is due -- a fresh reading, never
@@ -1785,6 +1797,80 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
         else if (read > bad)
             publish_link(rt, dev, TDOT_LINK_CONNECTED);
     }
+}
+
+/* What a poll pass has seen of a device so far. */
+typedef struct {
+    size_t polled, bad;
+    bool transport_down;
+} poll_pass_t;
+
+/* Publish one polled reading -- read_point's or read_points' result for `pt`,
+ * returning `rc` -- and count it into the pass. */
+static void take_reading(rt_t *rt, tdot_device_t *dev, tdot_point_t *pt,
+                         tdot_sample_t *s, int rc, double now, poll_pass_t *pass) {
+    pt->next_due = now + pt->poll_interval_s;
+    /* Nothing new to publish (a CAN frame not received again): not a reading,
+     * so it says nothing about the link either. */
+    if (rc == TDOT_READ_NO_DATA)
+        return;
+    if (pt->mode == TDOT_MODE_RAW)
+        s->value.kind = TDOT_VAL_NONE; /* raw: bytes only */
+    hold_reading(pt, s);
+    emit_sample(rt, dev, pt, s);
+    pass->polled++;
+    if (s->quality == TDOT_Q_BAD)
+        pass->bad++;
+    if (rc != 0)
+        pass->transport_down = true;
+}
+
+/* Whether a polled point is due for a read now. A subscribed point is
+ * delivered by the module's drain; polling it too would double-publish. */
+static bool poll_due(const tdot_point_t *pt, double now) {
+    return !pt->subscribed && (pt->access & TDOT_ACCESS_READ) && now >= pt->next_due;
+}
+
+/* Poll a device's due points through read_points(), TDOT_READ_POINTS_MAX at a
+ * time. False when the call's buffers cannot be allocated. */
+static bool poll_batched(rt_t *rt, tdot_device_t *dev, double now, poll_pass_t *pass) {
+    tdot_connector_t *conn = rt->conn;
+    if (!rt->batch) {
+        rt->batch = calloc(TDOT_READ_POINTS_MAX, sizeof *rt->batch);
+        rt->batch_out = calloc(TDOT_READ_POINTS_MAX, sizeof *rt->batch_out);
+        rt->batch_rc = calloc(TDOT_READ_POINTS_MAX, sizeof *rt->batch_rc);
+        if (!rt->batch || !rt->batch_out || !rt->batch_rc) {
+            free(rt->batch);
+            free(rt->batch_out);
+            free(rt->batch_rc);
+            rt->batch = NULL;
+            rt->batch_out = NULL;
+            rt->batch_rc = NULL;
+            return false;
+        }
+    }
+    size_t n = dev->polled ? dev->npolled : dev->npoints;
+    size_t k = 0;
+    while (k < n && !pass->transport_down) {
+        size_t m = 0;
+        for (; k < n && m < TDOT_READ_POINTS_MAX; k++) {
+            tdot_point_t *pt = &dev->points[dev->polled ? dev->polled[k] : k];
+            if (poll_due(pt, now))
+                rt->batch[m++] = pt;
+        }
+        if (m == 0)
+            break;
+        for (size_t j = 0; j < m; j++)
+            tdot_sample_init(&rt->batch_out[j]);
+        size_t got = conn->read_points(conn, dev, rt->batch, m, rt->batch_out,
+                                       rt->batch_rc);
+        if (got > m)
+            got = m;
+        for (size_t j = 0; j < got && !pass->transport_down; j++)
+            take_reading(rt, dev, rt->batch[j], &rt->batch_out[j], rt->batch_rc[j],
+                         now, pass);
+    }
+    return true;
 }
 
 /* Run one connector to completion. Assumes the mosquitto library is already
@@ -1886,11 +1972,7 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
             now = tdot_mono(); /* applying a reload reconnects the devices */
         }
 
-        /* Heartbeat for the stall watchdog: stamped at the top of every tick,
-         * so it stops advancing exactly when a protocol call below does not
-         * return. */
-        if (rt.progress)
-            atomic_store(&rt.progress->beat_ms, (long long)(now * 1000.0));
+        beat(&rt);
 
         for (size_t i = 0; i < cfg->ndevices && !stop_requested(ctl); i++) {
             tdot_device_t *dev = &cfg->devices[i];
@@ -1901,48 +1983,33 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                 if (dev->link != TDOT_LINK_CONNECTED)
                     continue;
             }
-            bool transport_down = false;
-            size_t bad = 0, polled = 0;
+            poll_pass_t pass = {0};
             /* Only the polled points (schedule.h), not every point. */
             size_t n = dev->polled ? dev->npolled : dev->npoints;
-            for (size_t k = 0; k < n && !transport_down; k++) {
-                tdot_point_t *pt = &dev->points[dev->polled ? dev->polled[k] : k];
-                /* A subscribed point is delivered by the module's drain below;
-                 * polling it too would double-publish. */
-                if (pt->subscribed)
-                    continue;
-                if (!(pt->access & TDOT_ACCESS_READ) || now < pt->next_due)
-                    continue;
-                tdot_sample_t s;
-                tdot_sample_init(&s);
-                int rc = conn->read_point(conn, dev, pt, &s);
-                pt->next_due = now + pt->poll_interval_s;
-                /* Nothing new to publish (a CAN frame not received again): not
-                 * a reading, so it says nothing about the link either. */
-                if (rc == TDOT_READ_NO_DATA)
-                    continue;
-                if (pt->mode == TDOT_MODE_RAW)
-                    s.value.kind = TDOT_VAL_NONE; /* raw: bytes only */
-                hold_reading(pt, &s);
-                emit_sample(&rt, dev, pt, &s);
-                polled++;
-                if (s.quality == TDOT_Q_BAD)
-                    bad++;
-                if (rc != 0)
-                    transport_down = true;
+            if (!conn->read_points || !poll_batched(&rt, dev, now, &pass)) {
+                for (size_t k = 0; k < n && !pass.transport_down; k++) {
+                    tdot_point_t *pt = &dev->points[dev->polled ? dev->polled[k] : k];
+                    if (!poll_due(pt, now))
+                        continue;
+                    tdot_sample_t s;
+                    tdot_sample_init(&s);
+                    int rc = conn->read_point(conn, dev, pt, &s);
+                    take_reading(&rt, dev, pt, &s, rc, now, &pass);
+                }
             }
-            if (polled > 0)
-                judge_pass(dev, dev->polled, n, !transport_down && bad < polled);
-            if (transport_down) {
+            if (pass.polled > 0)
+                judge_pass(dev, dev->polled, n,
+                           !pass.transport_down && pass.bad < pass.polled);
+            if (pass.transport_down) {
                 mark_transport_down(&rt, dev);
                 continue;
             }
-            if (polled > 0) {
+            if (pass.polled > 0) {
                 /* whole batch failing degrades the link; any success is
                  * connected */
                 publish_link(&rt, dev,
-                             bad == polled ? TDOT_LINK_DEGRADED
-                                           : TDOT_LINK_CONNECTED);
+                             pass.bad == pass.polled ? TDOT_LINK_DEGRADED
+                                                     : TDOT_LINK_CONNECTED);
             }
 
             /* Hand over whatever the module received by push since the last
@@ -1979,6 +2046,9 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
         mosquitto_disconnect(rt.mosq);
         mosquitto_destroy(rt.mosq);
     }
+    free(rt.batch);
+    free(rt.batch_out);
+    free(rt.batch_rc);
     return result;
 }
 

@@ -319,6 +319,12 @@ add_test(NAME report-vectors
          COMMAND tedge-dot-report
                  ${CMAKE_CURRENT_SOURCE_DIR}/../../doc/contract/test-vectors/report/vectors.json)
 
+# Polling through a module's read_points: calls of at most TDOT_READ_POINTS_MAX,
+# per-point samples, and a lost link that ends the pass as read_point's does.
+add_executable(tedge-dot-poll-batch tests/poll_batch.c)
+target_link_libraries(tedge-dot-poll-batch PRIVATE tedge_dot_sdk)
+add_test(NAME poll-batch COMMAND tedge-dot-poll-batch)
+
 # Value mapping (contract §4.3): the shared vectors the Rust SDK's map.rs runs too.
 add_executable(tedge-dot-map tests/map.c)
 target_link_libraries(tedge-dot-map PRIVATE tedge_dot_sdk)
