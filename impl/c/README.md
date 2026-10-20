@@ -150,7 +150,8 @@ what actually makes a silent peer return, and it is why the conformance
 suite's silent-peer checks (B5) pass for both builds.
 
 `stall_timeout` covers what a response timeout cannot: a call that wedges
-*inside* a library. Every poll loop stamps a heartbeat; a watchdog thread
+*inside* a library. Every poll loop stamps a heartbeat each tick and after each
+read, so a long pass that keeps making progress does not count; a watchdog thread
 notices when one stops advancing and **exits the process** (exit code 70) so the
 service manager restarts it — `packaging/tedge-dot.service` sets
 `Restart=always`. Rust cancels and restarts just the wedged connector while its
