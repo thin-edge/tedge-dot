@@ -34,8 +34,9 @@
  * tokio::time::timeout can.
  *
  * connector.stall_timeout closes that gap from the outside. Every poll loop
- * stamps a heartbeat each tick; a watchdog thread notices when one stops
- * advancing and exits the process, so the service manager restarts it
+ * stamps a heartbeat each tick and after each read (beat()); a watchdog thread
+ * notices when one stops advancing and exits the process, so the service
+ * manager restarts it
  * (packaging/tedge-dot.service sets Restart=always). That is coarser than the
  * Rust behaviour -- which cancels and restarts the one wedged connector while
  * the others keep running -- because a pthread stuck in a blocking library call
@@ -1726,8 +1727,9 @@ static bool stop_requested(const run_ctl_t *ctl) {
     return g_stop || (ctl && atomic_load(&ctl->stop));
 }
 
-/* Heartbeat for the stall watchdog: stamped at the top of every tick, so it
- * stops advancing exactly when a protocol call below does not return. */
+/* Heartbeat for the stall watchdog: stamped at the top of every tick and after
+ * every read, so it stops advancing exactly when a protocol call does not
+ * return -- not when a pass over a large device just takes long. */
 static void beat(rt_t *rt) {
     if (rt->progress)
         atomic_store(&rt->progress->beat_ms, (long long)(tdot_mono() * 1000.0));
@@ -1771,6 +1773,7 @@ static void report_pass(rt_t *rt, const run_ctl_t *ctl) {
             tdot_sample_t s;
             tdot_sample_init(&s);
             int rc = conn->read_point(conn, dev, pt, &s);
+            beat(rt);
             if (rc == TDOT_READ_NO_DATA) {
                 /* Cannot be read on demand (a trap, a CAN frame): no heartbeat,
                  * and no retry until the point's next reset. */
@@ -1864,6 +1867,7 @@ static bool poll_batched(rt_t *rt, tdot_device_t *dev, double now, poll_pass_t *
             tdot_sample_init(&rt->batch_out[j]);
         size_t got = conn->read_points(conn, dev, rt->batch, m, rt->batch_out,
                                        rt->batch_rc);
+        beat(rt);
         if (got > m)
             got = m;
         for (size_t j = 0; j < got && !pass->transport_down; j++)
@@ -1994,6 +1998,7 @@ static int run_connector(tdot_connector_t *conn, tdot_config_t *cfg,
                     tdot_sample_t s;
                     tdot_sample_init(&s);
                     int rc = conn->read_point(conn, dev, pt, &s);
+                    beat(&rt);
                     take_reading(&rt, dev, pt, &s, rc, now, &pass);
                 }
             }
