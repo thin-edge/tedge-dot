@@ -34,6 +34,15 @@ async fn start_server() -> (ServerHandle, Arc<SimpleNodeManager>, u16, u16) {
 /// [`start_server`] on a given port (0 = ephemeral), so a test can bring a stopped server back
 /// where the connector expects it.
 async fn start_server_on(port: u16) -> (ServerHandle, Arc<SimpleNodeManager>, u16, u16) {
+    start_server_with(port, None).await
+}
+
+/// [`start_server_on`] with the server's `MaxNodesPerRead` set to `max_nodes_per_read` (async-
+/// opcua's default is 10,000).
+async fn start_server_with(
+    port: u16,
+    max_nodes_per_read: Option<usize>,
+) -> (ServerHandle, Arc<SimpleNodeManager>, u16, u16) {
     // Opt-in wire logging for debugging: RUST_LOG=opcua_client=debug,opcua_server=debug
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -57,6 +66,9 @@ async fn start_server_on(port: u16) -> (ServerHandle, Arc<SimpleNodeManager>, u1
     // No cap on monitored items per subscription (async-opcua's default is 1000), so a test
     // can subscribe a device with thousands of points.
     builder.limits_mut().subscriptions.max_monitored_items_per_sub = 0;
+    if let Some(limit) = max_nodes_per_read {
+        builder.limits_mut().operational.max_nodes_per_read = limit;
+    }
     let (server, handle) = builder.build().unwrap();
 
     let nm = handle
@@ -367,6 +379,125 @@ async fn a_device_with_thousands_of_points_subscribes() {
     .unwrap_or_else(|_| panic!("only {} of {POINTS} start values arrived", seen.len()));
     connector.check_subscription(&"plc-1".to_string()).await.unwrap();
 
+    connector.disconnect().await.unwrap();
+    handle.cancel();
+}
+
+/// Add `n` Double variables `Tag0`..`Tag{n-1}` to the server, each holding its own index.
+fn add_tags(nm: &SimpleNodeManager, ns: u16, n: usize) {
+    let mut space = nm.address_space().write();
+    for i in 0..n {
+        let name = format!("Tag{i}");
+        VariableBuilder::new(&NodeId::new(ns, name.as_str()), name.as_str(), name.as_str())
+            .data_type(DataTypeId::Double)
+            .value(i as f64)
+            .organized_by(ObjectId::ObjectsFolder)
+            .insert(&mut *space);
+    }
+}
+
+/// A one-device config polling `Tag0`..`Tag{n-1}` as points `tag0`..`tag{n-1}`, with a 1 s
+/// request timeout.
+fn tags_config(port: u16, ns: u16, n: usize) -> ConnectorConfig {
+    let mut toml = format!(
+        r#"
+        [connector]
+        protocol = "opcua"
+
+        [connection]
+        request_timeout_s = 1
+
+        [[device]]
+        name = "plc-1"
+        protocol_address = {{ endpoint = "opc.tcp://127.0.0.1:{port}" }}
+        default_mode = "typed"
+        "#
+    );
+    for i in 0..n {
+        toml.push_str(&format!(
+            "\n[[device.point]]\nid = \"tag{i}\"\ndatatype = \"float64\"\naddress = {{ namespace = {ns}, identifier = \"Tag{i}\" }}\n"
+        ));
+    }
+    toml::from_str(&toml).unwrap()
+}
+
+/// Read `tag0`..`tag{n-1}` once and assert every point comes back good with its own value.
+async fn assert_tags_poll(connector: &mut OpcuaConnector, n: usize) {
+    let points: Vec<PointRef> = (0..n).map(|i| pref(&format!("tag{i}"), DataType::Float64, 1000)).collect();
+    let samples = connector.read_points(&"plc-1".to_string(), &points).await.unwrap();
+    assert_eq!(samples.len(), n);
+    for sample in &samples {
+        assert_eq!(sample.quality, Quality::Good, "{sample:?}");
+        let i: usize = sample.point.trim_start_matches("tag").parse().unwrap();
+        assert_eq!(sample.value, Some(Value::Number(i as f64)), "{sample:?}");
+    }
+}
+
+/// A device with more polled points than one `Read` carries: the read goes out in blocks, and
+/// every point comes back good. A single request for all of them is refused (by the server's
+/// array limit here, by the client's message size above about 10,000 nodes).
+#[tokio::test]
+async fn a_device_with_thousands_of_points_polls() {
+    const POINTS: usize = 2500;
+    let (handle, nm, ns, port) = start_server().await;
+    add_tags(&nm, ns, POINTS);
+    let mut connector = OpcuaConnector::default();
+    connector.configure(&tags_config(port, ns, POINTS)).unwrap();
+    let reports = connector.connect().await.unwrap();
+    assert_eq!(reports[0].status.as_str(), "connected", "{:?}", reports[0].reason);
+
+    assert_tags_poll(&mut connector, POINTS).await;
+
+    connector.disconnect().await.unwrap();
+    handle.cancel();
+}
+
+/// A server whose `MaxNodesPerRead` is below the block size: the blocks follow its limit, so
+/// the server does not refuse them with `BadTooManyOperations`.
+#[tokio::test]
+async fn polls_follow_the_server_read_limit() {
+    const POINTS: usize = 250;
+    let (handle, nm, ns, port) = start_server_with(0, Some(100)).await;
+    add_tags(&nm, ns, POINTS);
+    let mut connector = OpcuaConnector::default();
+    connector.configure(&tags_config(port, ns, POINTS)).unwrap();
+    let reports = connector.connect().await.unwrap();
+    assert_eq!(reports[0].status.as_str(), "connected", "{:?}", reports[0].reason);
+
+    assert_tags_poll(&mut connector, POINTS).await;
+
+    connector.disconnect().await.unwrap();
+    handle.cancel();
+}
+
+/// A server that stops answering in the middle of a poll: the block in flight times out, and
+/// the blocks after it are not sent to wait out their own timeouts. Every point is bad.
+#[tokio::test]
+async fn a_poll_against_a_silent_server_waits_for_one_block_only() {
+    const POINTS: usize = 2500; // five blocks
+    let (handle, nm, ns, port) = start_server().await;
+    add_tags(&nm, ns, POINTS);
+    let (proxy_port, stalled) = start_stall_proxy(port).await;
+    let mut connector = OpcuaConnector::default();
+    connector.configure(&tags_config(proxy_port, ns, POINTS)).unwrap();
+    let reports = connector.connect().await.unwrap();
+    assert_eq!(reports[0].status.as_str(), "connected", "{:?}", reports[0].reason);
+
+    stalled.store(true, Ordering::Relaxed);
+    let points: Vec<PointRef> =
+        (0..POINTS).map(|i| pref(&format!("tag{i}"), DataType::Float64, 1000)).collect();
+    let started = std::time::Instant::now();
+    let samples = connector.read_points(&"plc-1".to_string(), &points).await.unwrap();
+    let took = started.elapsed();
+    assert_eq!(samples.len(), POINTS);
+    for sample in &samples {
+        assert_eq!(sample.quality, Quality::Bad, "{sample:?}");
+        assert!(sample.error.as_deref().unwrap_or_default().contains("timed out"), "{sample:?}");
+    }
+    // One 1 s request timeout, not one per block.
+    assert!(took < Duration::from_secs(3), "the poll took {took:?}");
+
+    stalled.store(false, Ordering::Relaxed);
     connector.disconnect().await.unwrap();
     handle.cancel();
 }
