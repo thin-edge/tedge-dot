@@ -255,6 +255,11 @@ pub enum ConnectorError {
     AccessDenied(String),
     #[error("transport error: {0}")]
     Transport(String),
+    /// From [`Connector::read_points`]: the link was lost part-way, after `samples` were read.
+    /// The runtime publishes them and then handles the call as a [`ConnectorError::Transport`]
+    /// failure, as the C runtime does with the points read before one that takes the link down.
+    #[error("transport error: {reason}")]
+    LinkLost { samples: Vec<Sample>, reason: String },
     #[error("decode error: {0}")]
     Decode(String),
     #[error("unsupported operation: {0}")]
@@ -295,7 +300,8 @@ pub trait Connector: Send {
     async fn connect(&mut self) -> Result<Vec<LinkReport>, ConnectorError>;
 
     /// Read a batch of points for one device. Returns one [`Sample`] per requested point
-    /// (including `bad`/`stale` samples).
+    /// (including `bad`/`stale` samples), or [`ConnectorError::LinkLost`] with the points read
+    /// before the link was lost part-way.
     async fn read_points(
         &mut self,
         device: &DeviceId,

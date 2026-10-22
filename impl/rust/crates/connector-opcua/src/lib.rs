@@ -46,7 +46,8 @@ use opcua::crypto::{CertificateStore, PrivateKey, SecurityPolicy, X509};
 use opcua::types::{
     AttributeId, BinaryEncodable, DataValue, MessageSecurityMode, MonitoredItemCreateRequest,
     MonitoringMode, MonitoringParameters, NodeId, NumericRange, ReadValueId, StatusCode,
-    TimestampsToReturn, UAString, UserTokenPolicy, Variant, WriteValue, CallMethodRequest,
+    TimestampsToReturn, UAString, UserTokenPolicy, VariableId, Variant, WriteValue,
+    CallMethodRequest,
 };
 use pki::{OwnCertificate, Pki};
 use tracing::warn;
@@ -134,6 +135,8 @@ struct SessionHandle {
     types: Arc<resolve::SessionTypes>,
     /// The node ids this session translated through namespace tables (design D3).
     translation: Arc<Mutex<namespaces::Translation>>,
+    /// The most nodes one `Read` of this session carries; see [`nodes_per_read`].
+    nodes_per_read: usize,
 }
 
 /// A spawned task aborted when its handle is dropped. The runtime cancels a module call that
@@ -282,6 +285,15 @@ impl OpcuaConnector {
         let (result, info) = attempt.connect().await;
         match result {
             Ok(mut handle) => {
+                let timeout = Duration::from_secs(self.conn.request_timeout_s.max(1));
+                let limit = read_limit(&handle.session, timeout).await;
+                handle.nodes_per_read = nodes_per_read(limit);
+                if handle.nodes_per_read < NODES_PER_READ {
+                    tracing::info!(
+                        "{name}: the server reads at most {} node(s) per request; polls go out in blocks of that size",
+                        handle.nodes_per_read
+                    );
+                }
                 let namespaces = self.translate(name, &handle, false).await;
                 handle.types = Arc::new(
                     resolve_types(
@@ -888,8 +900,8 @@ impl Connector for OpcuaConnector {
             }
         }
 
-        let (session, types, translation) = match self.sessions.get(device) {
-            Some(h) => (h.session.clone(), h.types.clone(), h.translation.clone()),
+        let (session, types, translation, block) = match self.sessions.get(device) {
+            Some(h) => (h.session.clone(), h.types.clone(), h.translation.clone(), h.nodes_per_read),
             None => {
                 return Ok(models
                     .into_iter()
@@ -944,22 +956,37 @@ impl Connector for OpcuaConnector {
         }
 
         if !reads.is_empty() {
-            // Bound the service call: while the transport is down the client queues requests
+            // Bound each service call: while the transport is down the client queues requests
             // waiting to resurrect the session, and an unbounded await here would wedge the
             // runtime's poll loop instead of reporting the outage.
             let timeout = Duration::from_secs(self.conn.request_timeout_s.max(1));
-            match tokio::time::timeout(
-                timeout,
-                session.read(&reads, TimestampsToReturn::Neither, 0.0),
-            )
-            .await
-            {
-                Ok(Ok(values)) => {
-                    for (id, model, slot) in &known {
-                        let Some(dv) = values.get(*slot) else {
-                            out.push(bad_sample(id, Some(model), "no value returned"));
-                            continue;
-                        };
+            let (values, lost) = read_in_blocks(reads, block, |chunk| {
+                let session = session.clone();
+                async move {
+                    match tokio::time::timeout(
+                        timeout,
+                        session.read(&chunk, TimestampsToReturn::Neither, 0.0),
+                    )
+                    .await
+                    {
+                        Ok(Ok(values)) => Ok(values),
+                        Ok(Err(status)) => Err(BlockFailure {
+                            reason: format!("read failed: {status}"),
+                            link_lost: link_lost(status),
+                        }),
+                        Err(_) => Err(BlockFailure {
+                            reason: format!("read timed out after {}s (transport down?)", timeout.as_secs()),
+                            link_lost: true,
+                        }),
+                    }
+                }
+            })
+            .await;
+            for (id, model, slot) in &known {
+                match values.get(*slot) {
+                    // Not read: the link was lost before its block.
+                    None => {}
+                    Some(Ok(dv)) => {
                         let mut sample = build_sample(id, model, dv, &types);
                         // Contract §5: polled samples carry the read-completion time. Servers
                         // may return a (stale) source timestamp even for TimestampsToReturn::
@@ -967,19 +994,11 @@ impl Connector for OpcuaConnector {
                         sample.ts = OffsetDateTime::now_utc();
                         out.push(sample);
                     }
+                    Some(Err(reason)) => out.push(bad_sample(id, Some(model), reason)),
                 }
-                Ok(Err(status)) => {
-                    for (id, model, _) in &known {
-                        out.push(bad_sample(id, Some(model), &format!("read failed: {status}")));
-                    }
-                }
-                Err(_) => {
-                    let reason =
-                        format!("read timed out after {}s (transport down?)", timeout.as_secs());
-                    for (id, model, _) in &known {
-                        out.push(bad_sample(id, Some(model), &reason));
-                    }
-                }
+            }
+            if let Some(reason) = lost {
+                return Err(ConnectorError::LinkLost { samples: out, reason });
             }
         }
         Ok(out)
@@ -1638,6 +1657,7 @@ impl Attempt<'_> {
                     event_loop: handle,
                     types: Arc::default(),
                     translation: Arc::default(),
+                    nodes_per_read: NODES_PER_READ,
                 })
             }
             Ok(false) => {
@@ -2101,6 +2121,105 @@ where
     Ok(results)
 }
 
+/// The most nodes one polling `Read` carries. One request per point does not scale, and one
+/// request for every point of a large device outgrows the client's message size (about 10,000
+/// nodes) and the server's `MaxNodesPerRead`. 500, like [`MONITORED_ITEMS_PER_REQUEST`].
+const NODES_PER_READ: usize = 500;
+
+/// The block size of a session's polling reads: [`NODES_PER_READ`], or the server's
+/// `MaxNodesPerRead` when that is lower. A limit of 0, or none read, means the server sets none.
+fn nodes_per_read(server_limit: Option<u32>) -> usize {
+    match server_limit {
+        Some(limit) if limit > 0 => NODES_PER_READ.min(limit as usize),
+        _ => NODES_PER_READ,
+    }
+}
+
+/// The server's `OperationLimits.MaxNodesPerRead`, or `None` when it does not publish one.
+async fn read_limit(session: &Session, timeout: Duration) -> Option<u32> {
+    let read = ReadValueId {
+        node_id: VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead.into(),
+        attribute_id: AttributeId::Value as u32,
+        index_range: Default::default(),
+        data_encoding: Default::default(),
+    };
+    let values = tokio::time::timeout(timeout, session.read(&[read], TimestampsToReturn::Neither, 0.0))
+        .await
+        .ok()?
+        .ok()?;
+    match values.into_iter().next()?.value {
+        Some(Variant::UInt32(limit)) => Some(limit),
+        _ => None,
+    }
+}
+
+/// Why one block of a polling read failed.
+#[derive(Debug, Clone, PartialEq)]
+struct BlockFailure {
+    /// The error every point of the block is reported with.
+    reason: String,
+    /// The link is gone: the blocks after this one would only wait for their own timeout.
+    link_lost: bool,
+}
+
+/// A failed service call that means the link is gone, not that the server refused this request.
+/// The status codes the C module (connector_opcua.c `read_point`) takes the transport down for,
+/// plus the two async-opcua reports for a channel it has no connection on.
+fn link_lost(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::BadConnectionClosed
+            | StatusCode::BadServerNotConnected
+            | StatusCode::BadDisconnect
+            | StatusCode::BadTimeout
+            | StatusCode::BadSessionIdInvalid
+            | StatusCode::BadSecureChannelClosed
+            | StatusCode::BadInternalError
+            | StatusCode::BadNotConnected
+            | StatusCode::BadCommunicationError
+    )
+}
+
+/// Read `items` through `read` in blocks of at most `block`, one after the other, and return one
+/// result per item, in order. A block the server refuses fails only its own items. A block
+/// answered with fewer values than it asked for fails the missing ones. A block that finds the
+/// link gone ends it, and nothing after it is sent: before any value was read, every item fails
+/// with its reason; after one was, the results end before that block and its reason is returned
+/// too (`read_points` then reports [`ConnectorError::LinkLost`]).
+async fn read_in_blocks<T, R, F, Fut>(
+    items: Vec<T>,
+    block: usize,
+    mut read: F,
+) -> (Vec<Result<R, String>>, Option<String>)
+where
+    F: FnMut(Vec<T>) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<R>, BlockFailure>>,
+{
+    let total = items.len();
+    let mut results: Vec<Result<R, String>> = Vec::with_capacity(total);
+    let mut items = items.into_iter().peekable();
+    while items.peek().is_some() {
+        let chunk: Vec<T> = items.by_ref().take(block.max(1)).collect();
+        let asked = chunk.len();
+        match read(chunk).await {
+            Ok(values) => {
+                let got = values.len().min(asked);
+                results.extend(values.into_iter().take(asked).map(Ok));
+                results.extend((got..asked).map(|_| Err("no value returned".to_string())));
+            }
+            Err(failure) if failure.link_lost => {
+                if results.iter().any(Result::is_ok) {
+                    return (results, Some(failure.reason));
+                }
+                results.extend((results.len()..total).map(|_| Err(failure.reason.clone())));
+                break;
+            }
+            Err(failure) => results.extend((0..asked).map(|_| Err(failure.reason.clone()))),
+        }
+    }
+    (results, None)
+}
+
 fn revised(requested: Duration, revised_ms: f64) -> Option<Duration> {
     let requested_ms = requested.as_secs_f64() * 1000.0;
     (revised_ms.is_finite() && (revised_ms - requested_ms).abs() >= 1.0)
@@ -2509,6 +2628,122 @@ mod tests {
         .await;
         assert_eq!(failed, Err("BadTooManyOperations"));
         assert_eq!(calls, 2, "nothing is sent after a failed batch");
+    }
+
+    /// The block size is ours, or the server's limit when that is lower; 0 or none is no limit.
+    #[test]
+    fn the_block_size_follows_a_lower_server_limit() {
+        assert_eq!(nodes_per_read(None), NODES_PER_READ);
+        assert_eq!(nodes_per_read(Some(0)), NODES_PER_READ);
+        assert_eq!(nodes_per_read(Some(100)), 100);
+        assert_eq!(nodes_per_read(Some(10_000)), NODES_PER_READ);
+    }
+
+    /// Blocks of at most `block`, one result per item in order.
+    #[tokio::test]
+    async fn blocks_keep_order() {
+        let mut sizes = Vec::new();
+        let results = read_in_blocks((0..1200).collect(), 500, |block: Vec<u32>| {
+            sizes.push(block.len());
+            async move { Ok(block) }
+        })
+        .await;
+        assert_eq!(sizes, vec![500, 500, 200]);
+        assert_eq!(results, ((0..1200).map(Ok).collect::<Vec<Result<u32, String>>>(), None));
+    }
+
+    /// A block the server refuses fails its own items only; the next blocks are still read.
+    #[tokio::test]
+    async fn a_refused_block_fails_only_its_items() {
+        let mut calls = 0;
+        let (results, lost) = read_in_blocks((0..1200).collect(), 500, |block: Vec<u32>| {
+            calls += 1;
+            let n = calls;
+            async move {
+                if n == 2 {
+                    Err(BlockFailure { reason: "read failed: BadTooManyOperations".into(), link_lost: false })
+                } else {
+                    Ok(block)
+                }
+            }
+        })
+        .await;
+        assert_eq!(lost, None);
+        assert_eq!(calls, 3);
+        assert_eq!(results.len(), 1200);
+        assert!(results[..500].iter().all(Result::is_ok));
+        assert!(results[500..1000].iter().all(|r| r == &Err("read failed: BadTooManyOperations".to_string())));
+        assert_eq!(results[1000..], (1000..1200).map(Ok).collect::<Vec<_>>()[..]);
+    }
+
+    /// A block that finds the link gone ends the read, and nothing after it is sent: each further
+    /// block would only wait for its own timeout. Before any value was read, every item fails
+    /// with the reason, as one failed request did.
+    #[tokio::test]
+    async fn a_lost_link_fails_every_item_unsent() {
+        let mut calls = 0;
+        let (results, lost) = read_in_blocks((0..1200).collect(), 500, |_: Vec<u32>| {
+            calls += 1;
+            async move {
+                Err::<Vec<u32>, _>(BlockFailure {
+                    reason: "read timed out after 1s (transport down?)".into(),
+                    link_lost: true,
+                })
+            }
+        })
+        .await;
+        assert_eq!(lost, None, "nothing was read, so every item fails instead");
+        assert_eq!(calls, 1, "nothing is sent after the link is gone");
+        assert_eq!(results.len(), 1200);
+        assert!(results.iter().all(|r| r == &Err("read timed out after 1s (transport down?)".to_string())));
+    }
+
+    /// A link lost after a block was read ends the results before the failed block and returns
+    /// the reason, for `read_points` to report the points read so far as `LinkLost`.
+    #[tokio::test]
+    async fn a_link_lost_mid_read_returns_what_was_read() {
+        let mut calls = 0;
+        let results = read_in_blocks((0..1200).collect(), 500, |block: Vec<u32>| {
+            calls += 1;
+            let n = calls;
+            async move {
+                if n == 2 {
+                    Err(BlockFailure { reason: "read failed: BadConnectionClosed".into(), link_lost: true })
+                } else {
+                    Ok(block)
+                }
+            }
+        })
+        .await;
+        assert_eq!(calls, 2, "nothing is sent after the link is gone");
+        assert_eq!(results.0, (0..500).map(Ok).collect::<Vec<Result<u32, String>>>());
+        assert_eq!(results.1, Some("read failed: BadConnectionClosed".to_string()));
+    }
+
+    /// A block answered with fewer values than it asked for fails the missing ones, and one
+    /// answered with more does not shift the next block's results.
+    #[tokio::test]
+    async fn a_short_or_long_answer_keeps_items_aligned() {
+        let results = read_in_blocks((0..6).collect(), 3, |block: Vec<u32>| async move {
+            if block[0] == 0 {
+                Ok(block[..2].to_vec())
+            } else {
+                Ok([block.clone(), vec![99]].concat())
+            }
+        })
+        .await
+        .0;
+        let expected: Vec<Result<u32, String>> =
+            vec![Ok(0), Ok(1), Err("no value returned".into()), Ok(3), Ok(4), Ok(5)];
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn a_refusal_is_not_a_lost_link() {
+        assert!(link_lost(StatusCode::BadConnectionClosed));
+        assert!(link_lost(StatusCode::BadTimeout));
+        assert!(!link_lost(StatusCode::BadTooManyOperations));
+        assert!(!link_lost(StatusCode::BadRequestTooLarge));
     }
 
     #[test]

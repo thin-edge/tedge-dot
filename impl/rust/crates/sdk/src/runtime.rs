@@ -735,19 +735,22 @@ pub async fn run_until_reloadable(
                 }
                 for (device_index, points) in due {
                     let device = config.devices[device_index].name.clone();
-                    match bounded(limits, "read", connector.read_points(&device, &points)).await {
-                        Ok(mut samples) => {
-                            for s in samples.iter_mut() {
-                                // The runtime owns the device identity for polled reads:
-                                // connectors routinely leave `device` empty, and the sample
-                                // topic + meta lookup are keyed by the configured name.
-                                s.device = device.clone();
-                                if let Some(mut s) = reporter.offer(map_sample(s.clone(), &meta_index)) {
-                                    publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index)
-                                        .await;
-                                }
-                            }
-                            point_health.note(&device, &samples, true);
+                    let (mut samples, failure) =
+                        split_link_lost(bounded(limits, "read", connector.read_points(&device, &points)).await);
+                    for s in samples.iter_mut() {
+                        // The runtime owns the device identity for polled reads:
+                        // connectors routinely leave `device` empty, and the sample
+                        // topic + meta lookup are keyed by the configured name.
+                        s.device = device.clone();
+                        if let Some(mut s) = reporter.offer(map_sample(s.clone(), &meta_index)) {
+                            publish_sample(&client, &protocol, &mut s, &mut seq_counters, &meta_index).await;
+                        }
+                    }
+                    if !samples.is_empty() {
+                        point_health.note(&device, &samples, true);
+                    }
+                    match failure {
+                        Ok(()) => {
                             // A batch where every point failed means the device itself is
                             // unreachable (a single bad point keeps the link healthy).
                             if !samples.is_empty() {
@@ -1066,14 +1069,16 @@ pub async fn run_stdout_until(
                 }
                 for (device_index, points) in due {
                     let device = config.devices[device_index].name.clone();
-                    match bounded(limits, "read", connector.read_points(&device, &points)).await {
-                        Ok(mut samples) => {
-                            for s in samples.iter_mut() {
-                                s.device = device.clone();
-                                if let Some(mut s) = reporter.offer(map_sample(s.clone(), &meta_index)) {
-                                    print_sample(&mut s, &mut seq_counters, &meta_index);
-                                }
-                            }
+                    let (mut samples, failure) =
+                        split_link_lost(bounded(limits, "read", connector.read_points(&device, &points)).await);
+                    for s in samples.iter_mut() {
+                        s.device = device.clone();
+                        if let Some(mut s) = reporter.offer(map_sample(s.clone(), &meta_index)) {
+                            print_sample(&mut s, &mut seq_counters, &meta_index);
+                        }
+                    }
+                    match failure {
+                        Ok(()) => {
                             // An empty batch says nothing about the device: every due point may
                             // simply be delivered by push. Treating it as healthy cleared the
                             // reconnect entry and stranded a device whose subscription had
@@ -1382,6 +1387,18 @@ fn print_sample(
     *counter += 1;
     sample.seq = Some(*counter);
     println!("{}", envelope_with_meta(sample, meta_index));
+}
+
+/// A poll's `read_points` result as the samples to publish and the failure to handle. A
+/// [`ConnectorError::LinkLost`] has both: the points read before the link was lost are published
+/// like any others, and the call then fails like a transport error, so the link goes down now
+/// rather than being judged healthy on those points.
+fn split_link_lost(result: Result<Vec<Sample>, ConnectorError>) -> (Vec<Sample>, Result<(), ConnectorError>) {
+    match result {
+        Ok(samples) => (samples, Ok(())),
+        Err(ConnectorError::LinkLost { samples, reason }) => (samples, Err(ConnectorError::Transport(reason))),
+        Err(e) => (Vec::new(), Err(e)),
+    }
 }
 
 /// Build the polling schedule, skipping points that are delivered by subscription and points
@@ -3778,6 +3795,47 @@ protocol_address = {}
         // a device that never connected stays disconnected
         assert_eq!(next_link_state(Some(Disconnected), false), None);
         assert_eq!(next_link_state(None, false), None);
+    }
+
+    /// A link lost part-way: the points read before it are published, and the poll fails as a
+    /// transport error, so the link goes down although those points are good. Other results
+    /// are passed through.
+    #[test]
+    fn a_link_lost_part_way_publishes_what_was_read_and_fails() {
+        let good = Sample {
+            ts: OffsetDateTime::UNIX_EPOCH,
+            device: "plc".into(),
+            protocol: "opcua",
+            point: "p0".into(),
+            mode: Mode::Typed,
+            datatype: Some(DataType::Float64),
+            value: Some(crate::model::Value::Number(1.0)),
+            raw: vec![],
+            raw_group: 0,
+            quality: Quality::Good,
+            unit: None,
+            addr: serde_json::Value::Null,
+            seq: None,
+            error: None,
+            source_value: None,
+        };
+        let (samples, failure) = split_link_lost(Err(ConnectorError::LinkLost {
+            samples: vec![good.clone()],
+            reason: "read failed: BadConnectionClosed".into(),
+        }));
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].point, "p0");
+        assert_eq!(
+            failure.unwrap_err().to_string(),
+            "transport error: read failed: BadConnectionClosed"
+        );
+
+        let (samples, failure) = split_link_lost(Ok(vec![good]));
+        assert_eq!(samples.len(), 1);
+        assert!(failure.is_ok());
+        let (samples, failure) = split_link_lost(Err(ConnectorError::Transport("gone".into())));
+        assert!(samples.is_empty());
+        assert_eq!(failure.unwrap_err().to_string(), "transport error: gone");
     }
 
     #[test]

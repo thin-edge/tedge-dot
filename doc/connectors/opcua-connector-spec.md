@@ -291,6 +291,16 @@ to 65535 elements, where async-opcua's default limit of 1000 used to refuse such
 - C: only the refused points are polled. The subscription is dropped only when the server
   accepted no item at all.
 
+**Many polled points.** Both builds read a device's due points in Read requests of at most 500
+nodes, or the server's `OperationLimits.MaxNodesPerRead` when that is lower. The limit is read
+once per session; a limit below 500 is logged as an `info` line naming the device. A pass over
+30,000 points thus takes 60 requests. A request the server refuses makes only its own points
+bad. A request that times out or finds the connection gone ends the pass: no further request
+is sent, and the link goes down at once. The points read by earlier requests of the pass are
+published. Of the others, the C build publishes the first as bad, with the status as its error;
+the Rust build publishes all of them as bad when the failed request was the pass's first, and
+none otherwise.
+
 The C build buffers pushed values between two runtime ticks in a queue per device. The queue
 starts with room for twice the device's subscribed points, so every point's initial value
 fits. It doubles when a burst fills it, up to 65536 entries or four times the points, whichever

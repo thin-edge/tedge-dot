@@ -6,6 +6,7 @@
 #   opc5  Burst, queue_size = 1: only the latest value per publish arrives
 #   opc6  5000 subscribed points (Bulk0 .. Bulk4999), appended by entrypoint.sh: subscribed in
 #         batches of 500 monitored items, and every start value arrives
+#   opc7  1200 polled points (Bulk0 .. Bulk1199), appended by entrypoint.sh: read in blocks of 500
 
 [connector]
 protocol      = "opcua"

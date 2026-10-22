@@ -319,6 +319,12 @@ add_test(NAME report-vectors
          COMMAND tedge-dot-report
                  ${CMAKE_CURRENT_SOURCE_DIR}/../../doc/contract/test-vectors/report/vectors.json)
 
+# Polling through a module's read_points: calls of at most TDOT_READ_POINTS_MAX,
+# per-point samples, and a lost link that ends the pass as read_point's does.
+add_executable(tedge-dot-poll-batch tests/poll_batch.c)
+target_link_libraries(tedge-dot-poll-batch PRIVATE tedge_dot_sdk)
+add_test(NAME poll-batch COMMAND tedge-dot-poll-batch)
+
 # Value mapping (contract §4.3): the shared vectors the Rust SDK's map.rs runs too.
 add_executable(tedge-dot-map tests/map.c)
 target_link_libraries(tedge-dot-map PRIVATE tedge_dot_sdk)
@@ -376,6 +382,11 @@ if(TDOT_OPCUA)
   add_executable(tedge-dot-opcua-namespaces tests/opcua_namespaces.c)
   target_link_libraries(tedge-dot-opcua-namespaces PRIVATE tedge_dot_sdk)
   add_test(NAME opcua-namespaces COMMAND tedge-dot-opcua-namespaces)
+
+  add_executable(tedge-dot-opcua-blocks tests/opcua_blocks.c)
+  target_include_directories(tedge-dot-opcua-blocks PRIVATE connectors/opcua)
+  target_link_libraries(tedge-dot-opcua-blocks PRIVATE tedge_dot_sdk ${_tdot_ua_lib})
+  add_test(NAME opcua-blocks COMMAND tedge-dot-opcua-blocks)
 
   add_executable(tedge-dot-opcua-pki tests/opcua_pki.c)
   target_include_directories(tedge-dot-opcua-pki PRIVATE connectors/opcua)
