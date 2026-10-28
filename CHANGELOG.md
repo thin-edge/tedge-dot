@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.0.18](https://github.com/thin-edge/tedge-dot/compare/0.0.17...0.0.18) (2026-10-28)
+
+
+### Features
+
+* **docs:** documentation site (Astro + Starlight) on GitHub Pages ([#77](https://github.com/thin-edge/tedge-dot/issues/77)) ([1452296](https://github.com/thin-edge/tedge-dot/commit/145229611a970320db8005b52becd1b3ef1fe8dd))
+
+
+### Bug Fixes
+
+* **opcua:** a link lost mid-pass takes the link down at once (Rust) ([24f9c2a](https://github.com/thin-edge/tedge-dot/commit/24f9c2added4dc7e74c0dd6dd4c421bb89a59eac)), closes [#97](https://github.com/thin-edge/tedge-dot/issues/97)
+* **opcua:** check the retry interval before scanning every point (C) ([8a471e9](https://github.com/thin-edge/tedge-dot/commit/8a471e9112728faf6ad9ef2f98fb30c25e0b8e60))
+* **opcua:** check the retry interval before scanning every point (C) ([fa0e018](https://github.com/thin-edge/tedge-dot/commit/fa0e018f0b28dd1fc8e0acfb08ee22de7d3a3967))
+* **sdk:** resolve a point library in linear time (C and Rust) ([#87](https://github.com/thin-edge/tedge-dot/issues/87)) ([4843b25](https://github.com/thin-edge/tedge-dot/commit/4843b2595a0ccafc4d33c919a9e90461886cb100))
+* **sdk:** stamp the stall heartbeat after every read (C) ([93dd44f](https://github.com/thin-edge/tedge-dot/commit/93dd44f728ea303ab8e949d29b343cdf263c0463)), closes [#97](https://github.com/thin-edge/tedge-dot/issues/97)
+
+
+### Performance
+
+* **opcua:** poll in blocks of at most MaxNodesPerRead (C and Rust) ([9c1254d](https://github.com/thin-edge/tedge-dot/commit/9c1254d267869d02c21e74bf8a74ddaa11d239ef))
+* **opcua:** poll in blocks of at most MaxNodesPerRead (C) ([a0add82](https://github.com/thin-edge/tedge-dot/commit/a0add82256590bc02eed7989235dd1471c3aa568)), closes [#97](https://github.com/thin-edge/tedge-dot/issues/97)
+* **opcua:** poll in blocks of at most MaxNodesPerRead (Rust) ([8858e5f](https://github.com/thin-edge/tedge-dot/commit/8858e5f2543710cb54456b7e35d4b3b56b0a776a)), closes [#97](https://github.com/thin-edge/tedge-dot/issues/97)
+
 ## [0.0.17](https://github.com/thin-edge/tedge-dot/compare/0.0.16...0.0.17) (2026-10-13)
 
 
