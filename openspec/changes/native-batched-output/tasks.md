@@ -50,7 +50,7 @@
 
 ## 8. End-to-end and docs
 
-- [ ] 8.1 e2e: one measurement-mode device per protocol suite, run with `IMPL=rust` and `IMPL=c`, checking measurement topics, series names, units metadata and that alarm points still raise alarms
+- [x] 8.1 e2e: one measurement-mode device per protocol suite, run with `IMPL=rust` and `IMPL=c`, checking measurement topics, series names, units metadata and that alarm points still raise alarms
 - [x] 8.2 Write the user doc for measurement output: switching modes, naming, the three policies with their timestamp and loss trade-offs, `sample = true` for third-party consumers, and the series flows
 - [x] 8.3 Add a release highlight in `changes/native-batched-output.md`
 
