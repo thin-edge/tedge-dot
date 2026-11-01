@@ -43,7 +43,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install thin-edge.io, mosquitto and the C toolchain
         run: |
-          curl -fsSL https://thin-edge.io/install.sh | sh -s
+          # The main channel: the mapper must convert measurements offline (no c8y), which the
+          # stack check was measured against with 2.0.2; 2.0.1 never converted within 60 s.
+          curl -fsSL https://thin-edge.io/install.sh | sh -s -- --channel main
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config libudev-dev \
             libmodbus-dev libmosquitto-dev libcjson-dev mosquitto

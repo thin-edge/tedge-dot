@@ -2,7 +2,7 @@
 # Check that no release build can include the synthetic `bench` module (the performance
 # harness's, bench/ and doc/performance.md):
 #
-# - no Rust feature list in dist/config.yaml or a Dockerfile names `bench`, and `bench` is
+# - no Rust feature list in .goreleaser.yaml or a Dockerfile names `bench`, and `bench` is
 #   not a default feature;
 # - impl/c/cross/build.sh, the C release configure step, passes -DTDOT_BENCH=OFF after its
 #   passthrough arguments, and nothing turns TDOT_BENCH on in it or in a Dockerfile.
@@ -20,7 +20,7 @@ def feature_lists(text):
 
 dockerfiles = [f for f in subprocess.run(["git", "ls-files"], capture_output=True, text=True,
                check=True).stdout.split() if f.rsplit("/", 1)[-1].startswith("Dockerfile")]
-for path in ["dist/config.yaml", *dockerfiles]:
+for path in [".goreleaser.yaml", *dockerfiles]:
     text = open(path).read()
     if any("bench" in features for features in feature_lists(text)):
         errors.append(f"{path}: a release feature list names `bench`")

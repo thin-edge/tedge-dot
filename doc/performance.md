@@ -16,7 +16,9 @@ just bench-baseline                 # every scenario three times per implementat
 ```
 
 The host needs `tedge`, `tedge-mapper` and `mosquitto` on the `PATH`, plus the C build's
-libraries (see `impl/c/README.md`). Nothing runs as root, and nothing touches the host's own
+libraries (see `impl/c/README.md`). Use thin-edge.io 2.0.2 or later; until it is released, install
+it from the main channel (`install.sh --channel main`). In CI the 2.0.1 mapper did not convert
+measurements on the offline stack within 60 s, so `stack up` failed its check. Nothing runs as root, and nothing touches the host's own
 broker or mapper.
 
 ## How it works
