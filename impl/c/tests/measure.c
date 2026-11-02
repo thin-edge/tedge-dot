@@ -172,7 +172,7 @@ static void run_case(const cJSON *c) {
             tdot_batcher_due(b, now_ns, wall0 + (double)at, collect, &out);
         } else if ((r = cJSON_GetObjectItem(step, "stale"))) {
             tdot_batcher_set_stale(b, device_index(cfg, cJSON_GetObjectItem(r, "device")->valuestring),
-                                   cJSON_IsTrue(cJSON_GetObjectItem(r, "stale")));
+                                   cJSON_IsTrue(cJSON_GetObjectItem(r, "stale")), now_ns);
         } else {
             CHECK(0, "%s: unknown step", name);
         }
@@ -263,6 +263,25 @@ static void split_frame_layer_parts_share_its_time(void) {
     cJSON_Delete(c);
 }
 
+/* The significant digits of a number's text, without sign, point, exponent,
+ * leading or trailing zeros. */
+static void digits_of(const char *text, char *out, size_t len) {
+    size_t n = 0;
+    for (const char *p = text; *p && *p != 'e' && n + 1 < len; p++)
+        if (*p >= '0' && *p <= '9' && (n > 0 || *p != '0'))
+            out[n++] = *p;
+    while (n > 1 && out[n - 1] == '0')
+        n--;
+    out[n] = '\0';
+}
+
+static bool same_digits(const char *a, const char *b) {
+    char x[40], y[40];
+    digits_of(a, x, sizeof x);
+    digits_of(b, y, sizeof y);
+    return strcmp(x, y) == 0;
+}
+
 /* Numbers as the Rust build prints them (ryu), so the size estimate agrees. */
 static void numbers(void) {
     static const struct {
@@ -279,6 +298,40 @@ static void numbers(void) {
         tdot_format_number(cases[i].n, buf, sizeof buf);
         CHECK(strcmp(buf, cases[i].text) == 0, "number %.17g: %s, want %s", cases[i].n, buf,
               cases[i].text);
+    }
+    /* The search for the shortest precision gives the digits a linear search
+     * gives: random doubles across the exponent range, means of the kind an
+     * aggregate publishes, and powers of two. */
+    unsigned long long x = 0x9e3779b97f4a7c15ULL;
+    int differ = 0;
+    for (int i = 0; i < 200000 && differ < 5; i++) {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        double d;
+        if (i % 3 == 0) {
+            memcpy(&d, &x, sizeof d);
+            if (!isfinite(d))
+                continue;
+        } else if (i % 3 == 1) {
+            d = (double)(x % 1000000) / 7.0 * (i % 2 ? 1e-3 : 1e3);
+        } else {
+            d = ldexp(1.0, (int)(x % 2000) - 1000) * (x & 1 ? -1 : 1);
+        }
+        char want[40];
+        for (int prec = 0; prec <= 16; prec++) {
+            snprintf(want, sizeof want, "%.*e", prec, d);
+            if (strtod(want, NULL) == d)
+                break;
+        }
+        /* The formatter's significant digits are the linear search's. */
+        char got[64];
+        tdot_format_number(d, got, sizeof got);
+        if (!same_digits(got, want) || strtod(got, NULL) != d) {
+            printf("FAIL number %.17g: %s, linear search %s\n", d, got, want);
+            differ++;
+            failures++;
+        }
     }
 }
 

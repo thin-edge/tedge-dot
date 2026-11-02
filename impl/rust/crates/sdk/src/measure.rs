@@ -14,7 +14,9 @@
 //!   1, and so on. A layer is stamped with its first reading's time, moved to 1 ms after the
 //!   previous layer's time when it is not later, so a point's values stay in time order.
 //! - `"sample"`: every `every`, one series per slot holding a good value, stamped with the sample
-//!   time. Stale slots are left out; event points are published as under `"time"`.
+//!   time. Stale slots are left out; event points are published as under `"time"`. With
+//!   `aggregate`, the series are the time-weighted mean, the minimum, the maximum or the last of
+//!   the values the point held during the period, over its good time.
 //!
 //! It is pure — no clock, no MQTT — so the runtime drives it with the real clocks and the shared
 //! test vectors (`doc/contract/test-vectors/measurements/`) drive it here and in the C SDK
@@ -31,7 +33,9 @@ use time::OffsetDateTime;
 /// The values `[connector] output` may take.
 pub const OUTPUTS: &[&str] = &["samples", "measurements"];
 /// The keys a `batch` table may carry.
-pub const BATCH_KEYS: &[&str] = &["group_by", "window", "every"];
+pub const BATCH_KEYS: &[&str] = &["group_by", "window", "every", "aggregate"];
+/// The values `batch.aggregate` may name.
+pub const AGGREGATES: &[&str] = &["mean", "min", "max", "last"];
 /// The keys of the `[connector] measurement` table.
 pub const MEASUREMENT_KEYS: &[&str] = &["group", "series", "point_separator", "include_boolean"];
 
@@ -107,6 +111,63 @@ impl GroupBy {
     }
 }
 
+/// What a `"sample"` point publishes for each period (`batch.aggregate`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Aggregate {
+    Mean,
+    Min,
+    Max,
+    Last,
+}
+
+impl Aggregate {
+    fn of(name: &str) -> Option<Self> {
+        match name {
+            "mean" => Some(Aggregate::Mean),
+            "min" => Some(Aggregate::Min),
+            "max" => Some(Aggregate::Max),
+            "last" => Some(Aggregate::Last),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Aggregate::Mean => "mean",
+            Aggregate::Min => "min",
+            Aggregate::Max => "max",
+            Aggregate::Last => "last",
+        }
+    }
+}
+
+/// The aggregates of a merged `batch` table and whether they are suffixed to the series name:
+/// a string keeps the name, a list suffixes `_<aggregate>`. `None` without `aggregate`.
+pub fn aggregates_of(table: &serde_json::Map<String, serde_json::Value>) -> Option<(Vec<Aggregate>, bool)> {
+    match table.get("aggregate")? {
+        serde_json::Value::String(a) => Some((vec![Aggregate::of(a)?], false)),
+        serde_json::Value::Array(list) => {
+            let aggs: Option<Vec<Aggregate>> = list.iter().map(|v| v.as_str().and_then(Aggregate::of)).collect();
+            Some((aggs?, true))
+        }
+        _ => None,
+    }
+}
+
+/// Merge one level's `batch` table over `base`. A table that sets `aggregate` without
+/// `group_by` chooses `"sample"` (§5.5), at its own level, before the merge.
+pub fn merge_batch_level(base: &mut serde_json::Map<String, serde_json::Value>, level: Option<&serde_json::Value>) {
+    let Some(serde_json::Value::Object(level)) = level else {
+        return;
+    };
+    for (k, v) in level {
+        base.insert(k.clone(), v.clone());
+    }
+    if level.contains_key("aggregate") && !level.contains_key("group_by") {
+        base.insert("group_by".into(), serde_json::Value::String("sample".into()));
+    }
+}
+
 /// Validate the values of one `batch` table as written — connector, device or point, inline or
 /// in a library. Its keys are checked with the other contract tables (`library.rs`); the caller
 /// prefixes the place. The C loader (impl/c/sdk/src/config.c `check_batch_values`) refuses the
@@ -120,8 +181,8 @@ pub fn check_values(table: &toml::Value) -> Result<(), String> {
             Some(g @ ("time" | "frame" | "sample")) => g,
             _ => return Err("batch.group_by must be \"time\", \"frame\" or \"sample\"".to_string()),
         };
-        // A table that chooses its policy may only set that policy's duration.
-        for (key, policy) in [("window", "frame"), ("every", "sample")] {
+        // A table that chooses its policy may only set that policy's keys.
+        for (key, policy) in [("window", "frame"), ("every", "sample"), ("aggregate", "sample")] {
             if map.contains_key(key) && group_by != policy {
                 return Err(format!("batch.{key} does not apply to group_by = \"{group_by}\""));
             }
@@ -135,7 +196,72 @@ pub fn check_values(table: &toml::Value) -> Result<(), String> {
         },
     };
     within("window", WINDOW_MIN, WINDOW_MAX, "1ms to 60s")?;
-    within("every", EVERY_MIN, EVERY_MAX, "100ms to 1h")
+    within("every", EVERY_MIN, EVERY_MAX, "100ms to 1h")?;
+    if let Some(v) = map.get("aggregate") {
+        let names: Option<Vec<&str>> = match v {
+            toml::Value::String(a) => Some(vec![a.as_str()]),
+            toml::Value::Array(list) if !list.is_empty() => list.iter().map(|v| v.as_str()).collect(),
+            _ => None,
+        };
+        let valid = names.is_some_and(|names| {
+            names.iter().all(|n| AGGREGATES.contains(n))
+                && names.iter().enumerate().all(|(i, n)| !names[..i].contains(n))
+        });
+        if !valid {
+            return Err("batch.aggregate must be \"mean\", \"min\", \"max\" or \"last\", or a list of them without repeats"
+                .to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Check what only the resolved configuration decides (§5.5), after each table was checked: an
+/// aggregated point has no `report` policy, and in measurement output no series of an aggregated
+/// point has the name of another series of its device and group. Messages name the place.
+pub fn check_resolved(config: &ConnectorConfig) -> Result<(), String> {
+    let naming = Naming::of(config);
+    let protocol = config.connector.protocol.as_str();
+    for device in &config.devices {
+        let mut names: HashMap<(String, String), (String, bool)> = HashMap::new();
+        for point in &device.points {
+            let table = config.batch_table(device, point);
+            let aggregated = match GroupBy::from_table(&table) {
+                Ok(GroupBy::Sample(_)) if !every_event(point) => aggregates_of(&table),
+                _ => None,
+            };
+            if aggregated.is_some()
+                && !crate::report::ReportPolicy::from_table(&config.report_table(device, point)).is_passthrough()
+            {
+                return Err(format!(
+                    "device '{}': point '{}': batch.aggregate cannot be combined with report: an aggregate uses every reading",
+                    device.name, point.id
+                ));
+            }
+            if Output::of(config) != Output::Measurements || !measurable(point, device) {
+                continue;
+            }
+            let (group, series) = naming.resolve(protocol, point);
+            let series: Vec<String> = match &aggregated {
+                Some((aggs, true)) => aggs.iter().map(|a| format!("{series}_{}", a.name())).collect(),
+                _ => vec![series],
+            };
+            for name in series {
+                let key = (group.clone(), name.clone());
+                let mine = aggregated.is_some();
+                if let Some((other, theirs)) = names.get(&key) {
+                    if mine || *theirs {
+                        return Err(format!(
+                            "device '{}': points '{other}' and '{}' both publish the series '{name}' in the group '{group}'",
+                            device.name, point.id
+                        ));
+                    }
+                    continue;
+                }
+                names.insert(key, (point.id.clone(), mine));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate the `[connector] measurement` table's values. The caller prefixes the place.
@@ -290,6 +416,8 @@ struct PointPlan {
     measurable: bool,
     sample: bool,
     group_by: GroupBy,
+    /// Under `"sample"` with `aggregate`: each aggregate with its series key. Empty otherwise.
+    aggregates: Vec<(Aggregate, String)>,
 }
 
 #[derive(Debug)]
@@ -318,9 +446,53 @@ struct Open {
     points: Vec<usize>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+/// A point's slot under `"sample"`: the value it holds, and for an aggregated point what the
+/// period held so far, weighted by the device clock.
+#[derive(Clone, Copy, Debug)]
 struct Slot {
+    /// The good value the point holds, if any.
     value: Option<f64>,
+    /// Since when it holds `value`, or since when the period's sums were last closed.
+    since: Instant,
+    /// The sum of each held value times the nanoseconds it held, this period.
+    sum: f64,
+    /// The good nanoseconds this period.
+    good_ns: f64,
+    /// The smallest and largest value held this period; `None` when none was.
+    range: Option<(f64, f64)>,
+}
+
+impl Slot {
+    fn new(now: Instant) -> Self {
+        Slot { value: None, since: now, sum: 0.0, good_ns: 0.0, range: None }
+    }
+
+    /// Add the held value's time up to `now` to the period's sums.
+    fn close(&mut self, now: Instant) {
+        if let Some(v) = self.value {
+            let ns = now.saturating_duration_since(self.since).as_nanos() as f64;
+            self.sum += v * ns;
+            self.good_ns += ns;
+        }
+        self.since = now;
+    }
+
+    /// Hold `value` from `now` on (`None`: nothing good is held).
+    fn hold(&mut self, value: Option<f64>, now: Instant) {
+        self.close(now);
+        self.value = value;
+        if let Some(v) = value {
+            self.range = Some(self.range.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+        }
+    }
+
+    /// Start the next period with the value held now.
+    fn restart(&mut self, now: Instant) {
+        self.since = now;
+        self.sum = 0.0;
+        self.good_ns = 0.0;
+        self.range = self.value.map(|v| (v, v));
+    }
 }
 
 #[derive(Debug)]
@@ -397,15 +569,28 @@ impl Batcher {
                     }
                 };
                 let measurable = measurable(point, device);
-                if let Some(unit) = point.unit.as_deref().filter(|u| measurable && !u.is_empty()) {
-                    units[topic].insert(format!("{group}.{series}"), unit.to_string());
-                }
                 // Validated by the loader; a config built without it falls back to `time`.
-                let mut group_by =
-                    GroupBy::from_table(&config.batch_table(device, point)).unwrap_or(GroupBy::Time);
+                let table = config.batch_table(device, point);
+                let mut group_by = GroupBy::from_table(&table).unwrap_or(GroupBy::Time);
                 if matches!(group_by, GroupBy::Sample(_)) && every_event(point) {
                     group_by = GroupBy::Time;
                 }
+                let names: Vec<(Option<Aggregate>, String)> = match aggregates_of(&table) {
+                    Some((aggs, suffixed)) if matches!(group_by, GroupBy::Sample(_)) => aggs
+                        .into_iter()
+                        .map(|a| (Some(a), if suffixed { format!("{series}_{}", a.name()) } else { series.clone() }))
+                        .collect(),
+                    _ => vec![(None, series.clone())],
+                };
+                if let Some(unit) = point.unit.as_deref().filter(|u| measurable && !u.is_empty()) {
+                    for (_, name) in &names {
+                        units[topic].insert(format!("{group}.{name}"), unit.to_string());
+                    }
+                }
+                let aggregates: Vec<(Aggregate, String)> = names
+                    .into_iter()
+                    .filter_map(|(a, name)| a.map(|a| (a, format!("{}:", quoted(&name)))))
+                    .collect();
                 if let GroupBy::Sample(every) = group_by {
                     if !samplers.iter().any(|(e, _)| *e == every) {
                         samplers.push((every, now + every));
@@ -418,6 +603,7 @@ impl Batcher {
                     measurable,
                     sample: publishes_sample(point),
                     group_by,
+                    aggregates,
                 });
             }
             for (topic, units) in topics.iter_mut().zip(units) {
@@ -438,7 +624,7 @@ impl Batcher {
                 depth: vec![0; n],
                 open: HashMap::new(),
                 last_layer_ms: HashMap::new(),
-                slots: vec![Slot::default(); n],
+                slots: vec![Slot::new(now); n],
                 samplers,
                 stale: false,
             });
@@ -474,13 +660,15 @@ impl Batcher {
         let routing_sample = plan.sample;
         let value = self.series_value(plan, sample);
         let group_by = plan.group_by;
+        let aggregated = !plan.aggregates.is_empty();
         let Some(value) = value else {
             if sample.quality != Quality::Good {
-                self.devices[d].slots[k].value = None;
+                self.devices[d].slots[k].hold(None, now);
             }
             return Routing { sample: routing_sample, measured: false };
         };
         match group_by {
+            GroupBy::Sample(_) if aggregated => self.devices[d].slots[k].hold(Some(value), now),
             GroupBy::Sample(_) => self.devices[d].slots[k].value = Some(value),
             GroupBy::Time | GroupBy::Frame(_) => self.add(d, k, sample.ts, value, now, out),
         }
@@ -639,7 +827,7 @@ impl Batcher {
                 if next > now {
                     continue;
                 }
-                self.sample(d, every, wall, out);
+                self.sample(d, every, now, wall, out);
                 // On the period's grid; a sampler that fell a whole period behind restarts.
                 let mut next = next + every;
                 if next <= now {
@@ -650,36 +838,58 @@ impl Batcher {
         }
     }
 
-    /// Publish one sample of device `d`'s slots sampled every `every`.
-    fn sample(&mut self, d: usize, every: Duration, wall: OffsetDateTime, out: &mut Vec<Message>) {
+    /// Publish one sample of device `d`'s slots sampled every `every`. A stale device's plain
+    /// slots are left out; an aggregated slot publishes the good time it had before.
+    fn sample(&mut self, d: usize, every: Duration, now: Instant, wall: OffsetDateTime, out: &mut Vec<Message>) {
         let dev = &mut self.devices[d];
-        if dev.stale {
-            return;
-        }
         let mut bodies: Vec<(String, usize)> = vec![(String::new(), 0); dev.topics.len()];
+        let mut series: Vec<(&str, f64)> = Vec::new();
         for (k, plan) in dev.points.iter().enumerate() {
             if plan.group_by != GroupBy::Sample(every) {
                 continue;
             }
-            let Some(value) = dev.slots[k].value else {
-                continue;
-            };
-            let mut piece = plan.series_key.clone();
-            push_number(&mut piece, value);
-            let topic = &mut dev.topics[plan.topic];
-            let (body_text, n) = &mut bodies[plan.topic];
-            let size = FRAME_BYTES + topic.group_json.len() + body_text.len() + 1 + piece.len() + SERIES_OVERHEAD * (*n + 1);
-            if *n > 0 && size > SIZE_BUDGET {
-                settle_units(topic, &mut self.published_units, out);
-                out.push(Message { topic: topic.topic.clone(), payload: body(&topic.group_json, wall, body_text), retain: false });
-                body_text.clear();
-                *n = 0;
+            series.clear();
+            let slot = &mut dev.slots[k];
+            if plan.aggregates.is_empty() {
+                match slot.value {
+                    Some(value) if !dev.stale => series.push((&plan.series_key, value)),
+                    _ => continue,
+                }
+            } else {
+                slot.close(now);
+                if slot.good_ns > 0.0 {
+                    for (aggregate, key) in &plan.aggregates {
+                        let value = match aggregate {
+                            Aggregate::Mean => Some(slot.sum / slot.good_ns),
+                            Aggregate::Min => slot.range.map(|r| r.0),
+                            Aggregate::Max => slot.range.map(|r| r.1),
+                            Aggregate::Last => slot.value,
+                        };
+                        if let Some(value) = value {
+                            series.push((key, value));
+                        }
+                    }
+                }
+                slot.restart(now);
             }
-            if !body_text.is_empty() {
-                body_text.push(',');
+            for &(key, value) in &series {
+                let mut piece = key.to_string();
+                push_number(&mut piece, value);
+                let topic = &mut dev.topics[plan.topic];
+                let (body_text, n) = &mut bodies[plan.topic];
+                let size = FRAME_BYTES + topic.group_json.len() + body_text.len() + 1 + piece.len() + SERIES_OVERHEAD * (*n + 1);
+                if *n > 0 && size > SIZE_BUDGET {
+                    settle_units(topic, &mut self.published_units, out);
+                    out.push(Message { topic: topic.topic.clone(), payload: body(&topic.group_json, wall, body_text), retain: false });
+                    body_text.clear();
+                    *n = 0;
+                }
+                if !body_text.is_empty() {
+                    body_text.push(',');
+                }
+                body_text.push_str(&piece);
+                *n += 1;
             }
-            body_text.push_str(&piece);
-            *n += 1;
         }
         for (t, (body_text, n)) in bodies.into_iter().enumerate() {
             if n == 0 {
@@ -707,9 +917,19 @@ impl Batcher {
 
     /// Mark a device's slots stale (its link is down or its push delivery failed its check), or
     /// healthy again. A stale device's slots are left out of samples.
-    pub fn set_stale(&mut self, device: &str, stale: bool) {
-        if let Some(d) = self.by_name.get(device) {
-            self.devices[*d].stale = stale;
+    /// `now` is the device clock: an aggregated slot stops counting good time when it goes
+    /// stale, and counts again from its next good reading.
+    pub fn set_stale(&mut self, device: &str, stale: bool, now: Instant) {
+        if let Some(&d) = self.by_name.get(device) {
+            let dev = &mut self.devices[d];
+            if stale && !dev.stale {
+                for (plan, slot) in dev.points.iter().zip(dev.slots.iter_mut()) {
+                    if !plan.aggregates.is_empty() {
+                        slot.hold(None, now);
+                    }
+                }
+            }
+            dev.stale = stale;
         }
     }
 }
@@ -758,8 +978,8 @@ pub fn describe(config: &ConnectorConfig) -> Option<serde_json::Value> {
         .iter()
         .map(|device| {
             let mut batch = serde_json::Map::new();
-            crate::report::merge_into(&mut batch, config.connector.batch.as_ref());
-            crate::report::merge_into(&mut batch, device.batch.as_ref());
+            merge_batch_level(&mut batch, config.connector.batch.as_ref());
+            merge_batch_level(&mut batch, device.batch.as_ref());
             batch
                 .entry("group_by")
                 .or_insert_with(|| serde_json::Value::String("time".into()));
@@ -909,7 +1129,7 @@ mod tests {
                     let wall = wall0 + (now - base);
                     batcher.due(now, wall, &mut out);
                 } else if let Some(st) = step.get("stale") {
-                    batcher.set_stale(st["device"].as_str().unwrap(), st["stale"].as_bool().unwrap());
+                    batcher.set_stale(st["device"].as_str().unwrap(), st["stale"].as_bool().unwrap(), now);
                 } else {
                     panic!("{name}: unknown step {step}");
                 }
@@ -982,13 +1202,19 @@ mod tests {
     }
 
     /// Invalid point `batch` and `sample` values and the end of the message each gets.
-    const POINT_CASES: [(&str, &str); 6] = [
+    const POINT_CASES: [(&str, &str); 12] = [
         ("batch = { group_by = \"time\", window = \"100ms\" }", "point 'p': batch.window does not apply to group_by = \"time\""),
         ("batch = { group_by = \"frame\", window = \"2m\" }", "point 'p': batch.window must be a duration from 1ms to 60s"),
         ("batch = { group_by = \"sample\", every = \"50ms\" }", "point 'p': batch.every must be a duration from 100ms to 1h"),
         ("batch = { group_by = \"bucket\" }", "point 'p': batch.group_by must be \"time\", \"frame\" or \"sample\""),
         ("batch = { windw = \"1s\" }", "unknown key 'windw' in the batch of point 'p' (did you mean 'window'?)"),
         ("sample = \"yes\"", "point 'p': sample must be true or false"),
+        ("batch = { group_by = \"frame\", window = \"100ms\", aggregate = \"mean\" }", "point 'p': batch.aggregate does not apply to group_by = \"frame\""),
+        ("batch = { aggregate = \"median\", every = \"1s\" }", "point 'p': batch.aggregate must be \"mean\", \"min\", \"max\" or \"last\", or a list of them without repeats"),
+        ("batch = { aggregate = [\"mean\", \"mean\"], every = \"1s\" }", "point 'p': batch.aggregate must be \"mean\", \"min\", \"max\" or \"last\", or a list of them without repeats"),
+        ("batch = { aggregate = [], every = \"1s\" }", "point 'p': batch.aggregate must be \"mean\", \"min\", \"max\" or \"last\", or a list of them without repeats"),
+        ("batch = { aggregate = \"mean\" }", "device 'plc': point 'p': batch.every is required with group_by = \"sample\""),
+        ("batch = { aggregate = \"mean\", every = \"1s\" }\nreport = { deadband = 0.5 }", "device 'plc': point 'p': batch.aggregate cannot be combined with report: an aggregate uses every reading"),
     ];
 
     #[test]
@@ -1022,11 +1248,35 @@ mod tests {
         }
         assert_eq!(Output::of(&load("").unwrap()), Output::Samples);
         assert_eq!(Output::of(&load("output = \"measurements\"").unwrap()), Output::Measurements);
+        // A suffixed series may not take another point's name (the same case as tests/config.c).
+        let two = |output: &str| {
+            crate::library::resolve(
+                &format!(
+                    "[connector]\nprotocol = \"opcua\"\n{output}\n[[device]]\nname = \"plc\"\nprotocol_address = {{}}\n\
+                     [[device.point]]\nid = \"p\"\naddress = {{}}\nbatch = {{ aggregate = [\"mean\", \"max\"], every = \"1s\" }}\n\
+                     [[device.point]]\nid = \"p_max\"\naddress = {{}}\n"
+                ),
+                std::path::Path::new("."),
+            )
+        };
+        assert_eq!(
+            two("output = \"measurements\"").unwrap_err(),
+            "device 'plc': points 'p' and 'p_max' both publish the series 'p_max' in the group 'opcua'"
+        );
+        assert!(two("").is_ok(), "samples output publishes no series");
     }
 
     #[test]
     fn the_descriptor_lists_each_device_s_output_and_batch() {
         assert_eq!(describe(&load("").unwrap()), None);
+        // `aggregate` without `group_by` chooses "sample" (the same case as tests/config.c).
+        assert_eq!(
+            describe(&load("output = \"measurements\"\nbatch = { aggregate = [\"mean\", \"max\"], every = \"1s\" }").unwrap()),
+            Some(serde_json::json!([
+                { "device": "plc", "output": "measurements",
+                  "batch": { "group_by": "sample", "every": "1s", "aggregate": ["mean", "max"] } }
+            ]))
+        );
         assert_eq!(
             describe(&load("output = \"measurements\"\nbatch = { group_by = \"frame\", window = \"100ms\" }").unwrap()),
             Some(serde_json::json!([

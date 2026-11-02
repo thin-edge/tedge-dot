@@ -3176,6 +3176,515 @@
    ]
   },
   {
+   "name": "aggregate: the time-weighted mean of change-only data; aggregate without group_by means sample",
+   "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { aggregate = \"mean\", every = \"1s\" }\n[[device.point]]\nid = \"a\"\ndatatype = \"float64\"\naddress = {}\n",
+   "steps": [
+    {
+     "at": 0,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 10,
+      "ts": "2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "at": 900,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 20,
+      "ts": "2026-01-01T00:00:00.900Z"
+     }
+    },
+    {
+     "at": 1000,
+     "due": true
+    },
+    {
+     "at": 2000,
+     "due": true
+    }
+   ],
+   "messages": [
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:01.000Z",
+      "opcua": {
+       "a": 11
+      }
+     }
+    },
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:02.000Z",
+      "opcua": {
+       "a": 20
+      }
+     }
+    }
+   ],
+   "routing": [
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    }
+   ]
+  },
+  {
+   "name": "aggregate: the mean of evenly polled readings",
+   "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { group_by = \"sample\", every = \"1s\", aggregate = \"mean\" }\n[[device.point]]\nid = \"a\"\ndatatype = \"float64\"\naddress = {}\n",
+   "steps": [
+    {
+     "at": 0,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 1,
+      "ts": "2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "at": 100,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 2,
+      "ts": "2026-01-01T00:00:00.100Z"
+     }
+    },
+    {
+     "at": 200,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 3,
+      "ts": "2026-01-01T00:00:00.200Z"
+     }
+    },
+    {
+     "at": 300,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 4,
+      "ts": "2026-01-01T00:00:00.300Z"
+     }
+    },
+    {
+     "at": 400,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 5,
+      "ts": "2026-01-01T00:00:00.400Z"
+     }
+    },
+    {
+     "at": 500,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 6,
+      "ts": "2026-01-01T00:00:00.500Z"
+     }
+    },
+    {
+     "at": 600,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 7,
+      "ts": "2026-01-01T00:00:00.600Z"
+     }
+    },
+    {
+     "at": 700,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 8,
+      "ts": "2026-01-01T00:00:00.700Z"
+     }
+    },
+    {
+     "at": 800,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 9,
+      "ts": "2026-01-01T00:00:00.800Z"
+     }
+    },
+    {
+     "at": 900,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 10,
+      "ts": "2026-01-01T00:00:00.900Z"
+     }
+    },
+    {
+     "at": 1000,
+     "due": true
+    }
+   ],
+   "messages": [
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:01.000Z",
+      "opcua": {
+       "a": 5.5
+      }
+     }
+    }
+   ],
+   "routing": [
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    }
+   ]
+  },
+  {
+   "name": "aggregate: a list publishes <series>_<aggregate> with the unit; min and max include the value held at the start",
+   "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { group_by = \"sample\", every = \"1s\", aggregate = [\"min\", \"max\", \"last\"] }\n[[device.point]]\nid = \"a\"\ndatatype = \"float64\"\nunit = \"°C\"\naddress = {}\n",
+   "steps": [
+    {
+     "at": 0,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 5,
+      "ts": "2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "at": 1000,
+     "due": true
+    },
+    {
+     "at": 1200,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 7,
+      "ts": "2026-01-01T00:00:01.200Z"
+     }
+    },
+    {
+     "at": 1500,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 6,
+      "ts": "2026-01-01T00:00:01.500Z"
+     }
+    },
+    {
+     "at": 2000,
+     "due": true
+    }
+   ],
+   "messages": [
+    {
+     "topic": "te/device/plc1///m/opcua/meta",
+     "retain": true,
+     "payload": {
+      "opcua.a_last": {
+       "unit": "°C"
+      },
+      "opcua.a_max": {
+       "unit": "°C"
+      },
+      "opcua.a_min": {
+       "unit": "°C"
+      }
+     }
+    },
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:01.000Z",
+      "opcua": {
+       "a_min": 5,
+       "a_max": 5,
+       "a_last": 5
+      }
+     }
+    },
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:02.000Z",
+      "opcua": {
+       "a_min": 5,
+       "a_max": 7,
+       "a_last": 6
+      }
+     }
+    }
+   ],
+   "routing": [
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    }
+   ]
+  },
+  {
+   "name": "aggregate: the mean of a boolean is the fraction of the period it was true",
+   "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { aggregate = \"mean\", every = \"1s\" }\n[[device.point]]\nid = \"a\"\ndatatype = \"bool\"\naddress = {}\n",
+   "steps": [
+    {
+     "at": 0,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": false,
+      "ts": "2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "at": 500,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": true,
+      "ts": "2026-01-01T00:00:00.500Z"
+     }
+    },
+    {
+     "at": 750,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": false,
+      "ts": "2026-01-01T00:00:00.750Z"
+     }
+    },
+    {
+     "at": 1000,
+     "due": true
+    }
+   ],
+   "messages": [
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:01.000Z",
+      "opcua": {
+       "a": 0.25
+      }
+     }
+    }
+   ],
+   "routing": [
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    }
+   ]
+  },
+  {
+   "name": "aggregate: stale time does not count; a period without good time leaves the point out",
+   "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { aggregate = \"mean\", every = \"1s\" }\n[[device.point]]\nid = \"a\"\ndatatype = \"float64\"\naddress = {}\n",
+   "steps": [
+    {
+     "at": 0,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 10,
+      "ts": "2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "at": 500,
+     "stale": {
+      "device": "plc1",
+      "stale": true
+     }
+    },
+    {
+     "at": 1000,
+     "due": true
+    },
+    {
+     "at": 2000,
+     "due": true
+    },
+    {
+     "at": 2100,
+     "stale": {
+      "device": "plc1",
+      "stale": false
+     }
+    },
+    {
+     "at": 2500,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 30,
+      "ts": "2026-01-01T00:00:02.500Z"
+     }
+    },
+    {
+     "at": 3000,
+     "due": true
+    }
+   ],
+   "messages": [
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:01.000Z",
+      "opcua": {
+       "a": 10
+      }
+     }
+    },
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:03.000Z",
+      "opcua": {
+       "a": 30
+      }
+     }
+    }
+   ],
+   "routing": [
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    }
+   ]
+  },
+  {
+   "name": "aggregate: a mean that is not exactly representable prints as the shortest round-trip form",
+   "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { aggregate = \"mean\", every = \"1s\" }\n[[device.point]]\nid = \"a\"\ndatatype = \"float64\"\naddress = {}\n",
+   "steps": [
+    {
+     "at": 0,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 0.1,
+      "ts": "2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "at": 297,
+     "read": {
+      "device": "plc1",
+      "point": "a",
+      "value": 0.7,
+      "ts": "2026-01-01T00:00:00.297Z"
+     }
+    },
+    {
+     "at": 1000,
+     "due": true
+    }
+   ],
+   "messages": [
+    {
+     "topic": "te/device/plc1///m/opcua",
+     "retain": false,
+     "payload": {
+      "time": "2026-01-01T00:00:01.000Z",
+      "opcua": {
+       "a": 0.5217999999999999
+      }
+     }
+    }
+   ],
+   "routing": [
+    {
+     "sample": false,
+     "measured": true
+    },
+    {
+     "sample": false,
+     "measured": true
+    }
+   ]
+  },
+  {
    "name": "units: one retained message per topic with every series that has a unit, published once",
    "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\n\n[[device.point]]\nid = \"t\"\ndatatype = \"float64\"\nunit = \"°C\"\naddress = {}\n[[device.point]]\nid = \"h\"\ndatatype = \"float64\"\nunit = \"%\"\naddress = {}\n[[device.point]]\nid = \"n\"\ndatatype = \"float64\"\naddress = {}\n[[device.point]]\nid = \"x\"\ndatatype = \"float64\"\nunit = \"m\"\nmeta = { measurement = { group = \"Other\" } }\naddress = {}\n[[device.point]]\nid = \"y\"\ndatatype = \"float64\"\nmeta = { measurement = { group = \"Bare\" } }\naddress = {}\n",
    "steps": [

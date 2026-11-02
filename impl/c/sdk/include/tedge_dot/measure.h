@@ -91,8 +91,16 @@ void tdot_batcher_flush_all(tdot_batcher_t *b, tdot_measure_out_fn out, void *ct
 long long tdot_batcher_next_deadline(const tdot_batcher_t *b);
 
 /* Mark device `d`'s slots stale (its link is down or its push delivery failed),
- * or healthy again. A stale device's slots are left out of samples. */
-void tdot_batcher_set_stale(tdot_batcher_t *b, size_t d, bool stale);
+ * or healthy again. A stale device's plain slots are left out of samples; an
+ * aggregated slot stops counting good time at `now_ns` (device clock) and
+ * counts again from its next good reading. */
+void tdot_batcher_set_stale(tdot_batcher_t *b, size_t d, bool stale, long long now_ns);
+
+/* In measurement output, refuse a device where a series of an aggregated point
+ * has the name of another series of its group (§5.5). 0, or -1 with the reason
+ * in `err`. As measure.rs check_resolved. */
+int tdot_measure_check_series(const tdot_config_t *cfg, const tdot_device_t *dev, char *err,
+                              size_t errlen);
 
 /* Whether a flow reads this point's samples, so measurement output still
  * publishes them: meta.alarm, meta.event or meta.parameter (each unless

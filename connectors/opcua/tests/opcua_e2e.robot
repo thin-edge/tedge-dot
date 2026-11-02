@@ -73,6 +73,7 @@ ${MEASURE_TOPIC}            te/device/opcm///m/${PROTOCOL}
 ${MEASURE_SAMPLE_PREFIX}    te/device/opcm/ot/${PROTOCOL}/sample
 ${MEASURE_CAPS_TOPIC}       te/device/main/service/tedge-dot-measure/ot/capabilities
 ${FRAME_TOPIC}              te/device/opcf///m/${PROTOCOL}
+${AGGREGATE_TOPIC}          te/device/opca///m/${PROTOCOL}
 # Every write to ns=2;s=Stamped carries this source timestamp (sim/server.py).
 ${STAMPED_SOURCE_TIME}      2026-01-01T00:00:00.913Z
 
@@ -881,6 +882,22 @@ A Frame Publishes Each Value Of A Repeated Point In Its Own Layer
     ...                share a millisecond.
     [Tags]    requires:subscribe
     Wait Until Keyword Succeeds    30s    1s    A Whole Burst Should Arrive In Layers    ${FRAME_TOPIC}
+
+An Aggregated Point Publishes Its Mean And Maximum With Their Units
+    [Documentation]    opca polls Ticks (incremented every second) every 200 ms with
+    ...                `aggregate = ["mean", "max"]` every 2 s (openspec change sample-aggregate):
+    ...                each sample holds `ticks_mean` and `ticks_max`, the mean lies within the
+    ...                two seconds below the maximum, and the units message names both series.
+    ${payload}=    Wait For Message Containing    ${AGGREGATE_TOPIC}    "ticks_mean"    timeout=${READY_TIMEOUT}
+    ${mean}=    Get Json Field    ${payload}    opcua.ticks_mean
+    ${max}=    Get Json Field    ${payload}    opcua.ticks_max
+    Should Be True    ${max} - 2 <= ${mean} <= ${max}    mean ${mean}, max ${max}: ${payload}
+    ${series}=    Evaluate    sorted(json.loads($payload)['opcua'])    modules=json
+    Should Be Equal    ${series}    ${{['ticks_max', 'ticks_mean']}}
+    ${units}=    Fetch Retained    ${AGGREGATE_TOPIC}/meta    timeout=${SAMPLE_TIMEOUT}
+    # The keys are "<group>.<series>", so not a dotted Get Json Field path.
+    ${units}=    Evaluate    json.loads($units)    modules=json
+    Should Be Equal    ${units}    ${{ {'opcua.ticks_max': {'unit': 's'}, 'opcua.ticks_mean': {'unit': 's'}} }}
 
 *** Keywords ***
 A Whole Burst Should Arrive In Layers

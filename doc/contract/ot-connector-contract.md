@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Status | **Normative draft** |
-| Version | 0.2.1 |
+| Version | 0.3.0 |
 | Date | 2026-10-29 |
 | Schemas | [schemas/](schemas/) · [asyncapi.yaml](asyncapi.yaml) |
 
@@ -200,7 +200,7 @@ keeping the configuration it has when the file cannot be used.
 | `report` | object | no | The point's **reporting policy** (report by exception): publish only on change or beyond a deadband, rate-limit, debounce, and a heartbeat. Applied by the SDK runtime, not the module; merged key by key over the device's and `[connector]`'s `report`. See §5.3. |
 | `meta` | object | no | Free-form signal metadata echoed verbatim as `meta` in every sample envelope. Never interpreted by the connector; flows and tooling read it for per-signal behaviour, for naming the point's measurement or, with `meta.measurement = false`, keeping it out of the measurements, for declaring the signal's alarms and events (`meta.alarm`, `meta.event`, read by the `ot-alarm` / `ot-event` flows), and for exposing the point as an operator-editable *parameter* (`meta.parameter`, see §5.2). |
 | `subscribe` | boolean | no | Default `true`. `false` keeps the point on the polling schedule even when the connector supports push delivery. |
-| `batch` | object | no | The point's **grouping policy** in measurement output: `group_by` (`"time"`, `"frame"` with a `window`, or `"sample"` with an `every`). Merged key by key over the device's and `[connector]`'s `batch`. See §5.5. |
+| `batch` | object | no | The point's **grouping policy** in measurement output: `group_by` (`"time"`, `"frame"` with a `window`, or `"sample"` with an `every` and an optional `aggregate`). Merged key by key over the device's and `[connector]`'s `batch`. See §5.5. |
 | `sample` | boolean | no | In measurement output, `true` keeps publishing the point's samples for a consumer other than the flows, and `false` publishes none even when a flow would read them. Unset, the runtime decides. See §5.5. |
 | `enabled` | boolean | no | Default `true`. `false` keeps the definition but leaves the point out of the device (§3.3) — how a site switches off one point of a library it does not own (§3.4). |
 
@@ -927,7 +927,7 @@ from `[connector]`, the device and the point like `report`:
 | --- | --- | --- | --- |
 | `"time"` (default) | The readings' own time, at millisecond precision. | When a reading with another time arrives for the group, a point repeats, or the runtime's pass ends. | None. No time is moved. |
 | `"frame"`, with `window` (1 ms to 60 s) | Per layer: its first reading's time, moved to 1 ms after the previous layer's time when it is not later. | When the window ends, layer by layer. | None. A time moves by less than `window`, plus the 1 ms steps that keep it in order. |
-| `"sample"`, with `every` (100 ms to 1 h) | The sample time. | Every `every`: one series per point holding a good value, changed or not. | By design: readings superseded between two samples. |
+| `"sample"`, with `every` (100 ms to 1 h) | The sample time. | Every `every`: one series per point holding a good value, changed or not; with `aggregate`, one per aggregate over the period. | By design: readings superseded between two samples, unless an aggregate accounts for them. |
 
 Under `"frame"`, a point's first value in the window goes into the frame's layer 0, its second
 into layer 1, and so on, so a repeat never closes a message early and no value is overwritten.
@@ -941,6 +941,22 @@ inherited from a level that chose another policy is ignored. Under `"sample"` a 
 while it is stale — its device link is not `connected`, its push delivery failed its check, or its
 last reading was not `good` — so a sample never repeats a value the source no longer vouches for.
 A point raising an event per reading (`meta.event.every`) is published as under `"time"`.
+
+**Aggregates.** Under `"sample"`, `batch.aggregate` names what each period publishes instead of
+the last value: one of `"mean"`, `"min"`, `"max"` or `"last"`, or a non-empty list of them without
+repeats. A table that sets `aggregate` without `group_by` chooses `"sample"` at its own level, so
+`batch = { aggregate = "mean", every = "1s" }` is a complete policy; a table that sets
+`group_by = "time"` or `"frame"` with `aggregate` is refused, and an inherited `aggregate` the
+effective policy does not use is ignored. The aggregates are computed over the values the point
+held during the period, on the device clock, counting the value held when the period started
+from its start; a boolean counts as 1 or 0. `"mean"` is time-weighted: each value counts for the
+good time it held. `"min"` and `"max"` are the smallest and largest value held, and `"last"` the
+value held at the sample time. Time while the point is stale does not count, and a point with no
+good time in the period is left out. A string keeps the point's series name; a list publishes each
+aggregate as `<series>_<aggregate>`, each with the point's unit in the units message. An aggregate
+uses every good reading, so a point whose effective policy has both `aggregate` and a `report`
+policy is refused, as is a configuration in which a series of an aggregated point has the name of
+another series of its device and group.
 
 **Units.** The runtime publishes a measurement topic's units as a retained message on
 `<topic>/meta`, holding `{"<group>.<series>": {"unit": "<unit>"}}` for every series of the topic
