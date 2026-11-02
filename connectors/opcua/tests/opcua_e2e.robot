@@ -72,6 +72,7 @@ ${MACHINE_SAMPLE_PREFIX}    te/device/machine/ot/${PROTOCOL}/sample
 ${MEASURE_TOPIC}            te/device/opcm///m/${PROTOCOL}
 ${MEASURE_SAMPLE_PREFIX}    te/device/opcm/ot/${PROTOCOL}/sample
 ${MEASURE_CAPS_TOPIC}       te/device/main/service/tedge-dot-measure/ot/capabilities
+${FRAME_TOPIC}              te/device/opcf///m/${PROTOCOL}
 # Every write to ns=2;s=Stamped carries this source timestamp (sim/server.py).
 ${STAMPED_SOURCE_TIME}      2026-01-01T00:00:00.913Z
 
@@ -871,7 +872,36 @@ Capability Descriptor Lists The Measurement Output
     Should Be Equal    ${group_by}    time
 
 
+A Frame Publishes Each Value Of A Repeated Point In Its Own Layer
+    [Documentation]    opcf frames the Burst node, read twice as `burst` and `burst2`, in 500 ms
+    ...                windows (openspec change frame-layers). The simulator writes it five times
+    ...                in a row every second, so a window holds five values of each point. Each
+    ...                value goes into its own layer, which holds both points: five messages for
+    ...                ten changes, in order, with strictly increasing times even when the writes
+    ...                share a millisecond.
+    [Tags]    requires:subscribe
+    Wait Until Keyword Succeeds    30s    1s    A Whole Burst Should Arrive In Layers    ${FRAME_TOPIC}
+
 *** Keywords ***
+A Whole Burst Should Arrive In Layers
+    [Documentation]    Some burst n arrived whole on the frame topic, each of its values in its own
+    ...                message with both reads of the node, and all message times strictly increase.
+    [Arguments]    ${topic}
+    ${payloads}=    Get Messages    ${topic}
+    ${layers}=    Evaluate    [json.loads(p) for p in $payloads if p]    modules=json
+    ${values}=    Evaluate    [m['opcua']['burst'] for m in $layers if 'burst' in m['opcua']]
+    ${whole}=    Whole Bursts    ${values}
+    Should Not Be Empty    ${whole}    no burst arrived whole: ${values}
+    ${n}=    Set Variable    ${whole}[0]
+    ${burst}=    Evaluate    [m['opcua'] for m in $layers if m['opcua'].get('burst', -1) // 10 == $n]
+    Length Should Be    ${burst}    5    burst ${n} must be five layers: ${burst}
+    FOR    ${layer}    IN    @{burst}
+        Should Be Equal    ${layer}[burst]    ${layer}[burst2]    a layer must hold both reads: ${burst}
+    END
+    ${times}=    Evaluate    [m['time'] for m in $layers]
+    ${ordered}=    Evaluate    all(a < b for a, b in zip($times, $times[1:]))
+    Should Be True    ${ordered}    message times must strictly increase: ${times}
+
 Burst Values
     [Documentation]    The values of every sample seen on a Burst topic, in arrival order.
     [Arguments]    ${topic}

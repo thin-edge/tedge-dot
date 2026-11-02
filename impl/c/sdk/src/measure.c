@@ -15,6 +15,10 @@
  * and the series. */
 #define FRAME_BYTES (9 + 24 + 2 + 2 + 2)
 
+/* A frame holds at most this many layers; a reading that would open one more
+ * publishes them and starts a new frame in the same window. */
+#define MAX_LAYERS 64
+
 typedef struct {
     char *s;
     size_t len, cap;
@@ -56,19 +60,32 @@ typedef struct {
     tdot_group_by_t group_by;
     bool has_value; /* the sample slot */
     double value;
-    bool in_open; /* the point is in its open message */
+    /* The point's values in its open message (`time`) or frame (`frame`): the
+     * layer its next value goes into. */
+    unsigned char depth;
 } mpoint_t;
+
+/* One message being filled: the open `time` message, or a layer of a frame. */
+typedef struct {
+    double time_ms;     /* the layer's time */
+    long long time_key; /* time_ms at the contract's millisecond precision */
+    buf_t body;         /* "a":1,"b":2 without the braces: the part not yet published */
+    size_t n;           /* the series in body */
+    size_t *points;     /* every point in the layer, parts published by a split included */
+    size_t npoints, cap;
+} mlayer_t;
 
 typedef struct {
     bool used; /* a message is open */
     size_t topic;
     tdot_group_by_t g;
-    double time_ms;      /* the first reading's time */
-    long long time_key;  /* time_ms at the contract's millisecond precision */
     long long opened_ns; /* when the frame opened, on the device clock */
-    buf_t body;          /* "a":1,"b":2 without the braces */
-    size_t *points;
-    size_t npoints, cap;
+    mlayer_t *layers;    /* in order; one for a `time` slot */
+    size_t nlayers, cap_layers;
+    /* The time key of the slot's last layer, across frames: layer times
+     * strictly increase, so a point's values stay in order. */
+    bool has_last;
+    long long last_key;
 } mopen_t;
 
 typedef struct {
@@ -412,8 +429,11 @@ void tdot_batcher_free(tdot_batcher_t *b) {
             free(md->topics[t].units);
         }
         for (size_t i = 0; md->open && i < md->nslots; i++) {
-            free(md->open[i].body.s);
-            free(md->open[i].points);
+            for (size_t l = 0; l < md->open[i].cap_layers; l++) {
+                free(md->open[i].layers[l].body.s);
+                free(md->open[i].layers[l].points);
+            }
+            free(md->open[i].layers);
         }
         free(md->points);
         free(md->topics);
@@ -474,29 +494,41 @@ static void publish_body(tdot_batcher_t *b, mtopic_t *topic, double time_ms,
     free(msg.s);
 }
 
-/* Open the message of `slot` with the first reading's time. */
-static mopen_t *open_slot(mdevice_t *md, size_t slot, double time_ms, long long time_key,
-                          long long opened_ns) {
-    mopen_t *o = &md->open[slot];
-    o->used = true;
-    o->time_ms = time_ms;
-    o->time_key = time_key;
-    o->opened_ns = opened_ns;
-    o->body.len = 0;
-    if (o->body.s)
-        o->body.s[0] = '\0';
-    o->npoints = 0;
-    return o;
+/* Start a layer of slot `o` at `time_ms`; NULL when out of memory. */
+static mlayer_t *open_layer(mopen_t *o, double time_ms, long long time_key) {
+    if (o->nlayers == o->cap_layers) {
+        size_t cap = o->cap_layers ? o->cap_layers * 2 : 1;
+        mlayer_t *grown = realloc(o->layers, cap * sizeof *grown);
+        if (!grown)
+            return NULL;
+        memset(grown + o->cap_layers, 0, (cap - o->cap_layers) * sizeof *grown);
+        o->layers = grown;
+        o->cap_layers = cap;
+    }
+    mlayer_t *l = &o->layers[o->nlayers++];
+    l->time_ms = time_ms;
+    l->time_key = time_key;
+    l->body.len = 0;
+    if (l->body.s)
+        l->body.s[0] = '\0';
+    l->n = 0;
+    l->npoints = 0;
+    return l;
 }
 
-/* Publish an open message and free its place. */
+/* Publish an open message, or every layer of a frame, and free its place. */
 static void close_open(tdot_batcher_t *b, mdevice_t *md, mopen_t *o, tdot_measure_out_fn out,
                        void *ctx) {
-    for (size_t i = 0; i < o->npoints; i++)
-        md->points[o->points[i]].in_open = false;
     o->used = false;
-    publish_body(b, &md->topics[o->topic], o->time_ms, o->body.s ? o->body.s : "",
-                 o->body.len, out, ctx);
+    for (size_t i = 0; i < o->nlayers; i++) {
+        mlayer_t *l = &o->layers[i];
+        for (size_t j = 0; j < l->npoints; j++)
+            md->points[l->points[j]].depth = 0;
+        if (l->n > 0)
+            publish_body(b, &md->topics[o->topic], l->time_ms, l->body.s ? l->body.s : "",
+                         l->body.len, out, ctx);
+    }
+    o->nlayers = 0;
 }
 
 static long long window_ns(tdot_group_by_t g) { return g.ms * 1000000LL; }
@@ -505,29 +537,47 @@ static void add(tdot_batcher_t *b, mdevice_t *md, size_t k, double ts_ms, double
                 long long now_ns, tdot_measure_out_fn out, void *ctx) {
     mpoint_t *p = &md->points[k];
     long long key = (long long)floor(ts_ms);
-    /* The window a new message opens in: a repeated point's frame keeps its. */
+    bool frame = p->group_by.kind == TDOT_GROUP_FRAME;
+    /* The window a new frame opens in: a frame that reached its layer cap keeps
+     * its window. */
     long long opened = now_ns;
-    mopen_t *o = md->open[p->slot].used ? &md->open[p->slot] : NULL;
-    if (o) {
+    mopen_t *o = &md->open[p->slot];
+    if (o->used) {
         bool close;
-        if (p->group_by.kind == TDOT_GROUP_FRAME) {
+        if (frame) {
             if (o->opened_ns + window_ns(p->group_by) <= now_ns) {
                 close = true;
             } else {
-                close = p->in_open;
+                close = p->depth >= MAX_LAYERS;
                 if (close)
                     opened = o->opened_ns;
             }
         } else {
-            close = p->in_open || o->time_key != key;
+            close = p->depth > 0 || o->layers[0].time_key != key;
         }
-        if (close) {
+        if (close)
             close_open(b, md, o, out, ctx);
-            o = NULL;
-        }
     }
-    if (!o)
-        o = open_slot(md, p->slot, ts_ms, key, opened);
+    if (!o->used) {
+        o->used = true;
+        o->opened_ns = opened;
+        o->nlayers = 0;
+    }
+    if (p->depth == o->nlayers) {
+        double time_ms = ts_ms;
+        long long time_key = key;
+        if (frame) {
+            if (o->has_last && time_key <= o->last_key) {
+                time_key = o->last_key + 1;
+                time_ms = (double)time_key;
+            }
+            o->has_last = true;
+            o->last_key = time_key;
+        }
+        if (!open_layer(o, time_ms, time_key))
+            return;
+    }
+    mlayer_t *l = &o->layers[p->depth];
     char piece[600];
     size_t keylen = strlen(p->series_key);
     char number[40];
@@ -544,31 +594,32 @@ static void add(tdot_batcher_t *b, mdevice_t *md, size_t k, double ts_ms, double
     memcpy(text, p->series_key, keylen);
     memcpy(text + keylen, number, numlen + 1);
     size_t group_len = strlen(md->topics[p->topic].group_json);
-    size_t estimate = FRAME_BYTES + group_len + o->body.len + 1 + len +
-                      TDOT_SERIES_OVERHEAD * (o->npoints + 1);
-    if (o->npoints > 0 && estimate > TDOT_SIZE_BUDGET) {
-        /* Split: the full part goes now; the rest keeps the message's time
-         * and window. */
-        double time_ms = o->time_ms;
-        long long time_key = o->time_key, opened_ns = o->opened_ns;
-        close_open(b, md, o, out, ctx);
-        o = open_slot(md, p->slot, time_ms, time_key, opened_ns);
+    size_t estimate = FRAME_BYTES + group_len + l->body.len + 1 + len +
+                      TDOT_SERIES_OVERHEAD * (l->n + 1);
+    if (l->n > 0 && estimate > TDOT_SIZE_BUDGET) {
+        /* Split: the full part goes now; the rest keeps the layer's time and
+         * the frame's window. */
+        publish_body(b, &md->topics[o->topic], l->time_ms, l->body.s, l->body.len, out, ctx);
+        l->body.len = 0;
+        l->body.s[0] = '\0';
+        l->n = 0;
     }
-    if (o->npoints == o->cap) {
-        size_t cap = o->cap ? o->cap * 2 : 64;
-        size_t *grown = realloc(o->points, cap * sizeof *grown);
+    if (l->npoints == l->cap) {
+        size_t cap = l->cap ? l->cap * 2 : 64;
+        size_t *grown = realloc(l->points, cap * sizeof *grown);
         if (!grown) {
             free(dyn);
             return;
         }
-        o->points = grown;
-        o->cap = cap;
+        l->points = grown;
+        l->cap = cap;
     }
-    if (o->body.len > 0)
-        buf_put(&o->body, ",", 1);
-    buf_put(&o->body, text, len);
-    o->points[o->npoints++] = k;
-    p->in_open = true;
+    if (l->body.len > 0)
+        buf_put(&l->body, ",", 1);
+    buf_put(&l->body, text, len);
+    l->n++;
+    l->points[l->npoints++] = k;
+    p->depth++;
     free(dyn);
 }
 

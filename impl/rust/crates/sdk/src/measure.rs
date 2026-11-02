@@ -9,8 +9,10 @@
 //! - `"time"` (default): readings that share a millisecond timestamp share a message. A message
 //!   closes when a reading with another time arrives for its group, when a point repeats, or at
 //!   the end of the runtime's pass.
-//! - `"frame"`: readings within `window` of the device clock share a message stamped with the
-//!   first reading's time. A repeated point starts a new message.
+//! - `"frame"`: readings within `window` of the device clock are published as layers when the
+//!   window ends: a point's first value in the window goes into layer 0, its second into layer
+//!   1, and so on. A layer is stamped with its first reading's time, moved to 1 ms after the
+//!   previous layer's time when it is not later, so a point's values stay in time order.
 //! - `"sample"`: every `every`, one series per slot holding a good value, stamped with the sample
 //!   time. Stale slots are left out; event points are published as under `"time"`.
 //!
@@ -46,6 +48,9 @@ const WINDOW_MIN: Duration = Duration::from_millis(1);
 const WINDOW_MAX: Duration = Duration::from_secs(60);
 const EVERY_MIN: Duration = Duration::from_millis(100);
 const EVERY_MAX: Duration = Duration::from_secs(3600);
+/// A frame holds at most this many layers; a reading that would open one more publishes them
+/// and starts a new frame in the same window.
+const MAX_LAYERS: usize = 64;
 
 /// What the runtime publishes for readings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -298,15 +303,18 @@ struct Topic {
     units_settled: bool,
 }
 
-/// A message being filled.
+/// A message being filled: the open `time` message of a topic, or one layer of a frame.
 #[derive(Debug)]
 struct Open {
     time: OffsetDateTime,
     time_ms: i128,
     /// When the frame opened, on the device clock.
     opened: Instant,
-    /// `"a":1,"b":2`, without the braces.
+    /// `"a":1,"b":2`, without the braces: the part not yet published.
     body: String,
+    /// The series in `body`.
+    n: usize,
+    /// Every point in the message, including the parts already published by a split.
     points: Vec<usize>,
 }
 
@@ -320,9 +328,13 @@ struct DeviceTable {
     points: Vec<PointPlan>,
     index: HashMap<String, usize>,
     topics: Vec<Topic>,
-    /// The point is in its open message.
-    in_open: Vec<bool>,
-    open: HashMap<(usize, GroupBy), Open>,
+    /// The point's values in its open message (`time`) or frame (`frame`): the layer its next
+    /// value goes into.
+    depth: Vec<u8>,
+    /// The open message of a `time` key, or the layers of a `frame` key, in order.
+    open: HashMap<(usize, GroupBy), Vec<Open>>,
+    /// The time of the last layer of each `frame` key, in Unix milliseconds, across frames.
+    last_layer_ms: HashMap<(usize, GroupBy), i128>,
     slots: Vec<Slot>,
     /// One per distinct `every` of the device: the period and the next sample time.
     samplers: Vec<(Duration, Instant)>,
@@ -423,8 +435,9 @@ impl Batcher {
                 points,
                 index,
                 topics,
-                in_open: vec![false; n],
+                depth: vec![0; n],
                 open: HashMap::new(),
+                last_layer_ms: HashMap::new(),
                 slots: vec![Slot::default(); n],
                 samplers,
                 stale: false,
@@ -482,70 +495,96 @@ impl Batcher {
 
     fn add(&mut self, d: usize, k: usize, ts: OffsetDateTime, value: f64, now: Instant, out: &mut Vec<Message>) {
         let ts_ms = ts.unix_timestamp_nanos().div_euclid(1_000_000);
-        let dev = &mut self.devices[d];
+        let dev = &self.devices[d];
         let plan = &dev.points[k];
         let key = (plan.topic, plan.group_by);
-        // The window a new message opens in: a repeated point's frame keeps its window.
+        let depth = dev.depth[k] as usize;
+        // The window a new frame opens in: a frame that reached its layer cap keeps its window.
         let mut opened = now;
-        if let Some(open) = dev.open.get(&key) {
-            let (close, window) = match plan.group_by {
-                GroupBy::Frame(window) if open.opened + window <= now => (true, None),
-                GroupBy::Frame(_) => (dev.in_open[k], Some(open.opened)),
-                _ => (dev.in_open[k] || open.time_ms != ts_ms, None),
+        if let Some(layers) = dev.open.get(&key) {
+            let first = &layers[0];
+            let close = match plan.group_by {
+                GroupBy::Frame(window) if first.opened + window <= now => true,
+                GroupBy::Frame(_) if depth >= MAX_LAYERS => {
+                    opened = first.opened;
+                    true
+                }
+                GroupBy::Frame(_) => false,
+                _ => depth > 0 || first.time_ms != ts_ms,
             };
             if close {
-                opened = window.unwrap_or(now);
                 self.close(d, key, out);
             }
         }
         let dev = &mut self.devices[d];
+        let layer = dev.depth[k] as usize;
+        let layers = dev.open.entry(key).or_default();
+        if layer == layers.len() {
+            let (time, time_ms) = match key.1 {
+                GroupBy::Frame(_) => {
+                    // Layer times strictly increase per key, so a point's values stay in order.
+                    match dev.last_layer_ms.get(&key) {
+                        Some(&last) if ts_ms <= last => {
+                            let ms = last + 1;
+                            (OffsetDateTime::from_unix_timestamp_nanos(ms * 1_000_000).unwrap_or(ts), ms)
+                        }
+                        _ => (ts, ts_ms),
+                    }
+                }
+                _ => (ts, ts_ms),
+            };
+            if matches!(key.1, GroupBy::Frame(_)) {
+                dev.last_layer_ms.insert(key, time_ms);
+            }
+            let opened = layers.first().map_or(opened, |o| o.opened);
+            layers.push(Open { time, time_ms, opened, body: String::new(), n: 0, points: Vec::new() });
+        }
         let plan = &dev.points[k];
         let group_len = dev.topics[plan.topic].group_json.len();
-        let open = dev.open.entry(key).or_insert_with(|| Open {
-            time: ts,
-            time_ms: ts_ms,
-            opened,
-            body: String::new(),
-            points: Vec::new(),
-        });
         let mut piece = String::with_capacity(plan.series_key.len() + 24);
         piece.push_str(&plan.series_key);
         push_number(&mut piece, value);
         let estimate = |body: usize, n: usize| FRAME_BYTES + group_len + body + SERIES_OVERHEAD * n;
-        if !open.points.is_empty() && estimate(open.body.len() + 1 + piece.len(), open.points.len() + 1) > SIZE_BUDGET {
+        let open = &mut layers[layer];
+        if open.n > 0 && estimate(open.body.len() + 1 + piece.len(), open.n + 1) > SIZE_BUDGET {
             // Split: the full part goes now; the rest keeps the message's time and window.
-            let (time, time_ms, opened) = (open.time, open.time_ms, open.opened);
-            self.close(d, key, out);
-            let dev = &mut self.devices[d];
-            dev.open.insert(key, Open { time, time_ms, opened, body: String::new(), points: Vec::new() });
+            let topic = &mut dev.topics[key.0];
+            settle_units(topic, &mut self.published_units, out);
+            out.push(Message { topic: topic.topic.clone(), payload: body(&topic.group_json, open.time, &open.body), retain: false });
+            open.body.clear();
+            open.n = 0;
         }
-        let dev = &mut self.devices[d];
-        let open = dev.open.get_mut(&key).expect("opened above");
         if !open.body.is_empty() {
             open.body.push(',');
         }
         open.body.push_str(&piece);
+        open.n += 1;
         open.points.push(k);
-        dev.in_open[k] = true;
+        dev.depth[k] += 1;
     }
 
-    /// Publish the open message of `key` on device `d`, after its topic's units when they are
-    /// not published yet.
+    /// Publish the open message, or every layer of the frame, of `key` on device `d`, after its
+    /// topic's units when they are not published yet.
     fn close(&mut self, d: usize, key: (usize, GroupBy), out: &mut Vec<Message>) {
         let dev = &mut self.devices[d];
-        let Some(open) = dev.open.remove(&key) else {
+        let Some(layers) = dev.open.remove(&key) else {
             return;
         };
-        for k in &open.points {
-            dev.in_open[*k] = false;
-        }
         let topic = &mut dev.topics[key.0];
-        settle_units(topic, &mut self.published_units, out);
-        out.push(Message {
-            topic: topic.topic.clone(),
-            payload: body(&topic.group_json, open.time, &open.body),
-            retain: false,
-        });
+        for open in layers {
+            for k in &open.points {
+                dev.depth[*k] = 0;
+            }
+            if open.n == 0 {
+                continue;
+            }
+            settle_units(topic, &mut self.published_units, out);
+            out.push(Message {
+                topic: topic.topic.clone(),
+                payload: body(&topic.group_json, open.time, &open.body),
+                retain: false,
+            });
+        }
     }
 
     /// The end of a runtime pass: publish every open `time` message.
@@ -586,8 +625,8 @@ impl Batcher {
             let mut ended: Vec<(Instant, (usize, GroupBy))> = self.devices[d]
                 .open
                 .iter()
-                .filter_map(|(key, open)| match key.1 {
-                    GroupBy::Frame(window) if open.opened + window <= now => Some((open.opened, *key)),
+                .filter_map(|(key, layers)| match key.1 {
+                    GroupBy::Frame(window) if layers[0].opened + window <= now => Some((layers[0].opened, *key)),
                     _ => None,
                 })
                 .collect();
@@ -657,8 +696,8 @@ impl Batcher {
         self.devices
             .iter()
             .flat_map(|dev| {
-                let frames = dev.open.iter().filter_map(|(key, open)| match key.1 {
-                    GroupBy::Frame(window) => Some(open.opened + window),
+                let frames = dev.open.iter().filter_map(|(key, layers)| match key.1 {
+                    GroupBy::Frame(window) => Some(layers[0].opened + window),
                     _ => None,
                 });
                 frames.chain(dev.samplers.iter().map(|(_, next)| *next))
@@ -903,6 +942,36 @@ mod tests {
             assert_eq!(serde_json::Value::Array(got), case["messages"], "{name}");
             assert_eq!(serde_json::Value::Array(routing), case["routing"], "{name}");
         }
+    }
+
+    /// The parts of a split layer share its time, and the next layer is ordered after that time,
+    /// not after each part (the vectors' `split` form does not carry times).
+    #[test]
+    fn split_frame_layer_parts_share_its_time() {
+        let case = serde_json::json!({
+            "config": "[connector]\nprotocol = \"opcua\"\noutput = \"measurements\"\n\n[[device]]\nname = \"plc1\"\nprotocol_address = {}\nbatch = { group_by = \"frame\", window = \"100ms\" }\n",
+            "generate": { "count": 300, "datatype": "float64", "id": "a_long_point_name_that_makes_each_series_take_about_a_hundred_bytes_of_the_message_{i:04}" },
+        });
+        let config = config_of(&case);
+        let base = Instant::now();
+        let mut batcher = Batcher::new(&config, base, None);
+        let mut out = Vec::new();
+        let read = |point: &str, ts: &str| reading(&config, &serde_json::json!({ "device": "plc1", "point": point, "value": 1, "ts": ts }));
+        for p in &config.devices[0].points {
+            batcher.offer(&read(&p.id, "2026-01-01T00:00:00.040Z"), base, &mut out);
+        }
+        let first = config.devices[0].points[0].id.clone();
+        batcher.offer(&read(&first, "2026-01-01T00:00:00.030Z"), base + Duration::from_millis(10), &mut out);
+        batcher.due(base + Duration::from_millis(100), parse_ts("2026-01-01T00:00:00.100Z"), &mut out);
+        let times: Vec<String> = out
+            .iter()
+            .filter(|m| !m.retain)
+            .map(|m| serde_json::from_str::<serde_json::Value>(&m.payload).unwrap()["time"].as_str().unwrap().to_string())
+            .collect();
+        assert!(times.len() >= 3, "{times:?}");
+        let (last, parts) = times.split_last().unwrap();
+        assert!(parts.iter().all(|t| t == "2026-01-01T00:00:00.040Z"), "{times:?}");
+        assert_eq!(last, "2026-01-01T00:00:00.041Z");
     }
 
     fn load(extra: &str) -> Result<ConnectorConfig, String> {

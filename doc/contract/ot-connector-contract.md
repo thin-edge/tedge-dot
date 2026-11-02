@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Status | **Normative draft** |
-| Version | 0.2.0 |
+| Version | 0.2.1 |
 | Date | 2026-10-29 |
 | Schemas | [schemas/](schemas/) · [asyncapi.yaml](asyncapi.yaml) |
 
@@ -119,7 +119,7 @@ default_mode  = "typed"         # optional; default output mode for this device'
 points_from   = []              # optional; point libraries to inherit points from, in order (§3.4)
 enabled       = true            # optional; false keeps the definition but leaves the device out (§3.3)
 report        = { on_change = true }  # optional: default reporting policy for this device's points (§5.3)
-batch         = { group_by = "frame", window = "100ms" }  # optional: this device's grouping policy (§5.5)
+batch         = { group_by = "frame", window = "500ms" }  # optional: this device's grouping policy (§5.5)
 
   [[device.point]]
   id       = "<point-id>"       # unique within the device; appears in topics
@@ -926,8 +926,15 @@ from `[connector]`, the device and the point like `report`:
 | `group_by` | Message time | Published | Loss |
 | --- | --- | --- | --- |
 | `"time"` (default) | The readings' own time, at millisecond precision. | When a reading with another time arrives for the group, a point repeats, or the runtime's pass ends. | None. No time is moved. |
-| `"frame"`, with `window` (1 ms to 60 s) | The first reading's time in the window. | When the window ends; at once when a point repeats in it. | None. A time moves by less than `window`. |
+| `"frame"`, with `window` (1 ms to 60 s) | Per layer: its first reading's time, moved to 1 ms after the previous layer's time when it is not later. | When the window ends, layer by layer. | None. A time moves by less than `window`, plus the 1 ms steps that keep it in order. |
 | `"sample"`, with `every` (100 ms to 1 h) | The sample time. | Every `every`: one series per point holding a good value, changed or not. | By design: readings superseded between two samples. |
+
+Under `"frame"`, a point's first value in the window goes into the frame's layer 0, its second
+into layer 1, and so on, so a repeat never closes a message early and no value is overwritten.
+Layer times of one topic and policy strictly increase, across frames too, so a point's values
+keep their order when source times jitter. A reading that would open a 65th layer publishes the
+frame's layers at once and starts a new frame in the same window. A reading that arrives after the
+window ended opens a new frame.
 
 A `batch` table that sets `group_by` and the other policy's duration is refused; a duration
 inherited from a level that chose another policy is ignored. Under `"sample"` a point is left out

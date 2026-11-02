@@ -11,9 +11,11 @@
  *   time    readings that share a millisecond timestamp share a message; a
  *           message closes when another time arrives for its group, when a
  *           point repeats, or at the end of the runtime's pass
- *   frame   readings within `window` of the device clock share a message
- *           stamped with the first reading's time; a repeated point starts a
- *           new message in the same window
+ *   frame   readings within `window` of the device clock are published as
+ *           layers when the window ends: a point's first value goes into
+ *           layer 0, its second into layer 1, and so on. A layer is stamped
+ *           with its first reading's time, moved to 1 ms after the previous
+ *           layer's when it is not later, so a point's values stay in order
  *   sample  every `every`, one series per slot holding a good value, stamped
  *           with the sample time; stale slots are left out, and event points
  *           (meta.event.every) are published as under `time`

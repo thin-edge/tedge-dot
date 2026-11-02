@@ -82,7 +82,7 @@ Which time a reading has, and how readings are grouped, is the point's `batch` p
 | `group_by` | Message time | Loss | Use it for |
 | --- | --- | --- | --- |
 | `"time"` (default) | The reading's own time | None, and no time is moved | Polled points. A polled pass shares one read time, so it is one message per device and group. |
-| `"frame"`, `window = "100ms"` | The first reading's time in the window | None. A time moves by less than `window` | Pushed points whose source times differ by a few milliseconds |
+| `"frame"`, `window = "500ms"` | Each layer's first reading's time in the window | None. A time moves by less than `window` | Pushed points whose source times differ by a few milliseconds |
 | `"sample"`, `every = "1s"` | The sample time | Readings superseded between two samples | A fixed rate per point, whatever the source sends |
 
 ### `time`: exact times
@@ -98,13 +98,28 @@ changed.
 ```toml
 [[device]]
 name  = "line1"
-batch = { group_by = "frame", window = "100ms" }
+batch = { group_by = "frame", window = "500ms" }
 ```
 
-Readings that arrive within `window` share a message stamped with the first reading's time. A
-point that changes twice within a window starts a new message, so both values reach the cloud.
+Readings that arrive within `window` share a message stamped with the first reading's time, and
+the messages are published when the window ends. A point that changes twice within a window
+does not end the message: its second value goes into a second message of the same window (a
+**layer**), its third into a third, and so on. Every value reaches the cloud, and a window of
+1,000 changing points usually needs only a few messages.
+
 The price is the time: a reading can be published with a time up to `window` earlier than its
-own. Choose a window shorter than the time resolution you care about.
+own, and a repeated point's earlier value waits for the end of the window. Choose a window
+shorter than the time resolution you care about. 500 ms suits most pushed telemetry. With a
+shorter window each device publishes at least one message per window: ten per second at 100 ms
+against two at 500 ms, whatever the batching. The mapper's cost is per message.
+
+Each layer is stamped with its first reading's time. When source times jitter, that time can be
+earlier than the previous layer's; the layer is then stamped 1 ms after the previous one, so a
+point's values always reach the cloud in the order they were read and the latest value in
+Cumulocity is the latest reading.
+
+A point with `report = { min_interval = ... }` of at least the window never changes twice
+within one window, so its frame is always a single message.
 
 ### `sample`: sample and hold
 
@@ -170,7 +185,7 @@ device's output and grouping policy:
 
 ```json
 "outputs": [
-  { "device": "line1", "output": "measurements", "batch": { "group_by": "frame", "window": "100ms" } }
+  { "device": "line1", "output": "measurements", "batch": { "group_by": "frame", "window": "500ms" } }
 ]
 ```
 
