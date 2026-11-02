@@ -142,16 +142,18 @@ returns all permits when the call ends.
 
 ### D6. Backoff on a busy endpoint
 An endpoint's effective budget halves (to at least 1) when a request is answered with OPC UA
-`BadTooManyOperations`, `BadServerTooBusy` or `BadTooManySessions`, or times out while another
-request to the endpoint is in flight. After 20 successful requests at the reduced budget, it grows
+`BadServerTooBusy` or `BadResourceUnavailable`, or times out while another request to the
+endpoint is in flight. `BadTooManyOperations` is not a busy answer: a server returns it for a
+Read larger than it accepts, which sending again cannot fix. After 20 successful requests at the reduced budget, it grows
 by one, up to `max_inflight`. Each change is logged at `info`.
-- A request refused as busy is sent again within the same call once the budget allows, until the
-  call's `operation_timeout`. Only then do its points fail, so a busy server slows a pass down but
-  does not produce `bad` readings.
+- A request refused as busy is sent again within the same call once the budget allows, at most
+  8 times and within the call's `operation_timeout`. Only then do its points fail, so a busy
+  server slows a pass down but does not produce `bad` readings.
 - With a server that serves exactly N at a time, the budget oscillates between about N/2 and N
   (halve on a refusal, one step back every 20 successes), like a congestion window.
 - A timeout with nothing else in flight is an ordinary link failure, handled as today.
-- The current effective budget is visible in the capability descriptor.
+- The descriptor lists each endpoint's configured budget. The budget in effect changes with each
+  backoff and is logged, not republished in the retained descriptor.
 
 ### D7. Results keep their order and read time
 A pipelined call reassembles block results by index. A block that fails fails only its own points.
@@ -167,8 +169,12 @@ The bench module's `protocol_address` gains:
 - `server_inflight`: the most blocks the simulated endpoint serves at once. A block beyond it is
   answered "busy", which tests D6.
 
-The `polled-latency` scenario: 64 devices on separate endpoints, plus one 20,000-point device,
-20 ms per 500-point block, measurement output.
+Two scenarios set the targets, since the harness builds uniform device sets:
+- `polled-latency`: 64 bench devices on separate endpoints, 20 ms per 500-point block, measurement
+  output.
+- `opcua-latency`: one OPC UA device with 20,000 nodes, the standalone simulator started with
+  `--latency 20ms`, a proxy in front of it that delays each direction by half the round trip
+  without limiting throughput.
 
 ### D9. Contract 0.4.0
 New keys (`max_inflight`, `max_inflight_total`) and a capability-descriptor field, so the minor
@@ -176,17 +182,52 @@ version goes up.
 
 ## Performance
 
-Targets, on `polled-latency` (64 devices × 1,000 points, 20 ms per 500-point block), one
-connector instance, measurement output, same host as the measurements above:
+All lines are in `bench/results/Reubens-MacBook-Pro-2-2026-11-02.jsonl`, from one Apple M1 Max
+(thin-edge.io 2.0.2~423, mosquitto 2.1.2), measurement output, three runs per build unless noted.
 
-| Metric | Today (one instance) | Target (one instance, defaults) |
+- `polled-latency`: 64 bench devices × 1,000 points, 20 ms per 500-point block, 1 s polls, a
+  target of 64,000 readings/s. Before: `main` at 0c4d61f, built in a separate worktree with the
+  scenario added there. After: this change, defaults (`max_inflight = 4`, `max_inflight_total = 32`).
+- `opcua-latency`: one OPC UA device with 20,000 polled nodes, the standalone simulator behind a
+  20 ms round trip (`--latency 20ms`), a target of 80,000 readings/s (0.25 s polls). `main` has
+  no `--latency`, so the before line is this change with `max_inflight = 1`: one Read at a time,
+  as before.
+
+Medians of three runs; 0 missing values and 0 `te/errors` in every run.
+
+| Scenario | Build | Before | After (defaults) | Connector CPU before → after |
+| --- | --- | --- | --- | --- |
+| `polled-latency` | Rust | 21,941 readings/s (65.7 % short) | **64,000** (0.0 % short) | 6.8 % → 9.2 % |
+| `polled-latency` | C | 16,471 (74.3 % short) | **64,000** (0.0 % short) | 11.4 % → 18.8 % |
+| `opcua-latency` | Rust | 17,662 (`max_inflight = 1`) | **63,377** (20.8 % short) | 6.3 % → 18.1 % |
+| `opcua-latency` | C | 17,662 (`max_inflight = 1`) | **64,416** (19.5 % short) | 5.1 % → 13.1 % |
+| `opcua-latency`, `max_inflight = 8` (one run) | Rust / C | | **80,000 / 80,000** (0.0 % short) | 19.0 % / 13.3 % |
+
+| Target | Measured | Met |
 | --- | --- | --- |
-| Readings/s at a 64,000/s target | 22,917 (Rust), 19,667 (C) | ≥ 58,000 in both builds: the four-instance figure |
-| One 20,000-point OPC UA device at 20 ms round trip | 19,484 | ≥ 70,000 with K = 4 against `ot-conformance serve opcua` |
-| Connector CPU | 4–7 % | ≤ 25 % |
-| A busy endpoint (`server_inflight = 2`) | — | no `bad` readings from refusals; the effective budget stays between 1 and 3 |
+| One instance reaches ≥ 58,000 readings/s on `polled-latency` | 64,000 in both builds | Yes |
+| One OPC UA device reaches ≥ 70,000 readings/s at a 20 ms round trip with K = 4 | 63,377 (Rust), 64,416 (C) | No |
+| Connector CPU ≤ 25 % | 9.2–18.8 % | Yes |
+| No lost readings, no errors | 0 / 0 | Yes |
 
-The before lines are recorded in `bench/results/` by the first task, from the same host.
+- `polled-latency` went from 22,000 (Rust) and 16,500 (C) to the full 64,000 readings/s: about
+  three and four times. The connector stays mostly idle, and the C build now delivers what the
+  Rust build does.
+- `opcua-latency` with the default budget of 4 reached 3.6 times the one-Read rate but missed the
+  70,000 target. With four Reads in flight at a 20 ms round trip, the scratch client (no decoding,
+  no publishing) reached 77,278 readings/s; the connector reaches about 83 % of that, and a pass
+  of 40 blocks takes about 315 ms against a 250 ms poll interval. The miss comes from the budget,
+  not the connector: with `max_inflight = 8` both builds read the full 80,000 readings/s at under
+  20 % of a core. The default stays at 4 because the serial server measured in Context gains
+  nothing beyond it; a site with a server that handles requests in parallel raises it, and the
+  guide says so.
+- Building the C pool exposed two costs that were not concurrency itself: the loop scanned every
+  point of every idle device on each pass (31 % → 19 % of a core once a device's next due time is
+  kept), and `UA_Client_run_iterate` runs for its whole timeout (10 ms → 1 ms: 51,930 → 70,175
+  readings/s in a single check run).
+- Grid scheduling (polls one interval after they were due, not after the loop reached them) took
+  Rust's single-instance `polled-latency` from 53,333 (16.7 % short) to 64,000 in a single check
+  run, and removes the 11 % late-poll shortfall noted in `doc/performance.md`.
 
 ## Risks / Trade-offs
 
@@ -209,8 +250,12 @@ With the defaults, devices on different endpoints are read in parallel and OPC U
 to four Reads at once. A site that needs today's behavior sets `max_inflight = 1` on
 `[connector]`. Downgrading restores the serial loop. Nothing is stored.
 
+### D10. SNMP is not pipelined in the Rust build
+`snmp2`'s `AsyncSession::get` takes `&mut self` and answers into the session's own buffer, so one
+session carries one request at a time. Pipelining would mean sharing one socket and matching
+responses to request ids ourselves. The Rust SNMP module therefore gets concurrency across agents
+only: its reader shares the device's session behind a lock. Answered in task 4.4.
+
 ## Open Questions
 
-- SNMP pipelining in the Rust build depends on `snmp2`'s async API (vendored); to be checked in
-  the first SNMP task. If it does not allow several requests in flight, Rust SNMP gets concurrency
-  across agents only.
+None.

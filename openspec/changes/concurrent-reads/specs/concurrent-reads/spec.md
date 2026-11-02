@@ -48,7 +48,7 @@ them. A module's cap for an endpoint SHALL always apply: 1 for a serial or CAN b
 flight across all endpoints. A read SHALL take one request of its endpoint's budget, waiting if
 none is free, and then as many more as are free, up to what the module asks for; every device on
 an endpoint SHALL therefore make progress. The capability descriptor SHALL list each endpoint with
-its devices, its configured budget and its effective budget.
+its devices and its budget (`max_inflight`, after the module's cap).
 
 #### Scenario: Two devices share a PLC
 - **WHEN** two devices name the same OPC UA endpoint, one with `max_inflight = 2` and the other with the default
@@ -68,13 +68,13 @@ its devices, its configured budget and its effective budget.
 
 ### Requirement: Backoff on a busy endpoint
 An endpoint's effective budget SHALL halve, to at least 1, when a request is answered with OPC UA
-`BadTooManyOperations`, `BadServerTooBusy` or `BadTooManySessions`, or times out while another
-request to the same endpoint is in flight. After 20 successful requests at a reduced budget it
+`BadServerTooBusy` or `BadResourceUnavailable`, or times out while another request to the same
+endpoint is in flight. `BadTooManyOperations` SHALL NOT count as busy. After 20 successful requests at a reduced budget it
 SHALL grow by one, up to the configured budget. Each change SHALL be logged at `info` with the
 endpoint and the new budget. A request refused as busy SHALL be sent again within the same call
-once the effective budget allows, until the call's `operation_timeout`; only then SHALL its points
-fail. A timeout with no other request in flight SHALL be handled as a link failure, as before.
+once the effective budget allows, at most 8 times and within the call's `operation_timeout`; only
+then SHALL its points fail. A timeout with no other request in flight SHALL be handled as a link failure, as before.
 
 #### Scenario: A server that serves two at a time
 - **WHEN** a bench endpoint with `server_inflight = 2` is read with `max_inflight = 4`
-- **THEN** the effective budget stays between 1 and 3 after the first refusal, no point is published `bad` for it, and the descriptor shows the effective budget
+- **THEN** the effective budget stays between 1 and 3 after the first refusal, no point is published `bad` for it, and each change is logged with the endpoint and the new budget

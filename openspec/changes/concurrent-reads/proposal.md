@@ -27,8 +27,8 @@ also lets one frozen device delay every other device's reads and outage detectio
   device on the same endpoint and by the blocks of a pipelined read. A module names each device's
   endpoint (host and port, serial port, CAN interface) and caps it: a serial bus or a CAN bus is
   always 1. Devices sharing an endpoint use the smallest `max_inflight` among them.
-- **Backoff**: an endpoint that answers "too busy" (OPC UA `BadTooManyOperations`,
-  `BadServerTooBusy`, `BadTooManySessions`) or times out while other requests are in flight has its
+- **Backoff**: an endpoint that answers "too busy" (OPC UA `BadServerTooBusy` or
+  `BadResourceUnavailable`) or times out while other requests are in flight has its
   budget halved, and regains one step after a run of successful reads.
 - **A total cap** on reads in flight across all endpoints, `max_inflight_total` (default 32), which
   bounds the C build's worker threads.
