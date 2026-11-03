@@ -2267,6 +2267,7 @@ fn build_sample(id: &str, model: &OpcuaPoint, dv: &DataValue, types: &resolve::S
     Sample {
         source_value: None,
         source_ts: data_value_source_ts(dv),
+        replayed: false,
         ts: OffsetDateTime::now_utc(),
         device: String::new(),
         protocol: PROTOCOL,
@@ -2405,6 +2406,7 @@ fn bad_sample(id: &str, model: Option<&OpcuaPoint>, error: &str) -> Sample {
     Sample {
         source_value: None,
         source_ts: None,
+        replayed: false,
         ts: OffsetDateTime::now_utc(),
         device: String::new(),
         protocol: PROTOCOL,

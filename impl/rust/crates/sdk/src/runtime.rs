@@ -756,7 +756,7 @@ pub async fn run_until_reloadable(
                         .then(|| samples.iter().find_map(|s| s.error.clone()))
                         .flatten();
                     for s in samples {
-                        if let Some(mut s) = reporter.offer(map_sample(s, &meta_index)) {
+                        for mut s in reporter.offer(map_sample(s, &meta_index)) {
                             publisher.reading(&client, &mut s, &meta_index).await;
                         }
                     }
@@ -839,7 +839,7 @@ pub async fn run_until_reloadable(
                         point_health.note(&device, &samples, true);
                     }
                     for s in samples {
-                        if let Some(mut s) = reporter.offer(map_sample(s, &meta_index)) {
+                        for mut s in reporter.offer(map_sample(s, &meta_index)) {
                             publisher.reading(&client, &mut s, &meta_index).await;
                         }
                     }
@@ -927,7 +927,7 @@ pub async fn run_until_reloadable(
                 while let Some(mut sample) = next.take() {
                     stamp(std::slice::from_mut(&mut sample), delivered);
                     point_health.note(&sample.device.clone(), std::slice::from_ref(&sample), false);
-                    if let Some(mut sample) = reporter.offer(map_sample(sample, &meta_index)) {
+                    for mut sample in reporter.offer(map_sample(sample, &meta_index)) {
                         publisher.reading(&client, &mut sample, &meta_index).await;
                     }
                     taken += 1;
@@ -1104,7 +1104,7 @@ pub async fn run_stdout_until(
                         split_link_lost(stamped(bounded(limits, "read", connector.read_points(&device, &points)).await));
                     for s in samples.iter_mut() {
                         s.device = device.clone();
-                        if let Some(mut s) = reporter.offer(map_sample(s.clone(), &meta_index)) {
+                        for mut s in reporter.offer(map_sample(s.clone(), &meta_index)) {
                             print_sample(&mut s, &mut seq_counters, &meta_index);
                         }
                     }
@@ -1169,7 +1169,7 @@ pub async fn run_stdout_until(
                         }
                     }
                     for s in reporter.heartbeat_result(caps.protocol, &device, &points, result) {
-                        if let Some(mut s) = reporter.offer(map_sample(s, &meta_index)) {
+                        for mut s in reporter.offer(map_sample(s, &meta_index)) {
                             print_sample(&mut s, &mut seq_counters, &meta_index);
                         }
                     }
@@ -1241,7 +1241,7 @@ pub async fn run_stdout_until(
             Some(sample) = sample_rx.recv() => {
                 let mut sample = sample;
                 stamp(std::slice::from_mut(&mut sample), OffsetDateTime::now_utc());
-                if let Some(mut sample) = reporter.offer(map_sample(sample, &meta_index)) {
+                for mut sample in reporter.offer(map_sample(sample, &meta_index)) {
                     print_sample(&mut sample, &mut seq_counters, &meta_index);
                 }
             }
@@ -1260,6 +1260,8 @@ struct Reporter {
     states: HashMap<(String, String), ReportState<Sample>>,
     /// How to read each of those points on demand, keyed like `states`.
     points: HashMap<(String, String), (usize, PointRef)>,
+    /// Points already warned about a replayed sample without a source time.
+    unstamped_replays: HashSet<(String, String)>,
 }
 
 impl Reporter {
@@ -1293,24 +1295,40 @@ impl Reporter {
                 points.insert(key, (device_index, point_ref(point, device.default_mode)));
             }
         }
-        Reporter { epoch, states, points }
+        Reporter { epoch, states, points, unstamped_replays: HashSet::new() }
     }
 
     fn now(&self) -> Duration {
         self.epoch.elapsed()
     }
 
-    /// The sample to publish now for this reading, if any.
-    fn offer(&mut self, sample: Sample) -> Option<Sample> {
+    /// The samples to publish now for this reading: none, the reading, or, for a replayed one, a
+    /// held reading whose interval ended in source time first (§5.3).
+    fn offer(&mut self, sample: Sample) -> Vec<Sample> {
         let now = self.now();
-        match self.states.get_mut(&(sample.device.clone(), sample.point.clone())) {
-            None => Some(sample),
-            Some(state) => {
-                let obs = Obs::of(&sample);
-                let quality = sample.quality;
-                state.offer(sample, obs, quality, now)
+        let key = (sample.device.clone(), sample.point.clone());
+        let Some(state) = self.states.get_mut(&key) else {
+            return vec![sample];
+        };
+        let obs = Obs::of(&sample);
+        let quality = sample.quality;
+        if sample.replayed {
+            match sample.source_ts {
+                Some(src) => {
+                    let src = Duration::from_millis(u64::try_from(src.unix_timestamp_nanos() / 1_000_000).unwrap_or(0));
+                    return state.offer_replayed(sample, obs, quality, src, now);
+                }
+                None => {
+                    if self.unstamped_replays.insert(key) {
+                        warn!(
+                            device = %sample.device, point = %sample.point,
+                            "a replayed sample has no source time; it is reported as a live one"
+                        );
+                    }
+                }
             }
         }
+        state.offer(sample, obs, quality, now).into_iter().collect()
     }
 
     /// Held readings to publish now, and the heartbeat reads due, per device index.
@@ -1377,6 +1395,7 @@ impl Reporter {
                     error: Some(e.to_string()),
                     source_value: None,
                     source_ts: None,
+                    replayed: false,
                 })
                 .collect(),
         }
@@ -3869,6 +3888,7 @@ protocol_address = {}
             error: None,
             source_value: None,
             source_ts: None,
+            replayed: false,
         };
         let env = envelope_with_meta(&map_sample(sample(Some(1.0), Quality::Good), &index), &index);
         assert_eq!(env["value"], serde_json::json!("running"));
@@ -3910,6 +3930,7 @@ protocol_address = {}
             error: None,
             source_value: None,
             source_ts: None,
+            replayed: false,
         };
         let mut index = HashMap::new();
         index.insert(
@@ -3960,6 +3981,7 @@ protocol_address = {}
         let sample = |source_ts| Sample {
             ts: OffsetDateTime::UNIX_EPOCH,
             source_ts,
+            replayed: false,
             device: "d".into(),
             protocol: "test",
             point: "p".into(),
@@ -4031,6 +4053,7 @@ protocol_address = {}
             error: None,
             source_value: None,
             source_ts: None,
+            replayed: false,
         };
         let (samples, failure) = split_link_lost(Err(ConnectorError::LinkLost {
             samples: vec![good.clone()],
@@ -4070,6 +4093,7 @@ protocol_address = {}
             error: error.map(str::to_string),
             source_value: None,
             source_ts: None,
+            replayed: false,
         };
         let lines = |health: &mut PointHealth, samples: &[Sample], batch| {
             health
@@ -4241,7 +4265,7 @@ protocol_address = {}
         );
         assert_eq!(failed.len(), 2);
         assert!(failed.iter().all(|s| s.quality == Quality::Bad && s.error.is_some()));
-        assert!(failed.into_iter().all(|s| reporter.offer(s).is_some()));
+        assert!(failed.into_iter().all(|s| !reporter.offer(s).is_empty()));
 
         // `Unsupported` (or no sample for a point) means the point cannot be read on demand.
         assert!(reporter
@@ -4252,6 +4276,62 @@ protocol_address = {}
         assert!(!reporter.states.get_mut(&key).unwrap().due(later, true).read);
         let temp = ("srv".to_string(), "temp".to_string());
         assert!(reporter.states.get_mut(&temp).unwrap().due(later, true).read);
+    }
+
+    /// A replayed sample's intervals run on its source time, so a burst of history keeps the
+    /// policy's rate; a replayed sample without a source time is reported as a live one.
+    #[test]
+    fn replayed_samples_run_the_policy_on_source_time() {
+        let config: ConnectorConfig = toml::from_str(
+            r#"
+[connector]
+protocol = "aveva-pi"
+report = { min_interval = "10s" }
+
+[[device]]
+name = "pi"
+protocol_address = {}
+
+  [[device.point]]
+  id = "temp"
+  datatype = "float64"
+  address = {}
+"#,
+        )
+        .unwrap();
+        let mut reporter = Reporter::new(&config);
+        let start = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let sample = |n: f64, source_ts: Option<OffsetDateTime>, replayed: bool| Sample {
+            ts: start,
+            device: "pi".into(),
+            protocol: "aveva-pi",
+            point: "temp".into(),
+            mode: Mode::Typed,
+            datatype: Some(DataType::Float64),
+            value: Some(crate::model::Value::Number(n)),
+            raw: Vec::new(),
+            raw_group: 1,
+            quality: Quality::Good,
+            unit: None,
+            addr: serde_json::json!({}),
+            seq: None,
+            error: None,
+            source_value: None,
+            source_ts,
+            replayed,
+        };
+        // 30 seconds of one-per-second history, offered at once: one reading per 10 s of
+        // source time comes out, not just the first.
+        let mut published = 0;
+        for i in 0..30 {
+            let ts = start + time::Duration::seconds(i);
+            published += reporter.offer(sample(i as f64, Some(ts), true)).len();
+        }
+        assert_eq!(published, 3);
+
+        // Without a source time the sample is live: held behind the interval on the runtime clock.
+        assert!(reporter.offer(sample(99.0, None, true)).is_empty());
+        assert!(reporter.unstamped_replays.contains(&("pi".to_string(), "temp".to_string())));
     }
 
     #[test]

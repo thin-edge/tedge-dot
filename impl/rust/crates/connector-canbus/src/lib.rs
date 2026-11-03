@@ -474,6 +474,7 @@ fn build_sample(device: &DeviceId, point_id: &str, pt: &CanPoint, payload: &[u8]
         Mode::Raw => Sample {
             source_value: None,
             source_ts: None,
+            replayed: false,
             ts,
             device: device.clone(),
             protocol: PROTOCOL,
@@ -503,6 +504,7 @@ fn build_sample(device: &DeviceId, point_id: &str, pt: &CanPoint, payload: &[u8]
             Sample {
                 source_value: None,
                 source_ts: None,
+                replayed: false,
                 ts,
                 device: device.clone(),
                 protocol: PROTOCOL,
@@ -526,6 +528,7 @@ fn make_bad_sample(device: &DeviceId, point_id: &str, error: &str, ts: OffsetDat
     Sample {
         source_value: None,
         source_ts: None,
+        replayed: false,
         ts,
         device: device.clone(),
         protocol: PROTOCOL,
