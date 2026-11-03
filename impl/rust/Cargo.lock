@@ -2193,6 +2193,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tedge-dot-sdk",
+ "time",
  "tokio",
  "tokio-modbus",
  "toml",
