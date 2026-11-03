@@ -143,4 +143,7 @@ fn migration_script_output_loads() {
     assert_eq!(ids, ["SINUSOID", "REACTOR01_TEMP", "TICKS", "COUNT16", "PUMP01_STATE", "BATCH_ID", "LAST_CHANGE", "NOPE"]);
     assert_eq!(d.points[1].address, Address::Point("\\\\PISRV01\\REACTOR01.TEMP".into()));
     assert!(d.points.iter().all(|p| p.datatype.is_some()));
+    // A digital tag is its state code, a number, as the plugin's series was: a `string` point
+    // would publish no measurement.
+    assert_eq!(d.points[4].datatype, Some(tedge_dot_sdk::DataType::Int32));
 }

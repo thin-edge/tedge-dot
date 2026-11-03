@@ -198,7 +198,7 @@ Default datatypes (used by the migration script, §9; the configuration must sti
 | Float16, Float32 | `float32` |
 | Float64 | `float64` |
 | Int16 / Int32 | `int16` / `int32` |
-| Digital | `int32` (code) or `string` (name) |
+| Digital | `int32`: the state code, a measurement series. `string` gives the name from PI's state set instead, which is no measurement; configure both points for both |
 | String, Timestamp | `string` |
 | Blob | raw mode only |
 

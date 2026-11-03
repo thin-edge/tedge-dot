@@ -36,7 +36,7 @@ protocol_address = { base_url = "https://pi.example.com/piwebapi", data_server =
 
   [[device.point]]
   id       = "PUMP01_STATE"
-  datatype = "string"
+  datatype = "int32"
   address  = { tag = "PUMP01.STATE" }
 
   [[device.point]]

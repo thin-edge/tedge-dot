@@ -18,6 +18,7 @@ AVEVA, PI System and PI Web API are trademarks of AVEVA Group Limited or its sub
 | Password in `pi_config.json`, base64-encoded | Password, token or key in a file the config names; client certificates and Bearer tokens supported |
 | Read only | Writes, and PI points as Cumulocity device parameters |
 | A batch ledger file to stay under 16 KB per message | Measurement output (`output = "measurements"`) batches samples |
+| Measurements on the gateway device | Measurements on a child device per PI Web API endpoint, with a link status and availability |
 
 ## Configuration mapping
 
@@ -58,15 +59,45 @@ The generated config keeps the plugin's `POLL_INTERVAL` and uses the connector's
 delivery, Channels. Set `delivery = "snapshot"` in `protocol_address` to keep the plugin's behavior
 of one current value per poll.
 
-## Measurement names
+## What changes in Cumulocity
 
-Point ids are the tag names with `.` replaced by `_`, which is how the plugin named its Cumulocity
-series, so existing series keep their names. Two tags that differ only in `.` and `_` collide in
-both; the script warns about them.
+The connector reads the same PI tags, but its measurements reach Cumulocity on another device
+and under another type, so they are new series there. The plugin's history stays on the gateway
+device; dashboards and data exports that read it need to point at the new device and type.
 
-The measurement fragment is the connector's: with `output = "measurements"` the measurement type
-and fragment follow the measurement output rules ([doc/measurement-output.md](../measurement-output.md)),
-not the plugin's. Cumulocity dashboards that select by fragment need updating.
+| | Plugin | Connector |
+| --- | --- | --- |
+| Device | The gateway (main device): the plugin publishes to `c8y/measurement/measurements/create` | A child device per `[[device]]`, external id `<gateway>:device:<name>`, registered by the `ot-registration` flow |
+| Measurement type and fragment | `pi_historianMeasurement_batch<N>`, from the plugin's batch ledger | `aveva-pi` (the protocol), or a point's `meta.measurement.group` |
+| Series | Tag name with `.` replaced by `_` | The point id; the script writes the same names |
+| Unit | PI `EngineeringUnits`, in every measurement | The same unit, published once as metadata; the c8y mapper adds it to the series |
+| Digital tag | `value` = state code, plus `stringValue` = state name | `value` = state code (`datatype = "int32"`); the name is not sent |
+| Tag metadata | Twin fragments `pi_historianMetadata_batch<N>` on the gateway, holding each tag's PI Descriptor | None |
+
+Point ids are the tag names with `.` replaced by `_`. Two tags that differ only in `.` and `_`
+get the same id; the script warns about them.
+
+A digital tag stays a numeric series of its state codes. The script writes it as `int32`: a
+`string` point carries PI's state name, which the measurement flow does not publish. A PI digital
+state set is an enumeration the server already holds, so the connector reads the names from PI
+and needs no `map` for them. To have both, configure the tag twice: an `int32` point for the
+series and a `string` point for the name (for a device parameter, an alarm or an event):
+
+```toml
+  [[device.point]]
+  id       = "PUMP01_STATE"
+  datatype = "int32"
+  address  = { tag = "PUMP01.STATE" }
+
+  [[device.point]]
+  id       = "PUMP01_STATE_name"
+  datatype = "string"
+  address  = { tag = "PUMP01.STATE" }
+```
+
+The plugin looks tags up with `PointType:Float32` by default, so it only found Float32 points. The
+connector finds every point type, so a datapoints list may now produce series that the plugin
+silently skipped.
 
 ## Timestamps
 

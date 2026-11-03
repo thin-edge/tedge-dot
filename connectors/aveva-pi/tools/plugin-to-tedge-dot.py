@@ -7,8 +7,8 @@
 The community plugin lists tag names only. tedge-dot needs a datatype for each point, so this
 script asks the PI Web API for each tag's point type (one lookup per tag, once) and writes the
 default datatype of doc/connectors/aveva-pi-connector-spec.md §4. Point ids are the tag names with
-`.` replaced by `_`, which is how the plugin named its Cumulocity series, so existing series keep
-their names.
+`.` replaced by `_`, the plugin's series names. The measurements still land on a different device
+with a different type: see doc/migration/aveva-pi-plugin.md.
 
 The password is NOT written to the output: put it in the file the output names
 (`password_file`). Python standard library only.
@@ -28,7 +28,9 @@ DATATYPES = {
     "Float64": "float64",
     "Int16": "int16",
     "Int32": "int32",
-    "Digital": "string",
+    # The state code, which the plugin sent as the series value: a numeric series, as before.
+    # (`string` would carry PI's state name instead, which produces no measurement.)
+    "Digital": "int32",
     "String": "string",
     "Timestamp": "string",
 }
