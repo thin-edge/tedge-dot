@@ -104,7 +104,7 @@ connection or device level. A management command may not add, change or remove t
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `base_url` | yes | The PI Web API root, `https://host/piwebapi` (`http://` allowed, logged at `warn`). |
+| `base_url` | yes | The PI Web API root, `https://host/piwebapi`. `http://` is allowed only without authentication (any `auth.method` but `none` is refused at load: credentials never go over plain HTTP), and is logged at `warn`. |
 | `data_server` | for `tag` points | The PI Data Archive that bare tag names live in. |
 | `af_database` | no | `\\<af server>\<database>`, the prefix of relative attribute paths. |
 | `delivery` | no | `"channel"` (default), `"recorded"` or `"snapshot"` (§5). |

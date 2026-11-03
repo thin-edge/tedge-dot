@@ -94,6 +94,8 @@ def test_generates_the_golden_config(tmp_path, monkeypatch, capsys, pi_url):
     assert out == GOLDEN.read_text()
     assert "8 points written (1 not found on PISRV01)" in err
     assert "NOPE: not found on PISRV01; written as float64" in err
+    # The simulator here is plain HTTP, which the connector refuses with Basic auth.
+    assert "is plain HTTP: the connector refuses Basic auth over it" in err
 
 
 def test_password_is_never_written(tmp_path, monkeypatch, capsys, pi_url):

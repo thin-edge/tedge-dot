@@ -86,6 +86,21 @@ fn auth_methods() {
     assert!(e.contains("kerberos"), "{e}");
 }
 
+/// Credentials are never sent over plain HTTP; a server without authentication may use it.
+#[test]
+fn credentials_need_https() {
+    const HTTP: &str = r#"{ base_url = "http://pi/piwebapi", data_server = "S" }"#;
+    for (method, auth) in [
+        ("basic", r#"auth = { method = "basic", username = "u", password_file = "/p" }"#),
+        ("bearer", r#"auth = { method = "bearer", token_file = "/t" }"#),
+        ("certificate", r#"auth = { method = "certificate", cert_file = "/c", key_file = "/k" }"#),
+    ] {
+        let e = load(&device(HTTP, r#"{ tag = "A" }"#, auth)).unwrap_err();
+        assert!(e.contains(&format!("auth method '{method}' needs https://")), "{e}");
+    }
+    load(&device(HTTP, r#"{ tag = "A" }"#, "")).unwrap();
+}
+
 #[test]
 fn device_overrides_the_connection() {
     let address = r#"{ base_url = "http://pi/piwebapi", data_server = "S", delivery = "recorded", request_timeout = "2s", backfill = false }"#;

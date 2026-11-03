@@ -465,6 +465,20 @@ pub fn device(name: &str, address: &Json, conn: &Settings, points: &[PointConfig
     };
     let mut settings = conn.clone();
     apply(&mut settings, m, "protocol_address")?;
+    // A password or token goes in every request's header, and a client certificate needs TLS:
+    // plain HTTP is for servers without authentication only.
+    let method = match settings.auth {
+        Auth::None => None,
+        Auth::Basic { .. } => Some("basic"),
+        Auth::Bearer { .. } => Some("bearer"),
+        Auth::Certificate { .. } => Some("certificate"),
+    };
+    if let (Some(method), true) = (method, base_url.starts_with("http://")) {
+        return Err(format!(
+            "protocol_address.base_url '{base_url}': auth method '{method}' needs https://, \
+             credentials are never sent over plain HTTP"
+        ));
+    }
     let data_server = string(m, "data_server", "protocol_address")?;
     let af_database = string(m, "af_database", "protocol_address")?;
     let mut parsed = Vec::with_capacity(points.len());

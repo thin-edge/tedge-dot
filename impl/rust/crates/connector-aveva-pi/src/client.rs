@@ -246,6 +246,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(base_url: &str, settings: &Settings) -> Result<Client, String> {
+        // The config refuses this already (config::device); never read a secret for plain HTTP.
+        if !base_url.starts_with("https://") && !matches!(settings.auth, Auth::None) {
+            return Err(format!("{base_url}: credentials are only sent over https://"));
+        }
         let tls = Arc::new(tls_config(&settings.tls, &settings.auth)?);
         let credentials = match &settings.auth {
             Auth::None | Auth::Certificate { .. } => Credentials::None,

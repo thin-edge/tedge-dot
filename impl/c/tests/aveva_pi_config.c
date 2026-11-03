@@ -149,6 +149,25 @@ static void inline_secrets_are_refused(void) {
                  "auth.token", "token_file", NULL);
 }
 
+/* Credentials are never sent over plain HTTP; a server without authentication may use it. */
+static void credentials_need_https(void) {
+    static const char HTTP[] = "{ base_url = \"http://pi/piwebapi\", data_server = \"S\" }";
+    expect_error("basic over http",
+                 device(HTTP, "{ tag = \"A\" }",
+                        "auth = { method = \"basic\", username = \"u\", password_file = \"/p\" }"),
+                 "auth method 'basic' needs https://", NULL);
+    expect_error("bearer over http",
+                 device(HTTP, "{ tag = \"A\" }", "auth = { method = \"bearer\", token_file = \"/t\" }"),
+                 "auth method 'bearer' needs https://", NULL);
+    expect_error("certificate over http",
+                 device(HTTP, "{ tag = \"A\" }",
+                        "auth = { method = \"certificate\", cert_file = \"/c\", key_file = \"/k\" }"),
+                 "auth method 'certificate' needs https://", NULL);
+    loaded_t l;
+    CHECK(load(device(HTTP, "{ tag = \"A\" }", ""), &l) == 0, "no auth over http: %s", l.err);
+    unload(&l);
+}
+
 static void auth_methods(void) {
     loaded_t l;
     CHECK(load(device(ADDR, "{ tag = \"A\" }",
@@ -277,6 +296,7 @@ int main(void) {
     address_errors();
     inline_secrets_are_refused();
     auth_methods();
+    credentials_need_https();
     device_overrides_the_connection();
     unknown_keys_and_bad_values();
     descriptor_and_local_only();

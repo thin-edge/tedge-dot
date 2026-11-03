@@ -124,6 +124,9 @@ impl AvevaPiConnector {
             reason,
             info: Some(info.clone()),
         };
+        if d.base_url.starts_with("http://") {
+            warn!(device = %d.name, "base_url is plain HTTP: readings and writes are not encrypted");
+        }
         if d.settings.tls.insecure_skip_verify && d.base_url.starts_with("https://") {
             warn!(device = %d.name, "tls.insecure_skip_verify is set: the server's certificate is not verified");
         }

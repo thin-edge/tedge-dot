@@ -70,7 +70,9 @@ with a reason that names the TLS failure.
 as `Authorization: Bearer`, and SHALL re-read the file once after a 401 before treating the
 credentials as rejected. `certificate` SHALL present `cert_file` and `key_file` as a TLS client
 certificate. A password or token given inline SHALL be rejected at load. Trailing newlines in
-secret files SHALL be ignored.
+secret files SHALL be ignored. Any method other than `none` with an `http://` `base_url` SHALL be
+rejected at load: credentials are never sent over plain HTTP. A device on `http://` SHALL be
+logged at `warn` when it connects.
 
 #### Scenario: Basic auth
 - **WHEN** the simulator requires Basic auth and the configuration gives the right username and password file
@@ -83,6 +85,10 @@ secret files SHALL be ignored.
 #### Scenario: Client certificate
 - **WHEN** the simulator requires a client certificate and `auth.method = "certificate"` names a valid pair
 - **THEN** reads succeed, and without the pair the TLS handshake fails
+
+#### Scenario: Credentials over plain HTTP
+- **WHEN** a device has `base_url = "http://…"` and `auth.method` is `basic`, `bearer` or `certificate`
+- **THEN** loading fails with an error naming the method and `https://`; with `method = "none"` it loads
 
 #### Scenario: Inline password
 - **WHEN** the configuration sets `auth.password = "secret"`

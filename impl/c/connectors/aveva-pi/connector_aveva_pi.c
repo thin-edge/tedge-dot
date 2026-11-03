@@ -546,6 +546,16 @@ static int configure_device(const pi_settings_t *conn, tdot_device_t *dev, char 
     pd->settings = *conn;
     if (apply(&pd->settings, m, what, err, errlen) != 0)
         goto fail;
+    /* A password or token goes in every request's header, and a client certificate needs TLS:
+     * plain HTTP is for servers without authentication only. */
+    if (pd->settings.auth != PI_AUTH_NONE && strncmp(pd->base_url, "http://", 7) == 0) {
+        static const char *const methods[] = {"none", "basic", "bearer", "certificate"};
+        snprintf(err, errlen,
+                 "protocol_address.base_url '%s': auth method '%s' needs https://, credentials "
+                 "are never sent over plain HTTP",
+                 pd->base_url, methods[pd->settings.auth]);
+        goto fail;
+    }
     if (opt_string(m, "data_server", what, pd->data_server, sizeof pd->data_server, err,
                    errlen) < 0 ||
         opt_string(m, "af_database", what, pd->af_database, sizeof pd->af_database, err,
@@ -940,6 +950,9 @@ static int connect_device(tdot_connector_t *self, tdot_device_t *dev, char *err,
         return -1;
     }
     const pi_settings_t *s = &pd->settings;
+    if (strncmp(pd->base_url, "http://", 7) == 0)
+        pi_log("warn", "device %s: base_url is plain HTTP: readings and writes are not encrypted",
+               dev->name);
     if (s->insecure_skip_verify && strncmp(pd->base_url, "https://", 8) == 0)
         pi_log("warn", "device %s: tls.insecure_skip_verify is set: the server's certificate is "
                        "not verified",

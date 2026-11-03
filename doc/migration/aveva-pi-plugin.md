@@ -24,7 +24,7 @@ AVEVA, PI System and PI Web API are trademarks of AVEVA Group Limited or its sub
 
 | Plugin | Connector |
 | --- | --- |
-| `pi_config.json` `PI_URL` | `[[device]] protocol_address.base_url` |
+| `pi_config.json` `PI_URL` | `[[device]] protocol_address.base_url`. With a username and password it must be `https://`: the connector refuses to send credentials over plain HTTP |
 | `PI_USER`, `PI_PASSWORD` | `[connection] auth = { method = "basic", username = "...", password_file = "..." }`; the password goes into the file, in clear text, mode 0600 |
 | `POLL_INTERVAL` | `[connector] poll_interval` (snapshot delivery); with Channels, values arrive as PI archives them |
 | `RECORDING_AT_TIME` | Not needed: the connector reads current values with `streamsets/value` and history with `streamsets/recorded` |

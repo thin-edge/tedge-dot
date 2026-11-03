@@ -59,6 +59,9 @@ def main(argv=None):
     with open(args.datapoints) as f:
         tags = json.load(f)
     base = pi["PI_URL"].rstrip("/")
+    if base.startswith("http:"):
+        print(f"warning: {base} is plain HTTP: the connector refuses Basic auth over it; "
+              f"change base_url to https:// before you start it", file=sys.stderr)
     user = pi.get("PI_USER", "")
     password = base64.b64decode(pi.get("PI_PASSWORD", "")).decode() if pi.get("PI_PASSWORD") else ""
 
