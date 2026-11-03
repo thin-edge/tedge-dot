@@ -5,6 +5,10 @@ is a Python container that polls an AVEVA PI Web API server and publishes measur
 thin-edge.io. tedge-dot's `aveva-pi` connector replaces it. This guide maps the plugin's
 configuration onto the connector and lists what changes.
 
+The connector is a **preview**: it is tested in CI against the project's PI Web API simulator,
+not yet against a real PI System. Run it beside the plugin on a test system before you switch,
+and [tell us how it went](https://github.com/thin-edge/tedge-dot/issues).
+
 AVEVA, PI System and PI Web API are trademarks of AVEVA Group Limited or its subsidiaries.
 
 ## What you gain

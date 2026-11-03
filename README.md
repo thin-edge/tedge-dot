@@ -63,14 +63,14 @@ one protocol, selected by `connector.protocol` in its config file.
 | Modbus (reference) | TCP + RTU | ✅ | ✅ |
 | OPC UA (None, Basic256Sha256, Aes128/Aes256 policies; username and X.509 users) | opc.tcp | ✅ | ✅ |
 | SNMP (v1/v2c/v3: polling, writes, traps and informs) | UDP | ✅ | ✅ (no SHA-2 / AES-192/256) |
-| AVEVA PI Web API (batched reads, Channels push, outage backfill, writes) | HTTPS + WebSocket | ✅ | ✅ |
 | CAN bus *(preview)* | Linux SocketCAN + DBC | ✅ | ✅ |
 | CANopen *(preview)* | Linux SocketCAN (SDO) | ✅ | ✅ |
 | PROFIBUS-DP *(preview)* | serial (Rust) / `tcp://` (C) | ❌ build from source (`--features profibus`, Linux only) | ✅ |
+| AVEVA PI Web API *(preview)* (batched reads, Channels push, outage backfill, writes) | HTTPS + WebSocket | ✅ | ✅ |
 
-**Preview:** the CAN bus, CANopen and PROFIBUS-DP connectors are tested in CI against simulators
-(a virtual SocketCAN bus and a PROFIBUS-DP slave simulator) but not yet on real equipment, so
-expect rough edges and changes. If you try one on real hardware, please
+**Preview:** the CAN bus, CANopen, PROFIBUS-DP and AVEVA PI Web API connectors are tested in CI
+against simulators (a virtual SocketCAN bus, a PROFIBUS-DP slave simulator and a PI Web API
+simulator) but not yet on real equipment or a real PI System, so expect rough edges and changes. If you try one on real hardware, please
 [tell us how it went](https://github.com/thin-edge/tedge-dot/issues).
 
 Rust modules: [connector-modbus](impl/rust/crates/connector-modbus/),
@@ -92,7 +92,7 @@ raised by the flows. The Rust build uses [snmp2](https://github.com/roboplc/snmp
 minimal static [net-snmp](https://github.com/net-snmp/net-snmp); see the
 [SNMP connector spec](doc/connectors/snmp-connector-spec.md).
 
-The AVEVA PI Web API connector reads PI points and AF attributes from a PI System over HTTPS,
+The AVEVA PI Web API connector *(preview)* reads PI points and AF attributes from a PI System over HTTPS,
 the first connector for a REST/JSON system rather than a fieldbus. WebIds are looked up once, one
 request reads all of a device's points, values are pushed over the PI Web API Channels WebSocket
 with their PI timestamps, and after an outage or a restart the gap is filled from the PI archive.

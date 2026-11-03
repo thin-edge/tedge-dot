@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Implementable |
+| Status | Implementable. The connector is a **preview**: tested against the project's PI Web API simulator, not yet against a real PI System. |
 | Protocol id | `aveva-pi` |
 | Crate | `connector-aveva-pi` (feature `aveva-pi`) · C module `impl/c/connectors/aveva-pi/` (option `TDOT_AVEVA_PI`) |
 | Builds on | Rust: [`reqwest`](https://github.com/seanmonstar/reqwest) with rustls (MIT/Apache-2.0), [`tokio-tungstenite`](https://github.com/snapview/tokio-tungstenite) with rustls (MIT). C: [libcurl](https://curl.se/libcurl/) ≥ 8.11 (curl license, MIT-style) built statically on the fetched mbedTLS 3.6, [cJSON](https://github.com/DaveGamble/cJSON) (MIT). [Connector SDK](../sdk/connector-sdk.md) |

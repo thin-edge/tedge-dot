@@ -91,6 +91,7 @@ pages:
     slug: reference/connectors/aveva-pi
     section: Connectors
     label: AVEVA PI Web API
+    badge: Preview
   - source: doc/connectors/rest-connectors.md
     slug: reference/connectors/rest-connectors
     section: Connectors

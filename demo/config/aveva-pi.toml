@@ -21,11 +21,14 @@ port = 1883
 [connection]
 state_dir = "/var/lib/tedge-dot/aveva-pi"
 
+# site:start device
 [[device]]
 name             = "pi-demo"
 type             = "aveva-pi-server"
 protocol_address = { base_url = "http://127.0.0.1:8480/piwebapi", data_server = "PISRV01", af_database = '\\AFSRV01\Plant' }
+# site:end device
 
+  # site:start points
   # Pushed over Channels, with their PI timestamps.
   [[device.point]]
   id       = "sinusoid"
@@ -60,3 +63,4 @@ protocol_address = { base_url = "http://127.0.0.1:8480/piwebapi", data_server = 
   access   = "read_write"
   address  = { tag = "SETPOINT" }
   meta.parameter = { key = "control.setpoint" }
+  # site:end points
