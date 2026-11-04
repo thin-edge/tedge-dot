@@ -391,10 +391,12 @@ target_link_libraries(tedge-dot-write PRIVATE tedge_dot_sdk)
 add_test(NAME write COMMAND tedge-dot-write)
 
 # AVEVA PI: the static libcurl has what the connector needs (TLS on mbedTLS, WebSockets) and
-# nothing it does not.
+# nothing it does not, and mbedTLS is thread-safe.
 if(TDOT_AVEVA_PI)
   add_executable(tedge-dot-aveva-pi-curl tests/aveva_pi_curl.c)
-  target_link_libraries(tedge-dot-aveva-pi-curl PRIVATE CURL::libcurl)
+  target_include_directories(tedge-dot-aveva-pi-curl PRIVATE ${_tdot_mbedtls_inc})
+  target_link_libraries(tedge-dot-aveva-pi-curl PRIVATE CURL::libcurl ${_tdot_mbedtls_link}
+                                                        Threads::Threads)
   add_test(NAME aveva-pi-curl COMMAND tedge-dot-aveva-pi-curl)
 
   # The decoder over the shared golden vectors (the Rust crate reads the same file), with the

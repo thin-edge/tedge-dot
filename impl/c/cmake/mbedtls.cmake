@@ -19,9 +19,16 @@ include(FetchContent)
 set(TDOT_MBEDTLS_URL
     "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2"
     CACHE STRING "mbedTLS 3.6.7 release tarball (a URL or a local path)")
+# Read here, at include time: inside the macro, CMAKE_CURRENT_LIST_DIR is the caller's.
+set(_tdot_mbedtls_user_config "${CMAKE_CURRENT_LIST_DIR}/mbedtls_user_config.h")
 
 macro(tdot_fetch_mbedtls)
   if(NOT TARGET mbedcrypto)
+    # Thread safety (cmake/mbedtls_user_config.h). A directory property, so it reaches the
+    # targets of this directory and of every subdirectory added after it: mbedTLS, curl and
+    # open62541 are all fetched below this call.
+    add_compile_definitions(
+      "MBEDTLS_USER_CONFIG_FILE=\"${_tdot_mbedtls_user_config}\"")
     set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
     set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
     set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
