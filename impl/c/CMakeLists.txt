@@ -56,6 +56,7 @@ add_library(tedge_dot_sdk STATIC
   sdk/src/config.c
   sdk/src/descriptor.c
   sdk/src/envelope.c
+  sdk/src/log.c
   sdk/src/report.c
   sdk/src/map.c
   sdk/src/measure.c
@@ -393,6 +394,12 @@ add_test(NAME health COMMAND tedge-dot-health)
 add_executable(tedge-dot-write tests/write.c)
 target_link_libraries(tedge-dot-write PRIVATE tedge_dot_sdk)
 add_test(NAME write COMMAND tedge-dot-write)
+
+# Log lines are written whole (log.h): several threads log at once and every line comes out
+# complete, exactly once.
+add_executable(tedge-dot-log tests/log.c)
+target_link_libraries(tedge-dot-log PRIVATE tedge_dot_sdk Threads::Threads)
+add_test(NAME log COMMAND tedge-dot-log)
 
 # AVEVA PI: the static libcurl has what the connector needs (TLS on mbedTLS, WebSockets) and
 # nothing it does not, and mbedTLS is thread-safe.
