@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.21](https://github.com/thin-edge/tedge-dot/compare/0.0.20...0.0.21) (2026-11-13)
+
+
+### Bug Fixes
+
+* **c:** write each log line in one call so parallel connectors no longer interleave ([#127](https://github.com/thin-edge/tedge-dot/issues/127)) ([6e3fe61](https://github.com/thin-edge/tedge-dot/commit/6e3fe6139137250b2752117406c0f2eec8eb692e))
+* **docs:** keep site links when syncing repository pages ([#125](https://github.com/thin-edge/tedge-dot/issues/125)) ([7454ece](https://github.com/thin-edge/tedge-dot/commit/7454ece6287adfd2e4e2c3910659e51d89b56a31)), closes [#122](https://github.com/thin-edge/tedge-dot/issues/122)
+
 ## [0.0.20](https://github.com/thin-edge/tedge-dot/compare/0.0.19...0.0.20) (2026-11-11)
 
 
