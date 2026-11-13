@@ -16,6 +16,7 @@
 #include "mosquitto.h"
 #include "tedge_dot/concurrency.h"
 #include "tedge_dot/health.h"
+#include "tedge_dot/log.h"
 #include "tedge_dot/measure.h"
 #include "tedge_dot/schedule.h"
 #include "tedge_dot/watch.h"
@@ -122,15 +123,12 @@ static int conn_endpoint(void *ctx, const tdot_device_t *dev, char *buf, size_t 
 static void rebuild_concurrency(rt_t *rt);
 static bool is_busy(const rt_t *rt, size_t index);
 
+/* One whole line per call (log.h): every connector logs from its own threads. */
 static void logmsg(const char *level, const char *fmt, ...) {
-    char ts[40];
-    tdot_now_rfc3339(ts, sizeof ts);
-    fprintf(stderr, "%s %-5s ", ts, level);
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    tdot_vlog(level, fmt, ap);
     va_end(ap);
-    fputc('\n', stderr);
 }
 
 static void publish(rt_t *rt, const char *topic, const char *payload,

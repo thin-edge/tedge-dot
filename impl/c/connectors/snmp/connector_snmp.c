@@ -38,6 +38,7 @@
 #include "snmp_netsnmp.h"
 #include "tedge_dot/connector.h"
 #include "tedge_dot/decode.h"
+#include "tedge_dot/log.h"
 #include "tedge_dot/runtime.h"
 
 #define SNMPC_QUEUE_LEN 256       /* notifications per device (§10) */
@@ -165,15 +166,13 @@ typedef struct {
     snmpc_source_log_t sources[SNMPC_SOURCE_LOG_LEN];
 } snmpc_state_t;
 
+/* One whole line per call (log.h): the trap listener and the other connectors log from their
+ * own threads. */
 static void snmpc_log(const char *level, const char *fmt, ...) {
-    char ts[40];
-    tdot_now_rfc3339(ts, sizeof ts);
-    fprintf(stderr, "%s %-5s ", ts, level);
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    tdot_vlog(level, fmt, ap);
     va_end(ap);
-    fputc('\n', stderr);
 }
 
 /* ---- addresses ----------------------------------------------------------- */
