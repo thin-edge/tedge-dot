@@ -22,6 +22,10 @@ versions = {
 }
 m = re.search(r"^project\(tedge-dot VERSION (\S+) .*x-release-please-version", open("impl/c/CMakeLists.txt").read(), re.M)
 versions["impl/c/CMakeLists.txt"] = m.group(1) if m else "<no x-release-please-version line>"
+ui_lock = json.load(open("ui/package-lock.json"))
+versions["ui/package.json"] = json.load(open("ui/package.json"))["version"]
+versions["ui/package-lock.json"] = ui_lock["version"]
+versions["ui/package-lock.json (packages[''])"] = ui_lock["packages"][""]["version"]
 
 workspace = tomllib.load(open("impl/rust/Cargo.toml", "rb"))["workspace"]
 members = {"tedge-dot"}

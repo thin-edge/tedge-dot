@@ -323,9 +323,43 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  ui:
+    name: Build the Device Management plugin
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build
+        working-directory: ui
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eux
+          npm ci --no-audit --no-fund
+          npm test
+          # The plugin's manifest carries the release version (release-please stamps it into
+          # package.json on a release; a snapshot gets the snapshot version).
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm run build
+          mkdir -p ../dist
+          cp dist/tedge-dot-ui.zip "../dist/tedge-dot-ui_${VERSION}.zip"
+          grep -q "\"version\": \"$VERSION\"" dist/tedge-dot-ui/cumulocity.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-ui
+          path: dist/tedge-dot-ui_*.zip
+          if-no-files-found: error
+
   publish:
     name: Publish release
-    needs: [version, rust, c]
+    needs: [version, rust, c, ui]
     # A production release + Cloudsmith push needs an explicit tag (release-please's, or one
     # typed into "Run workflow"); a manual run merely started FROM a tag stays a snapshot.
     if: needs.version.outputs.release == 'true' || inputs.publish_snapshot
@@ -347,6 +381,10 @@ jobs:
         with:
           name: packages-c
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages-ui
+          path: dist
 
       - name: One checksum file over every asset
         run: |
@@ -357,6 +395,7 @@ jobs:
           # otherwise ship a half release.
           ls dist/tedge-dot-rs_*.deb >/dev/null
           ls dist/tedge-dot-c_*.deb >/dev/null
+          ls dist/tedge-dot-ui_*.zip >/dev/null
 
       - name: Resolve release tag
         id: rel

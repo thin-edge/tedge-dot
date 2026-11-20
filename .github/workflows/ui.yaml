@@ -1,0 +1,55 @@
+name: UI
+
+# The Device Management plugin (ui/): unit tests, type check and build on every pull request
+# that touches it or the validation it shares with the docs site's config builder.
+on:
+  pull_request:
+    paths:
+      - "ui/**"
+      - "site/src/lib/config-builder.ts"
+      - "site/src/data/protocols.json"
+      - "doc/contract/schemas/**"
+      - "packaging/config/**"
+      - ".github/workflows/ui.yaml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build the Device Management plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install
+        working-directory: ui
+        run: npm ci --no-audit --no-fund
+      # The registration edit, naming, waiting, and the validation shared with the config builder
+      # (run against the packaged connector files).
+      - name: Unit tests
+        working-directory: ui
+        run: npm test
+      - name: Type check
+        working-directory: ui
+        run: npm run typecheck
+      # Also compiles the templates strictly and writes dist/tedge-dot-ui.zip.
+      - name: Build
+        working-directory: ui
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tedge-dot-ui
+          path: ui/dist/tedge-dot-ui.zip
+          if-no-files-found: error

@@ -73,6 +73,21 @@
         {
           "type": "generic",
           "path": "impl/c/CMakeLists.txt"
+        },
+        {
+          "type": "json",
+          "path": "ui/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "ui/package-lock.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "ui/package-lock.json",
+          "jsonpath": "$.packages[''].version"
         }
       ]
     }
