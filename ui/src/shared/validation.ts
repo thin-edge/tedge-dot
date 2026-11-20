@@ -3,7 +3,7 @@
  *
  * The rules are the docs site's config builder's: TOML syntax, then the contract schema
  * (doc/contract/schemas/config.schema.json) with the protocol shapes from
- * site/src/data/protocols.json. scripts/sync-validation.mjs copies that module into
+ * site/src/data/protocols.json. scripts/sync-site.mjs copies that module into
  * src/generated, so the UI and the config builder always give the same verdict.
  *
  * What only the gateway knows, such as which point libraries exist there, is out of reach.

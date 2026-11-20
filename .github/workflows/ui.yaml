@@ -1,12 +1,14 @@
 name: UI
 
 # The Device Management plugin (ui/): unit tests, type check and build on every pull request
-# that touches it or the validation it shares with the docs site's config builder.
+# that touches it or the model it shares with the docs site's config builder.
 on:
   pull_request:
     paths:
       - "ui/**"
       - "site/src/lib/config-builder.ts"
+      - "site/src/lib/form-options.ts"
+      - "site/src/lib/help.ts"
       - "site/src/data/protocols.json"
       - "doc/contract/schemas/**"
       - "packaging/config/**"

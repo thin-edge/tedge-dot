@@ -6,7 +6,8 @@ gateways. Gateways need no change: thin-edge.io's built-in file plugin installs 
 tedge-dot 0.0.13 or later applies them on its own.
 
 - **Management > OT connectors** lists the repository's connector files. Add, edit, delete, and
-  send a file to a gateway or to a group. The editor checks each file against the tedge-dot
+  send a file to a gateway or to a group. The editor shows a file as a form, with the sections and
+  help texts of the docs site's config builder, or as TOML, and checks it against the tedge-dot
   contract schema before it saves.
 - **OT connectors** tab on thin-edge.io gateways: the gateway's connector files with snapshots,
   saving to the repository, downloading and sending, like the Configuration tab. *Add connector

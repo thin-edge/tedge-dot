@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "sync": "node scripts/sync-validation.mjs",
+    "sync": "node scripts/sync-site.mjs",
     "prestart": "npm run sync",
     "start": "ng serve",
     "prebuild": "npm run sync",

@@ -40,7 +40,7 @@ site/.lighthouseci/
 site/preview.log
 
 # Device Management plugin (ui/): dependencies, build output and the validation copied in by
-# ui/scripts/sync-validation.mjs
+# ui/scripts/sync-site.mjs
 ui/node_modules/
 ui/dist/
 ui/src/generated/
