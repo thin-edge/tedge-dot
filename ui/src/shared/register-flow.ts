@@ -11,12 +11,12 @@ import { type WaitOptions, waitFor } from './wait';
 export interface RegistrationSteps {
   /** Whether the gateway offers the type now (reads the device again). */
   offersType(): Promise<boolean>;
-  /** The id of the newest snapshot of the list of managed files, if there is one. */
+  /** The event id of the newest snapshot of the list of managed files, if there is one. */
   latestSnapshotId(): Promise<string | undefined>;
   /** Asks the gateway for a snapshot of the list, and waits until the operation succeeds. */
   requestSnapshot(): Promise<void>;
-  /** The newest snapshot of the list, with its text. */
-  latestSnapshot(): Promise<{ id?: string; text: string } | undefined>;
+  /** The newest snapshot of the list, with its event id and text. */
+  latestSnapshot(): Promise<{ id: string; text: string } | undefined>;
   /** Sends the new list to the gateway and waits until the operation succeeds. */
   sendList(text: string): Promise<void>;
 }

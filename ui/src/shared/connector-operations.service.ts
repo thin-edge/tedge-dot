@@ -1,5 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import {
+  EventBinaryService,
   IManagedObject,
   IOperation,
   IOperationBulk,
@@ -37,6 +38,7 @@ export class ConnectorOperationsService {
   private readonly inventory = inject(InventoryService);
   private readonly binaries = inject(InventoryBinaryService);
   private readonly bulk = inject(OperationBulkService);
+  private readonly eventBinaries = inject(EventBinaryService);
 
   /** Whether the gateway offers the connector file `name` as a configuration type. */
   offers(device: IManagedObject, name: string): boolean {
@@ -60,7 +62,10 @@ export class ConnectorOperationsService {
         current = (await this.inventory.detail(device.id)).data;
         return this.offers(current, name);
       },
-      latestSnapshotId: async () => (await this.repository.getConfigSnapshot(device, REGISTRATION_TYPE))?.id,
+      latestSnapshotId: async () => {
+        const event = await this.repository.getLatestConfigurationEvent(device.id, REGISTRATION_TYPE);
+        return event ? String(event.id) : undefined;
+      },
       requestSnapshot: () => this.requestListSnapshot(device),
       latestSnapshot: () => this.latestListSnapshot(device),
       sendList: text => this.sendRegistrationList(device, text),
@@ -126,18 +131,21 @@ export class ConnectorOperationsService {
   }
 
   /** The newest snapshot of the gateway's list of managed files, with its text. */
-  private async latestListSnapshot(device: IManagedObject): Promise<{ id?: string; text: string } | undefined> {
-    const snapshot = await this.repository.getConfigSnapshot(device, REGISTRATION_TYPE);
-    if (!snapshot) {
+  /**
+   * The newest snapshot of the list of managed files: the latest event of that type and its
+   * attached file. RepositoryService.getConfigSnapshot drops the event id, which tells a new
+   * snapshot from the previous one.
+   */
+  private async latestListSnapshot(device: IManagedObject): Promise<{ id: string; text: string } | undefined> {
+    const event = await this.repository.getLatestConfigurationEvent(device.id, REGISTRATION_TYPE);
+    if (!event) {
       return undefined;
     }
-    if (snapshot.binaryUrl) {
-      return { id: snapshot.id, text: await this.repository.getBinaryText(snapshot.binaryUrl, { allowExternal: false }) };
+    const response = await this.eventBinaries.download(event);
+    if (!response.ok) {
+      throw new Error(`The snapshot of the list of managed files has no content (HTTP ${response.status}).`);
     }
-    if (typeof snapshot.binary === 'string') {
-      return { id: snapshot.id, text: snapshot.binary };
-    }
-    throw new Error('The snapshot of the list of managed files has no content.');
+    return { id: String(event.id), text: await response.text() };
   }
 
   /** Uploads the new list, sends it to the gateway, waits for the result, and removes the upload. */

@@ -58,8 +58,10 @@ type State = 'pick' | 'checked' | 'running' | 'done' | 'error';
                 <li>{{ d['name'] }}</li>
               }
             </ul>
+          } @else if (deviceCount() === 1) {
+            <p>{{ 'The one device in this group offers this file.' | translate }}</p>
           } @else {
-            <p>{{ deviceCount() }} {{ 'devices in this group offer this file.' | translate }}</p>
+            <p>{{ 'All' | translate }} {{ deviceCount() }} {{ 'devices in this group offer this file.' | translate }}</p>
           }
         }
         @case ('running') {
