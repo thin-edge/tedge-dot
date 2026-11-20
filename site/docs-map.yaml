@@ -74,6 +74,10 @@ pages:
   - source: doc/concurrent-reads.md
     slug: reference/configuration/concurrent-reads
     section: Configuration
+  - source: doc/c8y-connector-files.md
+    slug: reference/configuration/c8y-connector-files
+    section: Configuration
+    label: Connector files from Cumulocity
   - source: demo/points.d/README.md
     slug: reference/configuration/point-libraries
     section: Configuration

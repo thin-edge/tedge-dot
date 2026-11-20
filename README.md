@@ -285,6 +285,15 @@ rather than an object around one value. See [RFC 0003](doc/rfc/0003-parameter-wr
 [RFC 0005](doc/rfc/0005-device-types-and-parameter-sets.md), [flows/](flows/) and
 [operations/](operations/).
 
+## Managing connector files from Cumulocity
+
+The Device Management plugin in [ui/](ui/) keeps connector files in Cumulocity's configuration
+repository. Management > OT connectors edits them, checks them against the contract schema, and
+sends them to a gateway or a group. An **OT connectors** tab on each thin-edge.io gateway shows its
+connector files like the Configuration tab and adds a file the gateway does not have yet. The
+gateways need no change. Each release carries the plugin as `tedge-dot-ui_<version>.zip`. See
+[Managing connector files from Cumulocity](doc/c8y-connector-files.md).
+
 ## Repository layout
 
 | Path | Contents |
@@ -299,6 +308,7 @@ rather than an object around one value. See [RFC 0003](doc/rfc/0003-parameter-wr
 | [connectors/](connectors/) | per-protocol e2e test stacks: simulator, Docker compose, Robot suites |
 | [cloud/](cloud/) | Cumulocity cloud e2e suites (live tenant) |
 | [packaging/](packaging/) | installed default configs, systemd unit, package scripts |
+| [ui/](ui/) | the Device Management plugin for connector files (Cumulocity Web SDK) |
 | [demo/points.d/](demo/points.d/) | example point libraries (a device type's point list, packaged on its own) |
 | [doc/](doc/) | proposal, RFCs, contract + schemas, connector specs, testing strategy |
 | [demo/](demo/) | simulator compose file + demo configs: local CLI exploration and the all-protocols on-device demo |

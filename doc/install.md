@@ -83,6 +83,13 @@ flows. The `tedge-dot-c` tarball also carries the default configs to start from:
   thin-edge data model are deployed active into `/etc/tedge/mappers/c8y/flows/`, with the opt-in
   alarm and event flows in `/usr/share/tedge-dot/flows/`. See [flows/README.md](../flows/README.md).
 
+## Managing the files from Cumulocity
+
+Each release also carries `tedge-dot-ui_<version>.zip`, a plugin for Cumulocity's Device
+Management. It keeps connector files in the configuration repository and installs them on
+gateways without any step on the gateway. See
+[Managing connector files from Cumulocity](c8y-connector-files.md).
+
 ## Upgrading
 
 An upgrade keeps your `/etc/tedge/plugins/ot/` configuration. Packaged default configs only
