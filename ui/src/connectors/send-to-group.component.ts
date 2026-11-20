@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { IManagedObject } from '@c8y/client';
 import { CoreModule } from '@c8y/ngx-components';
 import { SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
@@ -25,16 +25,16 @@ type State = 'pick' | 'checked' | 'running' | 'done' | 'error';
     </div>
     <div class="modal-body">
       <p>{{ 'Connector file' | translate }}: <strong>{{ entry?.['name'] }}</strong> · {{ name }}.toml</p>
-      @switch (state) {
+      @switch (state()) {
         @case ('pick') {
           <c8y-form-group>
             <label for="tdot-group-search">{{ 'Group' | translate }}</label>
-            <input id="tdot-group-search" class="form-control" [(ngModel)]="term" (ngModelChange)="search()"
+            <input id="tdot-group-search" class="form-control" [(ngModel)]="term" (ngModelChange)="search($event)"
               [placeholder]="'Search groups by name' | translate" />
           </c8y-form-group>
           <div class="list-group">
-            @for (g of groups; track g.id) {
-              <button type="button" class="list-group-item" [class.active]="picked?.id === g.id" (click)="picked = g">
+            @for (g of groups(); track g.id) {
+              <button type="button" class="list-group-item" [class.active]="picked()?.id === g.id" (click)="picked.set(g)">
                 {{ g['name'] }}
               </button>
             } @empty {
@@ -43,40 +43,47 @@ type State = 'pick' | 'checked' | 'running' | 'done' | 'error';
           </div>
         }
         @case ('checked') {
-          @if (missing.length) {
+          @if (deviceCount() === 0) {
             <p class="text-warning">
               <i c8yIcon="exclamation-triangle"></i>
-              {{ missing.length }} {{ 'devices in this group do not offer this file, so their operations will fail. Add the file to each of them from its OT connectors tab first:' | translate }}
+              {{ 'This group has no devices directly in it. Pick the group that holds the gateways.' | translate }}
+            </p>
+          } @else if (missing().length) {
+            <p class="text-warning">
+              <i c8yIcon="exclamation-triangle"></i>
+              {{ missing().length }} {{ 'of' | translate }} {{ deviceCount() }} {{ 'devices in this group do not offer this file, so their operations will fail. Add the file to each of them from its OT connectors tab first:' | translate }}
             </p>
             <ul>
-              @for (d of missing; track d.id) {
+              @for (d of missing(); track d.id) {
                 <li>{{ d['name'] }}</li>
               }
             </ul>
           } @else {
-            <p>{{ 'Every device in this group offers this file.' | translate }}</p>
+            <p>{{ deviceCount() }} {{ 'devices in this group offer this file.' | translate }}</p>
           }
         }
         @case ('running') {
           <p><i c8yIcon="spinner" class="icon-spin"></i> {{ 'Creating the bulk operation' | translate }}…</p>
         }
         @case ('done') {
-          <p class="text-success"><i c8yIcon="check-circle"></i> {{ doneText }}</p>
+          <p class="text-success"><i c8yIcon="check-circle"></i> {{ doneText() }}</p>
         }
         @case ('error') {
-          <p class="text-danger"><i c8yIcon="exclamation-circle"></i> {{ errorText }}</p>
+          <p class="text-danger"><i c8yIcon="exclamation-circle"></i> {{ errorText() }}</p>
         }
       }
     </div>
     <div class="modal-footer">
-      @switch (state) {
+      @switch (state()) {
         @case ('pick') {
           <button class="btn btn-default" type="button" (click)="close()">{{ 'Cancel' | translate }}</button>
-          <button class="btn btn-primary" type="button" [disabled]="!picked" (click)="check()">{{ 'Next' | translate }}</button>
+          <button class="btn btn-primary" type="button" [disabled]="!picked()" (click)="check()">{{ 'Next' | translate }}</button>
         }
         @case ('checked') {
-          <button class="btn btn-default" type="button" (click)="state = 'pick'">{{ 'Back' | translate }}</button>
-          <button class="btn btn-primary" type="button" (click)="send()">{{ 'Send to the group' | translate }}</button>
+          <button class="btn btn-default" type="button" (click)="state.set('pick')">{{ 'Back' | translate }}</button>
+          @if (deviceCount() > 0) {
+            <button class="btn btn-primary" type="button" (click)="send()">{{ 'Send to the group' | translate }}</button>
+          }
         }
         @case ('running') {
           <button class="btn btn-default" type="button" disabled>{{ 'Working' | translate }}</button>
@@ -95,13 +102,14 @@ export class SendToGroupComponent {
   /** Set by the opener. */
   entry?: IManagedObject;
 
-  state: State = 'pick';
-  term = '';
-  groups: IManagedObject[] = [];
-  picked?: IManagedObject;
-  missing: IManagedObject[] = [];
-  doneText = '';
-  errorText = '';
+  readonly state = signal<State>('pick');
+  readonly term = signal('');
+  readonly groups = signal<IManagedObject[]>([]);
+  readonly picked = signal<IManagedObject | undefined>(undefined);
+  readonly missing = signal<IManagedObject[]>([]);
+  readonly deviceCount = signal(0);
+  readonly doneText = signal('');
+  readonly errorText = signal('');
 
   get name(): string {
     return nameOf(this.entry?.['configurationType']) ?? '';
@@ -111,35 +119,41 @@ export class SendToGroupComponent {
     void this.search();
   }
 
-  async search(): Promise<void> {
-    this.groups = await this.ops.findGroups(this.term);
+  async search(term = this.term()): Promise<void> {
+    this.groups.set(await this.ops.findGroups(term));
   }
 
   async check(): Promise<void> {
-    if (!this.picked) {
+    const group = this.picked();
+    if (!group) {
       return;
     }
     try {
-      this.missing = await this.ops.groupDevicesWithout(this.picked.id, this.name);
-      this.state = 'checked';
+      const { devices, missing } = await this.ops.checkGroup(group.id, this.name);
+      this.deviceCount.set(devices);
+      this.missing.set(missing);
+      this.state.set('checked');
     } catch (e) {
-      this.errorText = e instanceof Error ? e.message : String(e);
-      this.state = 'error';
+      this.errorText.set(e instanceof Error ? e.message : String(e));
+      this.state.set('error');
     }
   }
 
   async send(): Promise<void> {
-    if (!this.picked || !this.entry) {
+    const group = this.picked();
+    if (!group || !this.entry) {
       return;
     }
-    this.state = 'running';
+    this.state.set('running');
     try {
-      const bulk = await this.ops.sendToGroup(this.picked.id, this.entry);
-      this.doneText = `Bulk operation ${bulk.id} sends ${this.entry['name']} to ${this.picked['name']}. Its progress is under Device control > Bulk operations.`;
-      this.state = 'done';
+      const bulk = await this.ops.sendToGroup(group.id, this.entry);
+      this.doneText.set(
+        `Bulk operation ${bulk.id} sends ${this.entry['name']} to ${group['name']}. Its progress is under Device control > Bulk operations.`
+      );
+      this.state.set('done');
     } catch (e) {
-      this.errorText = e instanceof Error ? e.message : String(e);
-      this.state = 'error';
+      this.errorText.set(e instanceof Error ? e.message : String(e));
+      this.state.set('error');
     }
   }
 

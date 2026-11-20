@@ -1,13 +1,15 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
-import { AlertService, CoreModule, gettext } from '@c8y/ngx-components';
+import { AlertService, CoreModule } from '@c8y/ngx-components';
+import { gettext } from '@c8y/ngx-components/gettext';
 import { EditorComponent, loadMonacoEditor } from '@c8y/ngx-components/editor';
 import { RepositoryService, RepositoryType, SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import type * as Monaco from 'monaco-editor';
 
 import { PROTOCOL_IDS, emitToml, newConfig, type ProtocolId } from '../generated/config-builder';
-import { isValidName, nameOf, normalizeName, typeOf } from '../shared/naming';
+import { isValidName, nameOf, normalizeName, pathOf, typeOf } from '../shared/naming';
 import { TOML_LANGUAGE_ID, tomlLanguage } from '../shared/toml-language';
 import { type ValidationResult, isValid, validateConnectorFile } from '../shared/validation';
 
@@ -18,39 +20,40 @@ const MARKER_OWNER = 'tedge-dot';
   selector: 'tdot-connector-editor',
   imports: [CoreModule, SharedRepositoryModule, EditorComponent],
   template: `
-    <c8y-title>{{ (isNew ? 'Add connector file' : 'Edit connector file') | translate }}</c8y-title>
+    <c8y-title>{{ (isNew() ? 'Add connector file' : 'Edit connector file') | translate }}</c8y-title>
 
     <div class="card content-fullpage d-flex d-col">
       <div class="card-header separator">
-        <div class="card-title">{{ isNew ? ('New connector file' | translate) : entry?.['name'] }}</div>
+        <div class="card-title">{{ isNew() ? ('New connector file' | translate) : entry()?.['name'] }}</div>
       </div>
       <div class="card-block d-flex d-col flex-grow min-height-0">
         <div class="row">
           <div class="col-md-3">
-            <c8y-form-group [hasError]="nameTouched && !name.trim()">
+            <c8y-form-group [hasError]="nameTouched() && !name().trim()">
               <label for="tdot-name">{{ 'Name' | translate }}</label>
-              <input id="tdot-name" class="form-control" [(ngModel)]="name" (blur)="nameTouched = true" />
+              <input id="tdot-name" class="form-control" [(ngModel)]="name" (blur)="nameTouched.set(true)" />
             </c8y-form-group>
           </div>
           <div class="col-md-3">
-            <c8y-form-group [hasError]="fileTouched && !fileValid">
-              <label for="tdot-file">{{ 'File on the gateway' | translate }}</label>
+            <c8y-form-group [hasError]="fileTouched() && !fileValid()">
+              <label for="tdot-file">{{ 'File name' | translate }}</label>
               <div class="input-group">
-                <span class="input-group-addon">/etc/tedge/plugins/ot/</span>
                 <input
                   id="tdot-file"
                   class="form-control"
                   [(ngModel)]="fileName"
-                  [disabled]="!isNew"
-                  (blur)="fileTouched = true"
+                  [disabled]="!isNew()"
+                  (blur)="fileTouched.set(true)"
                   placeholder="opcua-pump"
                 />
                 <span class="input-group-addon">.toml</span>
               </div>
-              @if (fileTouched && !fileValid) {
+              @if (fileTouched() && !fileValid()) {
                 <c8y-messages>
                   <c8y-message>{{ 'Letters, digits, ".", "_" and "-" only, starting with a letter or digit.' | translate }}</c8y-message>
                 </c8y-messages>
+              } @else {
+                <p class="help-block text-muted small text-truncate" [title]="gatewayPath()">{{ gatewayPath() }}</p>
               }
             </c8y-form-group>
           </div>
@@ -60,7 +63,7 @@ const MARKER_OWNER = 'tedge-dot';
               <input id="tdot-device-type" class="form-control" [(ngModel)]="deviceType" [placeholder]="'Any' | translate" />
             </c8y-form-group>
           </div>
-          @if (isNew) {
+          @if (isNew()) {
             <div class="col-md-3">
               <c8y-form-group>
                 <label for="tdot-start">{{ 'Start from' | translate }}</label>
@@ -85,36 +88,37 @@ const MARKER_OWNER = 'tedge-dot';
         <div class="tdot-editor flex-grow">
           <c8y-editor
             [(ngModel)]="content"
-            (ngModelChange)="validate()"
             [editorOptions]="editorOptions"
             (editorInit)="onEditorInit($event)"
           ></c8y-editor>
         </div>
 
         <div class="p-t-8">
-          @if (result.syntax) {
-            <p class="text-danger">
-              <i c8yIcon="exclamation-circle"></i>
-              {{ 'Line' | translate }} {{ result.syntax.line }}, {{ 'column' | translate }} {{ result.syntax.column }}:
-              {{ result.syntax.message }}
-            </p>
-          } @else if (result.fields.length) {
-            <ul class="list-unstyled text-danger m-b-0">
-              @for (f of result.fields; track f.path + f.message) {
-                <li><i c8yIcon="exclamation-circle"></i> {{ f.label }}: {{ f.message }}</li>
-              }
-            </ul>
-          } @else {
-            <p class="text-success m-b-0">
-              <i c8yIcon="check-circle"></i>
-              {{ 'Matches the contract schema. The gateway checks point libraries and files when it loads the file.' | translate }}
-            </p>
+          @if (result(); as r) {
+            @if (r.syntax) {
+              <p class="text-danger">
+                <i c8yIcon="exclamation-circle"></i>
+                {{ 'Line' | translate }} {{ r.syntax.line }}, {{ 'column' | translate }} {{ r.syntax.column }}:
+                {{ r.syntax.message }}
+              </p>
+            } @else if (r.fields.length) {
+              <ul class="list-unstyled text-danger m-b-0">
+                @for (f of r.fields; track f.path + f.message) {
+                  <li><i c8yIcon="exclamation-circle"></i> {{ f.label }}: {{ f.message }}</li>
+                }
+              </ul>
+            } @else {
+              <p class="text-success m-b-0">
+                <i c8yIcon="check-circle"></i>
+                {{ 'Matches the contract schema. The gateway checks point libraries and files when it loads the file.' | translate }}
+              </p>
+            }
           }
         </div>
       </div>
       <div class="card-footer separator text-right">
         <button class="btn btn-default" type="button" (click)="cancel()">{{ 'Cancel' | translate }}</button>
-        <button class="btn btn-primary" type="button" [disabled]="!canSave || saving" (click)="save()">
+        <button class="btn btn-primary" type="button" [disabled]="!canSave() || saving()" (click)="save()">
           {{ 'Save' | translate }}
         </button>
       </div>
@@ -134,7 +138,7 @@ const MARKER_OWNER = 'tedge-dot';
     `,
   ],
 })
-export class ConnectorEditorComponent implements OnInit {
+export class ConnectorEditorComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly inventory = inject(InventoryService);
@@ -150,54 +154,65 @@ export class ConnectorEditorComponent implements OnInit {
     tabSize: 2,
   };
 
-  isNew = true;
-  entry?: IManagedObject;
-  name = '';
-  description = '';
-  fileName = '';
-  deviceType = '';
-  startFrom: ProtocolId = 'opcua';
-  content = '';
-  result: ValidationResult = { fields: [] };
-  nameTouched = false;
-  fileTouched = false;
-  saving = false;
+  readonly isNew = signal(true);
+  readonly entry = signal<IManagedObject | undefined>(undefined);
+  readonly name = signal('');
+  readonly description = signal('');
+  readonly fileName = signal('');
+  readonly deviceType = signal('');
+  readonly startFrom = signal<ProtocolId>('opcua');
+  readonly content = signal('');
+  readonly nameTouched = signal(false);
+  readonly fileTouched = signal(false);
+  readonly saving = signal(false);
+
+  readonly result = computed<ValidationResult>(() => validateConnectorFile(this.content() ?? ''));
+  readonly fileValid = computed(() => isValidName(normalizeName(this.fileName())));
+  /** Where the file lands on a gateway, shown under the file name. */
+  readonly gatewayPath = computed(() => pathOf(this.fileValid() ? normalizeName(this.fileName()) : '<name>'));
+  readonly canSave = computed(() => !!this.name().trim() && this.fileValid() && isValid(this.result()));
 
   private monaco?: typeof Monaco;
   private editor?: Monaco.editor.IStandaloneCodeEditor;
 
-  get fileValid(): boolean {
-    return isValidName(normalizeName(this.fileName));
+  constructor() {
+    effect(() => this.applyMarkers(this.result()));
+    // The router keeps this component when only the id changes, e.g. from an entry to "new".
+    this.route.paramMap.pipe(takeUntilDestroyed()).subscribe(params => void this.load(params.get('id')));
   }
 
-  get canSave(): boolean {
-    return !!this.name.trim() && this.fileValid && isValid(this.result);
-  }
-
-  async ngOnInit(): Promise<void> {
-    const id = this.route.snapshot.paramMap.get('id');
+  private async load(id: string | null): Promise<void> {
+    this.nameTouched.set(false);
+    this.fileTouched.set(false);
     if (!id || id === 'new') {
-      this.useTemplate(this.startFrom);
+      this.isNew.set(true);
+      this.entry.set(undefined);
+      this.name.set('');
+      this.description.set('');
+      this.deviceType.set('');
+      this.fileName.set('');
+      this.useTemplate(this.startFrom());
       return;
     }
-    this.isNew = false;
+    this.isNew.set(false);
     try {
       const { data } = await this.inventory.detail(id);
-      this.entry = data;
-      this.name = data['name'] ?? '';
-      this.description = data['description'] ?? '';
-      this.deviceType = data['deviceType'] ?? '';
-      this.fileName = nameOf(data['configurationType']) ?? '';
-      this.content = data['url'] ? await this.repository.getBinaryText(data['url'], { allowExternal: false }) : '';
-      this.validate();
+      if (this.route.snapshot.paramMap.get('id') !== id) {
+        return;
+      }
+      this.entry.set(data);
+      this.name.set(data['name'] ?? '');
+      this.description.set(data['description'] ?? '');
+      this.deviceType.set(data['deviceType'] ?? '');
+      this.fileName.set(nameOf(data['configurationType']) ?? '');
+      this.content.set(data['url'] ? await this.repository.getBinaryText(data['url'], { allowExternal: false }) : '');
     } catch (e) {
       this.alert.addServerFailure(e);
     }
   }
 
   useTemplate(protocol: ProtocolId): void {
-    this.content = emitToml(newConfig(protocol));
-    this.validate();
+    this.content.set(emitToml(newConfig(protocol)));
   }
 
   async onEditorInit(editor: Monaco.editor.IStandaloneCodeEditor): Promise<void> {
@@ -212,20 +227,15 @@ export class ConnectorEditorComponent implements OnInit {
     if (model) {
       monaco.editor.setModelLanguage(model, TOML_LANGUAGE_ID);
     }
-    this.applyMarkers();
+    this.applyMarkers(this.result());
   }
 
-  validate(): void {
-    this.result = validateConnectorFile(this.content ?? '');
-    this.applyMarkers();
-  }
-
-  private applyMarkers(): void {
+  private applyMarkers(result: ValidationResult): void {
     const model = this.editor?.getModel();
     if (!this.monaco || !model) {
       return;
     }
-    const syntax = this.result.syntax;
+    const syntax = result.syntax;
     this.monaco.editor.setModelMarkers(
       model,
       MARKER_OWNER,
@@ -249,30 +259,30 @@ export class ConnectorEditorComponent implements OnInit {
   }
 
   async save(): Promise<void> {
-    if (!this.canSave) {
+    if (!this.canSave()) {
       return;
     }
-    this.saving = true;
-    const name = normalizeName(this.fileName);
+    this.saving.set(true);
+    const name = normalizeName(this.fileName());
     try {
-      const file = new File([this.content], `${name}.toml`, { type: 'text/plain' });
+      const file = new File([this.content()], `${name}.toml`, { type: 'text/plain' });
       await this.repository.create(
         {
-          version: this.name.trim(),
-          description: this.description.trim(),
-          deviceType: this.deviceType.trim() || undefined,
+          version: this.name().trim(),
+          description: this.description().trim(),
+          deviceType: this.deviceType().trim() || undefined,
           configurationType: typeOf(name),
           binary: { file },
         },
         RepositoryType.CONFIGURATION,
-        this.entry
+        this.entry()
       );
       this.alert.success(gettext('Connector file saved.'));
       void this.router.navigate(['/ot-connectors']);
     } catch (e) {
       this.alert.addServerFailure(e);
     } finally {
-      this.saving = false;
+      this.saving.set(false);
     }
   }
 }

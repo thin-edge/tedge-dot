@@ -1,7 +1,8 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
-import { AlertService, CoreModule, ModalService, Status, gettext } from '@c8y/ngx-components';
+import { AlertService, CoreModule, ModalService, Status } from '@c8y/ngx-components';
+import { gettext } from '@c8y/ngx-components/gettext';
 import { RepositoryService, SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import { BsModalService } from 'ngx-bootstrap/modal';
 
@@ -26,7 +27,7 @@ import { SendToGroupComponent } from './send-to-group.component';
     </c8y-action-bar-item>
     <c8y-action-bar-item [placement]="'right'">
       <button class="btn btn-link" type="button" (click)="load()">
-        <i c8yIcon="refresh" [class.icon-spin]="loading"></i>
+        <i c8yIcon="refresh" [class.icon-spin]="loading()"></i>
         {{ 'Reload' | translate }}
       </button>
     </c8y-action-bar-item>
@@ -35,7 +36,7 @@ import { SendToGroupComponent } from './send-to-group.component';
       <div class="card-header separator">
         <div class="card-title">{{ 'Connector files' | translate }}</div>
       </div>
-      @if (!loading && entries.length === 0) {
+      @if (!loading() && entries().length === 0) {
         <c8y-ui-empty-state
           [icon]="'gears'"
           [title]="'No connector files in the repository.' | translate"
@@ -56,7 +57,7 @@ import { SendToGroupComponent } from './send-to-group.component';
               </tr>
             </thead>
             <tbody>
-              @for (entry of entries; track entry.id) {
+              @for (entry of entries(); track entry.id) {
                 <tr>
                   <td><a class="interact" (click)="edit(entry)">{{ entry['name'] }}</a></td>
                   <td>{{ entry['description'] }}</td>
@@ -94,22 +95,22 @@ export class ConnectorsPageComponent implements OnInit {
   private readonly bsModal = inject(BsModalService);
   private readonly alert = inject(AlertService);
 
-  entries: IManagedObject[] = [];
-  loading = false;
+  readonly entries = signal<IManagedObject[]>([]);
+  readonly loading = signal(true);
 
   ngOnInit(): void {
     void this.load();
   }
 
   async load(): Promise<void> {
-    this.loading = true;
+    this.loading.set(true);
     try {
       const { data } = await this.inventory.list({ query: connectorEntriesQuery(), pageSize: 2000 });
-      this.entries = data;
+      this.entries.set(data);
     } catch (e) {
       this.alert.addServerFailure(e);
     } finally {
-      this.loading = false;
+      this.loading.set(false);
     }
   }
 

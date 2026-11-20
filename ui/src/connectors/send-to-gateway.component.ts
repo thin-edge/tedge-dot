@@ -1,4 +1,4 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { IManagedObject, InventoryService } from '@c8y/client';
 import { CoreModule } from '@c8y/ngx-components';
 import { SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
@@ -28,17 +28,17 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
       <h4>{{ (registerOnly ? 'Register a file on the gateway' : 'Add connector file to a gateway') | translate }}</h4>
     </div>
     <div class="modal-body">
-      @switch (state) {
+      @switch (state()) {
         @case ('pick') {
           @if (!device) {
             <c8y-form-group>
               <label for="tdot-gw-search">{{ 'Gateway' | translate }}</label>
-              <input id="tdot-gw-search" class="form-control" [(ngModel)]="term" (ngModelChange)="search()"
+              <input id="tdot-gw-search" class="form-control" [(ngModel)]="term" (ngModelChange)="search($event)"
                 [placeholder]="'Search thin-edge.io gateways by name' | translate" />
             </c8y-form-group>
             <div class="list-group">
-              @for (g of gateways; track g.id) {
-                <button type="button" class="list-group-item" [class.active]="picked?.id === g.id" (click)="picked = g">
+              @for (g of gateways(); track g.id) {
+                <button type="button" class="list-group-item" [class.active]="picked()?.id === g.id" (click)="picked.set(g)">
                   {{ g['name'] }}
                   @if (entryName && ops.offers(g, entryName)) {
                     <span class="tag tag--info m-l-8">{{ 'has this file' | translate }}</span>
@@ -50,7 +50,7 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
             </div>
           }
           @if (registerOnly) {
-            <c8y-form-group [hasError]="!!fileName && !fileValid">
+            <c8y-form-group [hasError]="!!fileName() && !fileValid">
               <label for="tdot-reg-name">{{ 'File in /etc/tedge/plugins/ot' | translate }}</label>
               <input id="tdot-reg-name" class="form-control" [(ngModel)]="fileName" placeholder="modbus" />
             </c8y-form-group>
@@ -60,8 +60,8 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
           } @else if (!entry) {
             <label>{{ 'Connector file' | translate }}</label>
             <div class="list-group">
-              @for (e of entries; track e.id) {
-                <button type="button" class="list-group-item" [class.active]="chosen?.id === e.id" (click)="chosen = e">
+              @for (e of entries(); track e.id) {
+                <button type="button" class="list-group-item" [class.active]="chosen()?.id === e.id" (click)="chosen.set(e)">
                   <strong>{{ e['name'] }}</strong> · {{ fileOf(e) }}
                   @if (device && ops.offers(device, nameOf(e['configurationType']) ?? '')) {
                     <span class="tag tag--info m-l-8">{{ 'on this gateway' | translate }}</span>
@@ -79,24 +79,24 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
           }
         }
         @case ('running') {
-          <p><i c8yIcon="spinner" class="icon-spin"></i> {{ step }}…</p>
+          <p><i c8yIcon="spinner" class="icon-spin"></i> {{ step() }}…</p>
         }
         @case ('confirm') {
           <p>
             {{ 'The gateway does not offer this file yet. This entry will be appended to its /etc/tedge/plugins/tedge-configuration-plugin.toml; nothing else in that file changes:' | translate }}
           </p>
-          <pre class="m-b-0">{{ block }}</pre>
+          <pre class="m-b-0">{{ block() }}</pre>
         }
         @case ('done') {
-          <p class="text-success"><i c8yIcon="check-circle"></i> {{ doneText }}</p>
+          <p class="text-success"><i c8yIcon="check-circle"></i> {{ doneText() }}</p>
         }
         @case ('error') {
-          <p class="text-danger"><i c8yIcon="exclamation-circle"></i> {{ errorText }}</p>
+          <p class="text-danger"><i c8yIcon="exclamation-circle"></i> {{ errorText() }}</p>
         }
       }
     </div>
     <div class="modal-footer">
-      @switch (state) {
+      @switch (state()) {
         @case ('pick') {
           <button class="btn btn-default" type="button" (click)="close()">{{ 'Cancel' | translate }}</button>
           <button class="btn btn-primary" type="button" [disabled]="!ready" (click)="run()">
@@ -131,33 +131,33 @@ export class SendToGatewayComponent implements OnInit {
   onFinished?: () => void;
 
   readonly nameOf = nameOf;
-  state: State = 'pick';
-  term = '';
-  gateways: IManagedObject[] = [];
-  entries: IManagedObject[] = [];
-  picked?: IManagedObject;
-  chosen?: IManagedObject;
-  fileName = '';
-  step = '';
-  block = '';
-  doneText = '';
-  errorText = '';
+  readonly state = signal<State>('pick');
+  readonly term = signal('');
+  readonly gateways = signal<IManagedObject[]>([]);
+  readonly entries = signal<IManagedObject[]>([]);
+  readonly picked = signal<IManagedObject | undefined>(undefined);
+  readonly chosen = signal<IManagedObject | undefined>(undefined);
+  readonly fileName = signal('');
+  readonly step = signal('');
+  readonly block = signal('');
+  readonly doneText = signal('');
+  readonly errorText = signal('');
   private resolveConfirm?: (ok: boolean) => void;
 
   get entryName(): string | undefined {
-    return nameOf((this.entry ?? this.chosen)?.['configurationType']);
+    return nameOf((this.entry ?? this.chosen())?.['configurationType']);
   }
 
   get fileValid(): boolean {
-    return isValidName(normalizeName(this.fileName));
+    return isValidName(normalizeName(this.fileName()));
   }
 
   get ready(): boolean {
-    const gateway = this.device ?? this.picked;
+    const gateway = this.device ?? this.picked();
     if (!gateway) {
       return false;
     }
-    return this.registerOnly ? this.fileValid : !!(this.entry ?? this.chosen);
+    return this.registerOnly ? this.fileValid : !!(this.entry ?? this.chosen());
   }
 
   async ngOnInit(): Promise<void> {
@@ -166,7 +166,7 @@ export class SendToGatewayComponent implements OnInit {
     }
     if (!this.entry && !this.registerOnly) {
       const { data } = await this.inventory.list({ query: connectorEntriesQuery(), pageSize: 2000 });
-      this.entries = data;
+      this.entries.set(data);
     }
   }
 
@@ -175,8 +175,8 @@ export class SendToGatewayComponent implements OnInit {
     return name ? `${name}.toml` : '';
   }
 
-  async search(): Promise<void> {
-    this.gateways = await this.ops.findGateways(this.term);
+  async search(term = this.term()): Promise<void> {
+    this.gateways.set(await this.ops.findGateways(term));
   }
 
   answer(ok: boolean): void {
@@ -184,44 +184,44 @@ export class SendToGatewayComponent implements OnInit {
   }
 
   async run(): Promise<void> {
-    const gateway = this.device ?? this.picked;
-    const entry = this.entry ?? this.chosen;
-    const name = this.registerOnly ? normalizeName(this.fileName) : nameOf(entry?.['configurationType']);
+    const gateway = this.device ?? this.picked();
+    const entry = this.entry ?? this.chosen();
+    const name = this.registerOnly ? normalizeName(this.fileName()) : nameOf(entry?.['configurationType']);
     if (!gateway || !name) {
       return;
     }
-    this.state = 'running';
+    this.state.set('running');
     try {
       const updated = await this.ops.register(
         gateway,
         name,
         block =>
           new Promise<boolean>(resolve => {
-            this.block = block;
-            this.state = 'confirm';
+            this.block.set(block);
+            this.state.set('confirm');
             this.resolveConfirm = ok => {
-              this.state = 'running';
+              this.state.set('running');
               resolve(ok);
             };
           }),
-        step => (this.step = step)
+        step => this.step.set(step)
       );
       if (this.registerOnly || !entry) {
-        this.doneText = `${gateway['name']} offers ${typeOf(name)} for ${pathOf(name)}.`;
+        this.doneText.set(`${gateway['name']} offers ${typeOf(name)} for ${pathOf(name)}.`);
       } else {
-        this.step = 'Sending the connector file';
+        this.step.set('Sending the connector file');
         const operation = await this.ops.sendToGateway(updated, entry);
-        this.doneText = `Operation ${operation.id} sends ${entry['name']} to ${gateway['name']}. Its status is on the gateway's Control tab.`;
+        this.doneText.set(`Operation ${operation.id} sends ${entry['name']} to ${gateway['name']}. Its status is on the gateway's Control tab.`);
       }
-      this.state = 'done';
+      this.state.set('done');
       this.onFinished?.();
     } catch (e) {
       if (e instanceof RegistrationCancelled) {
-        this.state = 'pick';
+        this.state.set('pick');
         return;
       }
-      this.errorText = e instanceof Error ? e.message : String(e);
-      this.state = 'error';
+      this.errorText.set(e instanceof Error ? e.message : String(e));
+      this.state.set('error');
     }
   }
 

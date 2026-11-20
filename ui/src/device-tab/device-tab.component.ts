@@ -1,11 +1,14 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
-import { CoreModule, ResizableGridComponent, gettext } from '@c8y/ngx-components';
+import { CoreModule, ResizableGridComponent } from '@c8y/ngx-components';
+import { gettext } from '@c8y/ngx-components/gettext';
 import {
   ConfigurationPreviewComponent,
   ConfigurationRepositoryDeviceTabModule,
   DeviceConfigurationListComponent,
+  DeviceConfigurationService,
 } from '@c8y/ngx-components/repository/configuration';
 import {
   ConfigurationSnapshot,
@@ -46,7 +49,7 @@ import { connectorTypes } from '../shared/gateway';
     </c8y-action-bar-item>
     <c8y-action-bar-item [placement]="'right'">
       <button class="btn btn-link" type="button" (click)="reload()">
-        <i c8yIcon="refresh" [class.icon-spin]="reloading"></i>
+        <i c8yIcon="refresh" [class.icon-spin]="reloading()"></i>
         {{ 'Reload' | translate }}
       </button>
     </c8y-action-bar-item>
@@ -69,20 +72,20 @@ import { connectorTypes } from '../shared/gateway';
             <div class="card--grid__inner-scroll bg-level-1">
               <c8y-device-configuration-list
                 [itemIcon]="'plug'"
-                [items]="items"
+                [items]="items()"
                 [emptyState]="deviceEmptyState"
                 (configSelected)="onTypeSelected($event)"
               ></c8y-device-configuration-list>
             </div>
             <div class="card--grid__inner-scroll d-flex d-col flex-grow min-height-0 bg-component">
               <div class="card-block d-flex d-col flex-grow min-height-0">
-                @if (configurationType; as type) {
+                @if (configurationType(); as type) {
                   <c8y-device-configuration-preview
                     class="d-flex d-col flex-grow min-height-0"
                     [actionButtonIcon]="'arrow-down'"
-                    [device]="device"
+                    [device]="device()"
                     [configurationType]="type"
-                    [configSnapshot]="configSnapshot!"
+                    [configSnapshot]="configSnapshot()!"
                     [canSaveSnapshot]="true"
                     [operationToTrigger]="uploadConfig"
                     [actionButtonText]="'Get snapshot from device' | translate"
@@ -109,7 +112,7 @@ import { connectorTypes } from '../shared/gateway';
           </div>
           <div class="card--grid grid__col--4-8--md m-b-0 flex-grow min-height-0">
             <div class="card--grid__inner-scroll bg-level-1">
-              @if (!configurationType) {
+              @if (!configurationType()) {
                 <c8y-ui-empty-state
                   [icon]="'plug'"
                   [title]="'No connector file selected.' | translate"
@@ -120,7 +123,7 @@ import { connectorTypes } from '../shared/gateway';
                 <div class="p-r-16">
                   <c8y-device-configuration-list
                     [itemIcon]="'file-text'"
-                    [items]="repositoryItems"
+                    [items]="repositoryItems()"
                     [emptyState]="repositoryEmptyState"
                     [isFilterEnabled]="true"
                     (configSelected)="onEntrySelected($event)"
@@ -130,16 +133,16 @@ import { connectorTypes } from '../shared/gateway';
             </div>
             <div class="card--grid__inner-scroll d-flex d-col flex-grow min-height-0 bg-component">
               <div class="card-block d-flex d-col flex-grow min-height-0">
-                @if (repositorySnapshot && configurationType) {
+                @if (repositorySnapshot(); as snapshot) {
                   <c8y-device-configuration-preview
                     class="d-flex d-col flex-grow min-height-0"
                     [actionButtonIcon]="'arrow-up'"
-                    [device]="device"
-                    [configurationType]="configurationType"
-                    [configSnapshot]="repositorySnapshot"
+                    [device]="device()"
+                    [configurationType]="configurationType()!"
+                    [configSnapshot]="snapshot"
                     [operationToTrigger]="downloadConfig"
                     [actionButtonText]="'Send configuration to device' | translate"
-                    [editableRepositoryMo]="selectedEntry!"
+                    [editableRepositoryMo]="selectedEntry()!"
                     (editInRepository)="editEntry($event)"
                   ></c8y-device-configuration-preview>
                 } @else {
@@ -167,19 +170,20 @@ export class DeviceTabComponent implements OnInit {
   private readonly repository = inject(RepositoryService);
   private readonly inventory = inject(InventoryService);
   private readonly bsModal = inject(BsModalService);
+  private readonly configurations = inject(DeviceConfigurationService);
 
   readonly uploadConfig = DeviceConfigurationOperation.UPLOAD_CONFIG;
   readonly downloadConfig = DeviceConfigurationOperation.DOWNLOAD_CONFIG;
 
-  device!: IManagedObject;
-  items: SupportedConfigurationItem[] = [];
-  configurationType?: string;
-  configSnapshot?: ConfigurationSnapshot;
-  repositoryEntries: IManagedObject[] = [];
-  repositoryItems: SupportedConfigurationItem[] = [];
-  selectedEntry?: IManagedObject;
-  repositorySnapshot?: ConfigurationSnapshot;
-  reloading = false;
+  readonly device = signal<IManagedObject>({} as IManagedObject);
+  readonly items = signal<SupportedConfigurationItem[]>([]);
+  readonly configurationType = signal<string | undefined>(undefined);
+  readonly configSnapshot = signal<ConfigurationSnapshot | undefined>(undefined);
+  readonly repositoryItems = signal<SupportedConfigurationItem[]>([]);
+  readonly selectedEntry = signal<IManagedObject | undefined>(undefined);
+  readonly repositorySnapshot = signal<ConfigurationSnapshot | undefined>(undefined);
+  readonly reloading = signal(false);
+  private repositoryEntries: IManagedObject[] = [];
 
   readonly deviceEmptyState = {
     icon: 'plug',
@@ -192,14 +196,24 @@ export class DeviceTabComponent implements OnInit {
     text: gettext('Add one under Management > OT connectors, or save a snapshot to the repository.'),
   };
 
+  constructor() {
+    // The previews report a finished snapshot upload, and "Save to repository" (repository entries
+    // only), the way they do in Device Management's Configuration tab.
+    this.configurations.configurationsUpdated
+      .pipe(takeUntilDestroyed())
+      .subscribe((repositoryOnly?: boolean) => void this.updateSnapshots(repositoryOnly));
+  }
+
   ngOnInit(): void {
-    this.device = this.route.snapshot.parent?.data['contextData'];
-    this.items = connectorTypes(this.device).map(name => ({ name }));
+    const device: IManagedObject = this.route.snapshot.parent?.data['contextData'];
+    this.device.set(device);
+    this.items.set(connectorTypes(device).map(name => ({ name })));
   }
 
   /** The list emits the selected item, though its output is typed as a string. */
   async onTypeSelected(item: unknown): Promise<void> {
-    this.configurationType = typeof item === 'string' ? item : (item as SupportedConfigurationItem).name;
+    this.configurationType.set(typeof item === 'string' ? item : (item as SupportedConfigurationItem).name);
+    this.configSnapshot.set(undefined);
     await this.updateSnapshots();
   }
 
@@ -209,17 +223,20 @@ export class DeviceTabComponent implements OnInit {
     if (!entry) {
       return;
     }
-    this.selectedEntry = entry;
-    this.repositorySnapshot = {
+    this.selectedEntry.set(entry);
+    const snapshot: ConfigurationSnapshot = {
       id: String(entry.id),
       time: entry['creationTime'],
       name: entry['name'],
       binaryUrl: entry['url'],
     };
+    this.repositorySnapshot.set(snapshot);
     if (entry['url']) {
       try {
         const text = await this.repository.getBinaryText(entry['url'], { allowExternal: false });
-        this.repositorySnapshot = { ...this.repositorySnapshot, binary: text };
+        if (this.selectedEntry()?.id === entry.id) {
+          this.repositorySnapshot.set({ ...snapshot, binary: text });
+        }
       } catch {
         // The preview shows the entry without content.
       }
@@ -231,16 +248,16 @@ export class DeviceTabComponent implements OnInit {
   }
 
   async reload(): Promise<void> {
-    this.reloading = true;
+    this.reloading.set(true);
     try {
-      const { data } = await this.inventory.detail(this.device.id);
-      this.device = data;
-      this.items = connectorTypes(data).map(name => ({ name }));
-      if (this.configurationType) {
+      const { data } = await this.inventory.detail(this.device().id);
+      this.device.set(data);
+      this.items.set(connectorTypes(data).map(name => ({ name })));
+      if (this.configurationType()) {
         await this.updateSnapshots();
       }
     } finally {
-      this.reloading = false;
+      this.reloading.set(false);
     }
   }
 
@@ -254,20 +271,34 @@ export class DeviceTabComponent implements OnInit {
 
   private openDialog(registerOnly: boolean): void {
     this.bsModal.show(SendToGatewayComponent, {
-      initialState: { device: this.device, registerOnly, onFinished: () => void this.reload() },
+      initialState: { device: this.device(), registerOnly, onFinished: () => void this.reload() },
       class: 'modal-lg',
       ignoreBackdropClick: true,
     });
   }
 
-  private async updateSnapshots(): Promise<void> {
-    if (!this.configurationType) {
+  private async updateSnapshots(repositoryOnly = false): Promise<void> {
+    const type = this.configurationType();
+    if (!type) {
       return;
     }
-    this.selectedEntry = undefined;
-    this.repositorySnapshot = undefined;
-    this.repositoryEntries = await this.repository.getSnapshotsFromRepository(this.device, this.configurationType);
-    this.repositoryItems = this.repositoryEntries.map(e => ({ ...e, name: e['name'] ?? '' }));
-    this.configSnapshot = await this.repository.getConfigSnapshot(this.device, this.configurationType);
+    const device = this.device();
+    this.selectedEntry.set(undefined);
+    this.repositorySnapshot.set(undefined);
+    // The SDK also returns entries without a configuration type, which the Configuration tab
+    // offers for any type. Here they would replace a connector file with unrelated content.
+    const entries = await this.repository.getSnapshotsFromRepository(device, type);
+    if (this.configurationType() !== type) {
+      return;
+    }
+    this.repositoryEntries = entries.filter(e => e['configurationType'] === type);
+    this.repositoryItems.set(this.repositoryEntries.map(e => ({ ...e, name: e['name'] ?? '' })));
+    if (repositoryOnly) {
+      return;
+    }
+    const snapshot = await this.repository.getConfigSnapshot(device, type);
+    if (this.configurationType() === type) {
+      this.configSnapshot.set(snapshot);
+    }
   }
 }

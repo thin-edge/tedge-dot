@@ -40,7 +40,8 @@ The page lists the configuration repository entries whose type starts with `tedg
   not have it (see [Adding a file to a gateway](#adding-a-file-to-a-gateway)).
 - **Send to a group** creates one bulk operation for the devices in a group. A group send never
   adds files: the dialog lists the devices in the group that do not offer the file, because
-  their operations would fail.
+  their operations would fail. It checks the devices directly in the group, not those in
+  subgroups.
 - **Delete** removes the entry and its file from the repository. Gateways keep their copy.
 
 ### What the editor checks

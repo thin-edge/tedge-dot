@@ -1,5 +1,6 @@
 import { NgModule } from '@angular/core';
-import { CoreModule, NavigatorNode, ViewContext, gettext, hookNavigator, hookRoute } from '@c8y/ngx-components';
+import { CoreModule, NavigatorNode, ViewContext, hookNavigator, hookRoute } from '@c8y/ngx-components';
+import { gettext } from '@c8y/ngx-components/gettext';
 
 import { ConnectorEditorComponent } from './connectors/connector-editor.component';
 import { ConnectorsPageComponent } from './connectors/connectors-page.component';

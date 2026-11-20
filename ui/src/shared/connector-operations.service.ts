@@ -95,10 +95,14 @@ export class ConnectorOperationsService {
     return data;
   }
 
-  /** The devices directly in a group that do not offer the connector file `name`. */
-  async groupDevicesWithout(groupId: string | number, name: string): Promise<IManagedObject[]> {
+  /**
+   * The devices directly in a group, and those of them that do not offer the connector file
+   * `name`. Subgroups are not searched.
+   */
+  async checkGroup(groupId: string | number, name: string): Promise<{ devices: number; missing: IManagedObject[] }> {
     const { data } = await this.inventory.childAssetsList(groupId, { pageSize: 2000 });
-    return data.filter(mo => mo['c8y_IsDevice'] !== undefined && !this.offers(mo, name));
+    const devices = data.filter(mo => mo['c8y_IsDevice'] !== undefined);
+    return { devices: devices.length, missing: devices.filter(mo => !this.offers(mo, name)) };
   }
 
   /** thin-edge.io gateways whose name contains `term`. */
