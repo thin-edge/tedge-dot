@@ -1,0 +1,75 @@
+{
+  "name": "tedge-dot-ui",
+  "version": "0.0.21",
+  "description": "Device Management plugin to keep, check and send tedge-dot connector files",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "sync": "node scripts/sync-validation.mjs",
+    "prestart": "npm run sync",
+    "start": "ng serve",
+    "prebuild": "npm run sync",
+    "build": "ng build",
+    "pretest": "npm run sync",
+    "test": "jest",
+    "pretypecheck": "npm run sync",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@angular/animations": "^22.0.0",
+    "@angular/cdk": "^22.0.0",
+    "@angular/common": "^22.0.0",
+    "@angular/compiler": "^22.0.0",
+    "@angular/core": "^22.0.0",
+    "@angular/forms": "^22.0.0",
+    "@angular/platform-browser": "^22.0.0",
+    "@angular/platform-browser-dynamic": "^22.0.0",
+    "@angular/router": "^22.0.0",
+    "@angular/upgrade": "^22.0.0",
+    "@c8y/bootstrap": "1025.12.0",
+    "@c8y/client": "1025.12.0",
+    "@c8y/ngx-components": "1025.12.0",
+    "@c8y/style": "1025.12.0",
+    "ajv": "^8.20.0",
+    "monaco-editor": "0.57.0",
+    "ngx-bootstrap": "22.0.0",
+    "rxjs": "7.8.2",
+    "smol-toml": "^1.6.1",
+    "zone.js": "~0.16.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^22.0.0",
+    "@angular/cli": "^22.0.0",
+    "@angular/compiler-cli": "^22.0.0",
+    "@c8y/devkit": "1025.12.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^30.0.0",
+    "ts-jest": "^29.4.15",
+    "typescript": "~6.0.3"
+  },
+  "c8y": {
+    "application": {
+      "name": "tedge-dot OT connectors",
+      "description": "Keep, check and send tedge-dot connector files from Device Management",
+      "contextPath": "tedge-dot-ui",
+      "key": "tedge-dot-ui-application-key",
+      "globalTitle": "tedge-dot OT connectors",
+      "isPackage": true,
+      "noAppSwitcher": true,
+      "package": "plugin",
+      "exports": [
+        {
+          "name": "OT connectors",
+          "module": "TedgeDotConnectorsModule",
+          "path": "./src/connectors.module.ts",
+          "description": "Management > OT connectors and the OT connectors device tab for tedge-dot connector files",
+          "readmePath": "README.md"
+        }
+      ]
+    }
+  }
+}

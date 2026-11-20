@@ -38,3 +38,10 @@ site/src/content/docs/get-started/install.md
 site/src/content/docs/whats-new.md
 site/.lighthouseci/
 site/preview.log
+
+# Device Management plugin (ui/): dependencies, build output and the validation copied in by
+# ui/scripts/sync-validation.mjs
+ui/node_modules/
+ui/dist/
+ui/src/generated/
+ui/.angular/
