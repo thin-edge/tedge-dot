@@ -1,35 +1,41 @@
-## 1. Spike
+## 1. Project
 
-- [ ] 1.1 On a thin-edge.io 2.1 gateway, confirm that the agent runs a plugin's `prepare` and `set` for a `::tedge-dot` type its `list` does not include. If it does not, switch to the fallback in the design's risks before task 3.
+- [ ] 1.1 Scaffold the Web SDK 1025 plugin project in `ui/`: `package.json` with the `c8y.application` manifest exporting the plugin module, lockfile, `angular.json` with the devkit builders, Jest, lint, and a dev server against Device Management
+- [ ] 1.2 Check the 1025 typings for `RepositoryService`, the configuration components, `EditorComponent`, `OperationService` and `OperationBulkService`, and adjust the design if they changed
 
-## 2. `tedge-dot check` (both builds)
+## 2. Validation
 
-- [ ] 2.1 Shared test vectors: usable and unusable files with their expected messages, `--as` resolution, and the remote-change cases (changed endpoint; added, unchanged and removed password file; new file with a local-only setting; new `points_from` path; changed `point_library_path`)
-- [ ] 2.2 C: the `check` subcommand, reusing the loader and the protocol module's configuration checks without connecting, and the local-only and path-reference rules; tests in `impl/c/tests`
-- [ ] 2.3 Rust: the same subcommand, rules and tests
-- [ ] 2.4 Both builds pass the vectors with identical verdicts and messages
+- [ ] 2.1 Build step that brings the config builder's validation module and its schema and protocol files into `ui/`, with a test that the UI and the config builder give the same verdicts
+- [ ] 2.2 TOML grammar for Monaco, syntax errors as editor markers, and schema errors listed with their key
 
-## 3. Configuration plugin
+## 3. OT connectors page
 
-- [ ] 3.1 `packaging/config-plugin/tedge-dot` (POSIX sh): `list`, `get`, `prepare`, `set`, `verify` and `rollback` as specified, the name rule, the check run as `tedge`, and `sync_config` after a file is added or removed
-- [ ] 3.2 Install it in both packages (`.goreleaser.yaml` for tedge-dot-rs, `impl/c/packaging/nfpm.yaml` for tedge-dot-c); `packaging/check-manifest-parity.sh` passes
-- [ ] 3.3 Plugin tests with stand-ins for `tedge` and `tedge-dot`
-- [ ] 3.4 Cloud e2e test in `cloud/`: snapshot, update, refused update and new file on a thin-edge.io gateway
+- [ ] 3.1 Navigator node under Management and the list of `tedge-dot-` entries
+- [ ] 3.2 Add and edit: file name rule, editor, validation, save through `RepositoryService`
+- [ ] 3.3 Delete with confirmation
+- [ ] 3.4 Send to a gateway, registering the file first when needed, and to a group with the pre-check
 
-## 4. Device Management plugin (`ui/`)
+## 4. Registration
 
-- [ ] 4.1 Scaffold the Web SDK 1024 plugin project in `ui/`: `package.json`, lockfile, the devkit configuration that exports the plugin module, lint and unit tests
-- [ ] 4.2 OT connectors page: navigator node, list of `::tedge-dot` entries, add and edit with a code editor and a TOML syntax check, delete, send to a gateway or a group
-- [ ] 4.3 Device tab: shown for devices with `::tedge-dot` types; files on the device with snapshot, save to repository and download; repository entries with send
-- [ ] 4.4 Unit tests for the services and components
-- [ ] 4.5 CI job for `ui/` (install, lint, test, build) and the plugin zip as a release asset
+- [ ] 4.1 Registration service: fresh snapshot, append-only edit, conflict check, confirmation, send, wait for the new type, temporary binary cleanup
+- [ ] 4.2 Unit tests for the text edit (byte-for-byte preservation, conflicts) and the operation sequence
 
-## 5. Docs
+## 5. Device tab
 
-- [ ] 5.1 Guide for managing connector files from Cumulocity: installing the UI plugin, the plugin's types, the rules for files from the cloud, and moving from a hand-registered file; `doc/install.md` and the README
-- [ ] 5.2 Docs site: place the new doc in `site/docs-map.yaml` and update the guides that cover configuration delivery
-- [ ] 5.3 Release highlight in `changes/c8y-connector-files.md`
+- [ ] 5.1 Tab for devices with `tedge-configuration-plugin`, using Device Management's configuration components limited to `tedge-dot-` types
+- [ ] 5.2 "Add connector file", registering a file already on the gateway, and opening an entry on the OT connectors page
 
-## 6. Verification
+## 6. CI and release
 
-- [ ] 6.1 On a test gateway, install both packages and the UI plugin, run the scenarios of the three specs, and record the results in the PR
+- [ ] 6.1 CI job for `ui/`: install, lint, test, build
+- [ ] 6.2 Release asset: the plugin zip
+
+## 7. Docs
+
+- [ ] 7.1 Guide for managing connector files from Cumulocity: adding the plugin to Device Management, type names, registration, what validation covers and what it cannot see, minimum tedge-dot version; `doc/install.md` and the README
+- [ ] 7.2 Docs site: place the new doc in `site/docs-map.yaml` and update the guides that cover configuration delivery
+- [ ] 7.3 Release highlight in `changes/c8y-connector-files.md`
+
+## 8. Verification
+
+- [ ] 8.1 On a test tenant with a thin-edge.io gateway, install the plugin, run the spec's scenarios, and record the results in the PR
