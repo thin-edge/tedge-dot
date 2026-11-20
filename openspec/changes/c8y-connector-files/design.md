@@ -28,12 +28,16 @@ The Web SDK (checked against 1024.23.0) provides what the UI needs:
 
 The docs site's config builder (`site/src/lib/config-builder.ts`) already parses TOML and validates
 a connector file against `doc/contract/schemas/config.schema.json` and the protocol shapes in
-`site/src/data/protocols.json`.
+`site/src/data/protocols.json`. Its form (`site/src/components/tools/ConfigBuilder.tsx`, Preact)
+edits the parsed object with the module's helpers (`getAt`, `setAt`, `coerce`, `protocolInfo`) and
+writes TOML with `emitToml`, which lays a file out the way the shipped configs are and has no
+comments. Its field help is in `site/src/lib/help.ts`.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - One place in Device Management to keep, edit, check and send connector files.
+- Writing a connector file in a form, without knowing its TOML keys.
 - A device tab that looks and works like the Configuration tab, limited to connector files.
 - Adding a connector file to a gateway without touching the gateway.
 - No change to gateways, packages or tedge-dot.
@@ -41,7 +45,8 @@ a connector file against `doc/contract/schemas/config.schema.json` and the proto
 **Non-Goals:**
 - Validation with tedge-dot's own loader, rollback, and discovering files nobody registered. A
   gateway-side configuration plugin can add these later.
-- Per-gateway values, a form editor, revisions, a fleet view, point libraries and secrets.
+- Per-gateway values, form edits that keep comments, revisions, a fleet view, point libraries and
+  secrets.
 
 ## Decisions
 
@@ -107,17 +112,54 @@ and lists them: their operations would fail, and each needs "Add connector file"
 ### D8. Web SDK version and project
 
 The plugin targets Web SDK 1025, the current release line and the 2027 LTS. The 1024.23.0
-findings above need a re-check against 1025 when the project is set up. The project follows the
+findings above need a re-check against 1025 when the project is set up. Device Management 1025
+runs on Angular 22 without zone.js change detection, so component state lives in signals. The
+SDK's `getConfigSnapshot` drops the snapshot's event id, so registration reads the latest
+configuration event itself to tell a new snapshot from the previous one. The project follows the
 devkit's plugin layout: a `c8y.application` manifest in `package.json` exporting one module,
 `@c8y/devkit` builders, and Jest for the logic, which stays in plain TypeScript files under
 `src/shared/` (including the order of the registration steps, tested with fakes). It lives in
 `ui/` with its own lockfile and CI job, like `site/`.
+
+### D9. Form and TOML views of the same file
+
+The editor shows the file in one of two views, switched with a toggle:
+
+- **TOML**: the code editor of D6.
+- **Form**: the sections of the docs site's config builder in Angular: `[connector]` with
+  `report`, `measurement` and `grouping`, `[mqtt]`, `[connection]`, and each `[[device]]` with its
+  settings, `protocol_address` and points. Protocol tables take their fields from the builder's
+  protocol shapes. Each field has the builder's help text, and a schema error shows at the field it
+  concerns. Devices and points can be added and removed. The protocol can be switched: devices and
+  points get the new protocol's address templates, and ids and policies are kept. Keys the form
+  does not show are kept as they are and listed.
+
+The file's text is the one source. The form parses it, and a form edit writes the whole file
+again with `emitToml`. That layout has no comments, so a file whose text differs from
+`emitToml(parseToml(text))` loses its comments and its own formatting on the first form edit. The
+form then shows such a file read-only, with a notice that names the number of comment lines, and
+becomes editable only after the user accepts the rewrite. A file with a syntax error has no form;
+the notice points to the line in the TOML view.
+
+New files open in the form. Existing files open in the form when the rewrite would change
+nothing, and in TOML otherwise.
+
+The site keeps its Preact form; the plugin gets the same model, options and texts. The option
+lists the form needs (outputs, grouping policies, aggregates, report fields) move from the site's
+simulator modules into `site/src/lib/form-options.ts`, which imports nothing, so the build step of
+D4 can bring it and `help.ts` into `ui/` without the simulator. The plain logic of the form (which
+fields a protocol table has, adding and removing devices and points, switching protocols, the
+rewrite check) lives in `src/shared/` with unit tests.
 
 ## Risks / Trade-offs
 
 - [A file tedge-dot refuses counts as installed, and its connector stays stopped after the next
   restart] → Schema validation catches most mistakes before sending. The docs say so plainly, and
   the follow-up gateway plugin closes the gap.
+- [A form edit drops a file's comments and formatting] → The form shows such a file read-only
+  until the user accepts the rewrite, and says how many comment lines go. The TOML view keeps them.
+- [The form and the docs site's builder drift apart] → Both use the same model, options and help
+  texts; the site's tests hold the options and texts to the schema.
 - [The UI edits thin-edge.io's list of managed files] → It only appends one block for a path in the
   connector directory, shows it before sending, and never edits or removes other entries.
 - [The list changes on the gateway between snapshot and send] → The snapshot is taken right before

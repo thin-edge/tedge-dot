@@ -20,7 +20,8 @@ page SHALL list the configuration repository entries whose configuration type st
 
 ### Requirement: Create and edit entries
 Users SHALL be able to add an entry with a name, a description, a file name, an optional device
-type and content, and to edit an entry's content in a code editor with TOML highlighting. The file
+type and content, and to edit an entry's content in a code editor with TOML highlighting or in a
+form. The file
 name SHALL match `[A-Za-z0-9][A-Za-z0-9._-]*`. A saved entry SHALL have the configuration type
 `tedge-dot-<file name>` and point to an uploaded binary with the content.
 
@@ -31,6 +32,37 @@ name SHALL match `[A-Za-z0-9][A-Za-z0-9._-]*`. A saved entry SHALL have the conf
 #### Scenario: Invalid file name
 - **WHEN** a user enters the file name `../tedge`
 - **THEN** the form refuses it and nothing is saved
+
+### Requirement: Form view
+The editor SHALL offer a form view and a TOML view of the same content. The form SHALL cover the
+sections of the docs site's config builder: `[connector]` with `report`, `measurement` and
+`grouping`, `[mqtt]`, `[connection]`, and each `[[device]]` with its settings, `protocol_address`
+and points, with the builder's help text for each field. It SHALL show a schema error at the field
+it concerns, add and remove devices and points, and switch the protocol. Keys the form does not
+show SHALL be kept. A form edit SHALL write the whole file in the config builder's layout. When that
+layout differs from the file's text, the form SHALL be read-only until the user accepts that the
+file's comments and formatting are dropped. New files SHALL open in the form.
+
+#### Scenario: Editing a field
+- **WHEN** a user changes a Modbus device's `port` to `5020` in the form
+- **THEN** the TOML view holds `port = 5020` in that device's `protocol_address`
+
+#### Scenario: Error at its field
+- **WHEN** a point's `datatype` is `"float33"`
+- **THEN** the form shows the schema's message under that point's datatype field
+
+#### Scenario: File with comments
+- **WHEN** a user opens `opcua-pump.toml`, which has comment lines, in the form
+- **THEN** the form is read-only and says how many comment lines a form edit drops, and the file
+  is unchanged until the user accepts
+
+#### Scenario: Unknown key
+- **WHEN** a point has a `meta` table the form has no field for, and the user changes its `unit`
+- **THEN** the written file still holds the `meta` table
+
+#### Scenario: Syntax error
+- **WHEN** the content has an unclosed string on line 12
+- **THEN** the form view shows no form and names line 12
 
 ### Requirement: Validation before saving
 Before saving, the editor SHALL validate the content with the docs site's config builder

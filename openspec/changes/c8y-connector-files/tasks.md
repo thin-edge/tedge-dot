@@ -36,6 +36,14 @@
 - [x] 7.2 Docs site: place the new doc in `site/docs-map.yaml`; the README and the install guide link it (no site guide covers configuration delivery yet)
 - [x] 7.3 Release highlight in `changes/c8y-connector-files.md`
 
-## 8. Verification
+## 8. Form view
 
-- [ ] 8.1 On a test tenant with a thin-edge.io gateway, install the plugin, run the spec's scenarios, and record the results in the PR
+- [x] 8.1 Move the form's option lists (outputs, grouping policies, aggregates, report fields) into `site/src/lib/form-options.ts`, re-exported where the site uses them; bring it and `help.ts` into `ui/` with the build step
+- [x] 8.2 Form logic in `src/shared/` with unit tests: fields of a protocol table, adding and removing devices and points, switching protocols, the rewrite check and comment count
+- [x] 8.3 Form component: the config builder's sections and fields, help texts, errors at their fields, kept keys listed
+- [x] 8.4 Form and TOML toggle in the editor: read-only form until the rewrite is accepted, no form on a syntax error, which view a file opens in
+- [x] 8.5 Docs: the guide and the release highlight describe the form
+
+## 9. Verification
+
+- [ ] 9.1 On a test tenant with a thin-edge.io gateway, install the plugin, run the spec's scenarios, and record the results in the PR

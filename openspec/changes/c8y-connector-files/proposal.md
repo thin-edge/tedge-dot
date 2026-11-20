@@ -8,7 +8,8 @@ gateway:
   blueprint does. Until then Cumulocity cannot read it or send it.
 - Nothing in Cumulocity shows or edits connector files. Users edit TOML locally, upload it to the
   configuration repository by hand and send it device by device, without any check before it
-  reaches the gateway.
+  reaches the gateway. Writing TOML by hand also needs the configuration reference open next to
+  it.
 
 ## What Changes
 
@@ -17,6 +18,10 @@ gateway:
   - Management > OT connectors lists the configuration repository entries for connector files. It
     adds, edits, deletes and sends them to a gateway or a group. The editor checks each file
     against the contract schema, with the same validation as the docs site's config builder.
+  - The editor shows a file as a form or as TOML. The form covers what the docs site's config
+    builder covers (connector settings, reporting, grouping, MQTT, connection, devices and points,
+    with the builder's help texts), so a file can be written without knowing its TOML keys. Comments
+    and hand formatting do not survive a form edit: the form asks before it rewrites such a file.
   - An "OT connectors" tab on thin-edge.io gateways shows the gateway's connector files and the
     repository's entries, using Device Management's own configuration components. It can add a
     connector file to the gateway and register a file that is already there.
@@ -29,8 +34,8 @@ Gateways need no change: thin-edge.io's built-in file plugin installs the files,
 0.0.13 or later applies them on its own.
 
 Not in this change: a gateway-side plugin (discovering unregistered files, validation with
-tedge-dot's own loader, rollback), per-gateway values, a form editor, revisions and fleet views,
-point libraries from Cumulocity, and secrets. Each is a follow-up change.
+tedge-dot's own loader, rollback), per-gateway values, form edits that keep comments, revisions and
+fleet views, point libraries from Cumulocity, and secrets. Each is a follow-up change.
 
 ## Capabilities
 
@@ -42,7 +47,9 @@ point libraries from Cumulocity, and secrets. Each is a follow-up change.
 ## Impact
 
 - New `ui/` project (Web SDK, Angular) with its own lockfile, lint and tests, next to `site/`.
-- The docs site's config builder: its validation is shared with the UI instead of copied.
+- The docs site's config builder: its validation, editing helpers, field options and help texts are
+  shared with the UI instead of copied. The option lists move to a module of their own so the UI
+  does not take the site's simulator code with them.
 - CI and release workflows: a UI job and a release asset.
 - Docs: a guide for managing connector files from Cumulocity, the install guide, the docs site
   map, and a release highlight.
