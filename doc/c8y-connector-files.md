@@ -44,6 +44,25 @@ The page lists the configuration repository entries whose type starts with `tedg
   subgroups.
 - **Delete** removes the entry and its file from the repository. Gateways keep their copy.
 
+### Form and TOML
+
+The editor shows a file as a **form** or as **TOML**, switched above the editing area. Both edit
+the same file.
+
+The form has the sections of the docs site's config builder: `[connector]` with its reporting,
+grouping and measurement settings, `[mqtt]`, `[connection]`, and each device with its settings,
+`protocol_address` and points. Each field has a help text, and a schema error shows under the
+field it concerns. *Add device*, *Add point* and the remove buttons start from the protocol's
+templates, and switching the protocol gives every device and point the new protocol's address
+fields while keeping ids and policies. Keys the form has no field for stay in the file and are
+listed as "Also set, kept as is".
+
+A form edit writes the whole file again in the config builder's layout, which has no comments. A
+file whose text is not in that layout, such as one with comments, opens in the TOML view, and the
+form shows it read-only with the number of comment lines it would drop. Choose *Drop the comments
+and edit in the form* to edit it there anyway; the TOML view never changes a file on its own. New
+files open in the form.
+
 ### What the editor checks
 
 Before saving, the editor validates the file with the same code as the docs site's config
@@ -59,14 +78,16 @@ the connector after sending a file that changes library references or file paths
 
 ## The OT connectors tab
 
-Every thin-edge.io gateway (a device that offers the configuration type
-`tedge-configuration-plugin`) gets an **OT connectors** tab after Configuration. It works like the
-Configuration tab, limited to connector files:
+Every device that offers the configuration type `tedge-configuration-plugin` gets an **OT
+connectors** tab after Configuration: thin-edge.io gateways, and child devices that run their own
+thin-edge.io agent. It works like the Configuration tab, limited to connector files:
 
 - **On device** lists the gateway's connector files. *Get snapshot from device* reads the file;
   the preview can save the snapshot to the repository or download it.
-- **Available from repository** lists the repository entries for the selected file. *Send
-  configuration to device* installs one; *Edit in repository* opens it on the OT connectors page.
+- **Available from repository** lists the repository entries of the selected file's type. Unlike
+  the Configuration tab, it leaves out entries without a type, which would replace the connector
+  file with unrelated content. *Send configuration to device* installs one; *Edit in repository*
+  opens it on the OT connectors page.
 - **Add connector file** installs a repository entry the gateway does not have yet.
 - **Register a file on the gateway** makes a file that is already there, such as a packaged
   `modbus.toml`, a configuration type, so you can take snapshots of it and send new versions.
