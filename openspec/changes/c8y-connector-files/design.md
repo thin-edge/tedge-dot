@@ -109,7 +109,8 @@ and lists them: their operations would fail, and each needs "Add connector file"
 The plugin targets Web SDK 1025, the current release line and the 2027 LTS. The 1024.23.0
 findings above need a re-check against 1025 when the project is set up. The project follows the
 devkit's plugin layout: a `c8y.application` manifest in `package.json` exporting one module,
-`@c8y/devkit` builders, and Jest for the logic, which stays in plain TypeScript files. It lives in
+`@c8y/devkit` builders, and Jest for the logic, which stays in plain TypeScript files under
+`src/shared/` (including the order of the registration steps, tested with fakes). It lives in
 `ui/` with its own lockfile and CI job, like `site/`.
 
 ## Risks / Trade-offs
