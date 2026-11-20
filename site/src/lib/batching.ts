@@ -6,24 +6,9 @@
 import { Batcher, groupByOf, groupingOf, levelNaming, mergeGroupingLevel, resolveName, type Name, type Message } from './batch';
 import { parseDuration } from './report';
 import { simulateSignal, type Run, type SignalSpec } from './playground';
+import { AGGREGATES, POLICIES } from './form-options';
 
-/** The `output` values the tools offer; "samples" and "measurements" are their deprecated names. */
-export const OUTPUTS = ['single', 'group'];
-
-/** Every `grouping.by`, as the playground offers them (a test holds them to the schema). */
-export const POLICIES: { id: 'time' | 'frame' | 'sample'; text: string }[] = [
-  { id: 'time', text: 'Readings with the same timestamp share a measurement. Nothing is lost, no time is moved. A signal that published nothing at that time is not in the measurement.' },
-  { id: 'frame', text: 'Readings within a window share a measurement stamped with its first time. Nothing is lost; a time moves by less than the window. A signal that published nothing in the window is not in it.' },
-  { id: 'sample', text: 'Every period, the value each signal holds, stamped with the sample time, whether it changed or not. Readings in between are not sent. A signal with no good value (never read, or in an outage) is left out.' },
-];
-
-/** The `grouping.aggregate` choices under "sample" (a test checks they cover every aggregate). */
-export const AGGREGATES: { id: string; label: string; value: string | string[] | null }[] = [
-  { id: 'none', label: 'none (sample and hold)', value: null },
-  { id: 'mean', label: '"mean"', value: 'mean' },
-  { id: 'mean_min_max', label: '["mean", "min", "max"]', value: ['mean', 'min', 'max'] },
-  { id: 'all', label: '["mean", "min", "max", "last"]', value: ['mean', 'min', 'max', 'last'] },
-];
+export { AGGREGATES, OUTPUTS, POLICIES } from './form-options';
 
 export const WINDOWS = ['100ms', '250ms', '500ms', '1s', '2s', '5s'];
 export const EVERY = ['500ms', '1s', '5s', '10s', '30s', '1m'];

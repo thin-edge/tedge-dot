@@ -192,13 +192,7 @@ export function simulate(
   return simulateSignal({ id: 'p', shape: signal, source: 'polled', interval: `${pollMs}ms`, outage: 'none', report: table }, durationMs, tickMs);
 }
 
-/** The `report` keys after `on_change`, as the config builder offers them (a test holds them to the schema). */
-export const REPORT_FIELDS = [
-  { key: 'deadband', hint: 'A number, or a percentage like "2%"' },
-  { key: 'min_interval', hint: 'At most once per interval, e.g. "30s"' },
-  { key: 'max_interval', hint: 'Heartbeat, e.g. "30m"' },
-  { key: 'debounce', hint: 'Publish once settled, e.g. "5s"' },
-] as const;
+export { REPORT_FIELDS } from './form-options';
 
 /** The `report` table as a line of TOML, with only the keys that are set. */
 export function tableToToml(table: ReportTable): string {
