@@ -146,6 +146,12 @@ error has no form; the notice points to the line in the TOML view.
 
 Files open in the form, except files the form cannot read, which open in TOML.
 
+The form follows the Web SDK's Codex patterns: `c8y-form-group` with `c8y-messages` for each field
+and its error, sentence-case labels with the TOML key as the title of the field's help popover,
+`c8y-switch` for on/off settings, Codex collapse sections (legend-style toggles) for reporting,
+grouping, measurement names, device settings and each point, the grid for field rows,
+`btn-dot--danger` buttons to remove devices and points, and alerts for deprecated settings.
+
 The site keeps its Preact form; the plugin gets the same model, options and texts. The option
 lists the form needs (outputs, grouping policies, aggregates, report fields) move from the site's
 simulator modules into `site/src/lib/form-options.ts`, which imports nothing, so the build step of
