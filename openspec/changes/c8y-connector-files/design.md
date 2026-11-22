@@ -45,8 +45,7 @@ comments. Its field help is in `site/src/lib/help.ts`.
 **Non-Goals:**
 - Validation with tedge-dot's own loader, rollback, and discovering files nobody registered. A
   gateway-side configuration plugin can add these later.
-- Per-gateway values, form edits that keep comments, revisions, a fleet view, point libraries and
-  secrets.
+- Per-gateway values, revisions, a fleet view, point libraries and secrets.
 
 ## Decisions
 
@@ -134,30 +133,35 @@ The editor shows the file in one of two views, switched with a toggle:
   points get the new protocol's address templates, and ids and policies are kept. Keys the form
   does not show are kept as they are and listed.
 
-The file's text is the one source. The form parses it, and a form edit writes the whole file
-again with `emitToml`. That layout has no comments, so a file whose text differs from
-`emitToml(parseToml(text))` loses its comments and its own formatting on the first form edit. The
-form then shows such a file read-only, with a notice that names the number of comment lines, and
-becomes editable only after the user accepts the rewrite. A file with a syntax error has no form;
-the notice points to the line in the TOML view.
+The file's text is the one source. The form parses it, and a form edit is written into the text,
+so comments and layout stay: `@decimalturn/toml-patch` (3.3.2, MIT, no dependencies) applies the
+difference between the file and the edited configuration. It misplaces new `[[device]]` and
+`[[device.point]]` tables, so the plugin writes new devices and points itself, in `emitToml`'s
+layout, at the end of their device's section (a new device after the last device's trailing
+comments). toml-patch appends a new key below a table's trailing comments and later treats
+comments right above a key as the key's own, so a blank line goes between them. Every result is
+parsed again and must equal the edited configuration. When it does not, the whole file is written
+with `emitToml`, after a confirmation that names the comment lines it drops. A file with a syntax
+error has no form; the notice points to the line in the TOML view.
 
-New files open in the form. Existing files open in the form when the rewrite would change
-nothing, and in TOML otherwise.
+Files open in the form, except files the form cannot read, which open in TOML.
 
 The site keeps its Preact form; the plugin gets the same model, options and texts. The option
 lists the form needs (outputs, grouping policies, aggregates, report fields) move from the site's
 simulator modules into `site/src/lib/form-options.ts`, which imports nothing, so the build step of
 D4 can bring it and `help.ts` into `ui/` without the simulator. The plain logic of the form (which
-fields a protocol table has, adding and removing devices and points, switching protocols, the
-rewrite check) lives in `src/shared/` with unit tests.
+fields a protocol table has, adding and removing devices and points, switching protocols, writing
+an edit into the text) lives in `src/shared/` with unit tests, which edit the repository's
+commented demo configurations.
 
 ## Risks / Trade-offs
 
 - [A file tedge-dot refuses counts as installed, and its connector stays stopped after the next
   restart] → Schema validation catches most mistakes before sending. The docs say so plainly, and
   the follow-up gateway plugin closes the gap.
-- [A form edit drops a file's comments and formatting] → The form shows such a file read-only
-  until the user accepts the rewrite, and says how many comment lines go. The TOML view keeps them.
+- [A form edit changes or drops a file's comments] → Edits are written into the text and checked
+  against the edited values; when that fails, the user is asked before the file is rewritten.
+  Removing a device or point removes the comments inside its section, which describe it.
 - [The form and the docs site's builder drift apart] → Both use the same model, options and help
   texts; the site's tests hold the options and texts to the schema.
 - [The UI edits thin-edge.io's list of managed files] → It only appends one block for a path in the

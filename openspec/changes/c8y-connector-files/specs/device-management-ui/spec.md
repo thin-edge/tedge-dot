@@ -39,9 +39,10 @@ sections of the docs site's config builder: `[connector]` with `report`, `measur
 `grouping`, `[mqtt]`, `[connection]`, and each `[[device]]` with its settings, `protocol_address`
 and points, with the builder's help text for each field. It SHALL show a schema error at the field
 it concerns, add and remove devices and points, and switch the protocol. Keys the form does not
-show SHALL be kept. A form edit SHALL write the whole file in the config builder's layout. When that
-layout differs from the file's text, the form SHALL be read-only until the user accepts that the
-file's comments and formatting are dropped. New files SHALL open in the form.
+show SHALL be kept. A form edit SHALL change only the text it concerns, keeping the file's comments
+and layout. When an edit cannot be written that way, the editor SHALL ask before it rewrites the
+whole file in the config builder's layout. Files SHALL open in the form unless the form cannot
+read them.
 
 #### Scenario: Editing a field
 - **WHEN** a user changes a Modbus device's `port` to `5020` in the form
@@ -52,9 +53,13 @@ file's comments and formatting are dropped. New files SHALL open in the form.
 - **THEN** the form shows the schema's message under that point's datatype field
 
 #### Scenario: File with comments
-- **WHEN** a user opens `opcua-pump.toml`, which has comment lines, in the form
-- **THEN** the form is read-only and says how many comment lines a form edit drops, and the file
-  is unchanged until the user accepts
+- **WHEN** a user changes a point's `unit` in the form on `opcua-pump.toml`, which has comment lines
+- **THEN** only that point's `unit` line changes in the TOML, and every comment line is still there
+
+#### Scenario: New point in a commented file
+- **WHEN** a user adds a point to the device of a commented file in the form
+- **THEN** the TOML holds a new `[[device.point]]` table at the end of that device's section, and
+  every comment line is still there
 
 #### Scenario: Unknown key
 - **WHEN** a point has a `meta` table the form has no field for, and the user changes its `unit`

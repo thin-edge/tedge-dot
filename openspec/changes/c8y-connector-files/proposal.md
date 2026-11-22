@@ -20,8 +20,8 @@ gateway:
     against the contract schema, with the same validation as the docs site's config builder.
   - The editor shows a file as a form or as TOML. The form covers what the docs site's config
     builder covers (connector settings, reporting, grouping, MQTT, connection, devices and points,
-    with the builder's help texts), so a file can be written without knowing its TOML keys. Comments
-    and hand formatting do not survive a form edit: the form asks before it rewrites such a file.
+    with the builder's help texts), so a file can be written without knowing its TOML keys. Form
+    edits keep the file's comments and layout.
   - An "OT connectors" tab on thin-edge.io gateways shows the gateway's connector files and the
     repository's entries, using Device Management's own configuration components. It can add a
     connector file to the gateway and register a file that is already there.
@@ -34,8 +34,8 @@ Gateways need no change: thin-edge.io's built-in file plugin installs the files,
 0.0.13 or later applies them on its own.
 
 Not in this change: a gateway-side plugin (discovering unregistered files, validation with
-tedge-dot's own loader, rollback), per-gateway values, form edits that keep comments, revisions and
-fleet views, point libraries from Cumulocity, and secrets. Each is a follow-up change.
+tedge-dot's own loader, rollback), per-gateway values, revisions and fleet views, point libraries
+from Cumulocity, and secrets. Each is a follow-up change.
 
 ## Capabilities
 

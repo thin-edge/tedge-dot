@@ -43,6 +43,7 @@
 - [x] 8.3 Form component: the config builder's sections and fields, help texts, errors at their fields, kept keys listed
 - [x] 8.4 Form and TOML toggle in the editor: read-only form until the rewrite is accepted, no form on a syntax error, which view a file opens in
 - [x] 8.5 Docs: the guide and the release highlight describe the form
+- [x] 8.6 Form edits keep comments: write edits into the text with toml-patch, add new devices and points in place, check every result, ask before a full rewrite
 
 ## 9. Verification
 
