@@ -57,11 +57,12 @@ templates, and switching the protocol gives every device and point the new proto
 fields while keeping ids and policies. Keys the form has no field for stay in the file and are
 listed as "Also set, kept as is".
 
-A form edit writes the whole file again in the config builder's layout, which has no comments. A
-file whose text is not in that layout, such as one with comments, opens in the TOML view, and the
-form shows it read-only with the number of comment lines it would drop. Choose *Drop the comments
-and edit in the form* to edit it there anyway; the TOML view never changes a file on its own. New
-files open in the form.
+A form edit changes only the lines it concerns, so the file keeps its comments and layout. New
+devices and points are added at the end of their device's section in the config builder's
+layout. Removing a device or point also removes the comments inside its section. If an edit
+cannot be written into the file that way, the editor asks before it rewrites the whole file in the
+standard layout, and says how many comment lines that drops. Files open in the form, except files
+with a syntax error, which open in TOML with the error marked.
 
 ### What the editor checks
 
