@@ -2,7 +2,7 @@ import { Component, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
-import { AlertService, CoreModule } from '@c8y/ngx-components';
+import { AlertService, CoreModule, ModalService, Status } from '@c8y/ngx-components';
 import { gettext } from '@c8y/ngx-components/gettext';
 import { EditorComponent, loadMonacoEditor } from '@c8y/ngx-components/editor';
 import { RepositoryService, RepositoryType, SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
@@ -10,6 +10,7 @@ import type * as Monaco from 'monaco-editor';
 
 import { PROTOCOL_IDS, emitToml, newConfig, type Config, type ProtocolId } from '../generated/config-builder';
 import { commentLines } from '../shared/form-model';
+import { writeKeepingLayout } from '../shared/toml-write';
 import { isValidName, nameOf, normalizeName, pathOf, typeOf } from '../shared/naming';
 import { TOML_LANGUAGE_ID, tomlLanguage } from '../shared/toml-language';
 import { type ValidationResult, isValid, validateConnectorFile } from '../shared/validation';
@@ -111,15 +112,7 @@ const MARKER_OWNER = 'tedge-dot';
                   {{ 'This file has no [connector] table, so the form cannot show it. Edit it in the TOML view.' | translate }}
                 </div>
               } @else {
-                @if (formLocked()) {
-                  <div class="alert alert-warning" role="status">
-                    <p class="m-b-8">{{ lockedText() }}</p>
-                    <button type="button" class="btn btn-default btn-sm" (click)="rewriteAccepted.set(true)">
-                      {{ (commentCount() > 0 ? 'Drop the comments and edit in the form' : 'Edit in the form') | translate }}
-                    </button>
-                  </div>
-                }
-                <tdot-connector-form [config]="r.config!" [errors]="r.fields" [readOnly]="formLocked()" (configChange)="onFormChange($event)" />
+                <tdot-connector-form [config]="r.config!" [errors]="r.fields" (configChange)="onFormChange($event)" />
               }
             }
           </div>
@@ -190,6 +183,7 @@ export class ConnectorEditorComponent {
   private readonly inventory = inject(InventoryService);
   private readonly repository = inject(RepositoryService);
   private readonly alert = inject(AlertService);
+  private readonly modal = inject(ModalService);
 
   readonly protocols = PROTOCOL_IDS;
   readonly editorOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
@@ -212,26 +206,12 @@ export class ConnectorEditorComponent {
   readonly fileTouched = signal(false);
   readonly saving = signal(false);
   readonly view = signal<'form' | 'toml'>('form');
-  /** The user accepted that a form edit rewrites this file without its comments and layout. */
-  readonly rewriteAccepted = signal(false);
 
   readonly result = computed<ValidationResult>(() => validateConnectorFile(this.content() ?? ''));
   readonly fileValid = computed(() => isValidName(normalizeName(this.fileName())));
   /** Where the file lands on a gateway, shown under the file name. */
   readonly gatewayPath = computed(() => pathOf(this.fileValid() ? normalizeName(this.fileName()) : '<name>'));
   readonly canSave = computed(() => !!this.name().trim() && this.fileValid() && isValid(this.result()));
-  /** Whether a form edit would change more than the edited value (comments, layout). */
-  readonly needsRewrite = computed(() => {
-    const config = this.result().config;
-    return !!config && emitToml(config) !== this.content();
-  });
-  readonly formLocked = computed(() => this.needsRewrite() && !this.rewriteAccepted());
-  readonly commentCount = computed(() => commentLines(this.content()));
-  readonly lockedText = computed(() => {
-    const n = this.commentCount();
-    const has = n > 0 ? `This file has ${n} comment ${n === 1 ? 'line' : 'lines'} and may have its own layout.` : 'This file has its own layout.';
-    return `${has} A form edit writes the whole file again in the standard layout${n > 0 ? ', without comments' : ''}. The TOML view keeps the file as it is.`;
-  });
 
   private monaco?: typeof Monaco;
   private editor?: Monaco.editor.IStandaloneCodeEditor;
@@ -245,7 +225,6 @@ export class ConnectorEditorComponent {
   private async load(id: string | null): Promise<void> {
     this.nameTouched.set(false);
     this.fileTouched.set(false);
-    this.rewriteAccepted.set(false);
     if (!id || id === 'new') {
       this.showForm();
       this.isNew.set(true);
@@ -269,8 +248,8 @@ export class ConnectorEditorComponent {
       this.deviceType.set(data['deviceType'] ?? '');
       this.fileName.set(nameOf(data['configurationType']) ?? '');
       this.content.set(data['url'] ? await this.repository.getBinaryText(data['url'], { allowExternal: false }) : '');
-      // A file the form would rewrite opens as TOML, as it is; the form is one click away.
-      if (this.result().config && !this.needsRewrite()) {
+      // A file the form cannot read opens as TOML, where the problem is marked.
+      if (this.result().config) {
         this.showForm();
       } else {
         this.showToml();
@@ -290,18 +269,45 @@ export class ConnectorEditorComponent {
   }
 
   showToml(): void {
-    // Text typed in the TOML view may bring comments back: the form asks again.
-    this.rewriteAccepted.set(false);
     this.view.set('toml');
   }
 
-  onFormChange(config: Config): void {
-    this.content.set(emitToml(config));
+  /**
+   * A form edit, written into the file's text so its comments and layout stay. When the edit
+   * cannot be written that way, the whole file is rewritten in the standard layout, after asking
+   * if that drops anything.
+   */
+  async onFormChange(config: Config): Promise<void> {
+    const text = this.content();
+    const kept = writeKeepingLayout(text, config);
+    if (kept !== undefined) {
+      this.content.set(kept);
+    } else {
+      const current = this.result().config;
+      const losesNothing = !!current && emitToml(current) === text;
+      if (!losesNothing && !(await this.confirmRewrite(commentLines(text)))) {
+        return;
+      }
+      this.content.set(emitToml(config));
+    }
     // "Start from" names the file's protocol, also after the form switched it.
     const protocol = config['connector']?.protocol;
     if ((PROTOCOL_IDS as readonly string[]).includes(protocol)) {
       this.startFrom.set(protocol);
     }
+  }
+
+  private async confirmRewrite(comments: number): Promise<boolean> {
+    const drops = comments > 0 ? ` and drops its ${comments} comment ${comments === 1 ? 'line' : 'lines'}` : '';
+    return this.modal
+      .confirm(
+        gettext('Rewrite the file?'),
+        `This change cannot be written into the file as it is. Applying it rewrites the whole file in the standard layout${drops}. Cancel keeps the file unchanged.`,
+        Status.WARNING,
+        { ok: gettext('Rewrite the file'), cancel: gettext('Cancel') }
+      )
+      .then(ok => ok !== false)
+      .catch(() => false);
   }
 
   async onEditorInit(editor: Monaco.editor.IStandaloneCodeEditor): Promise<void> {

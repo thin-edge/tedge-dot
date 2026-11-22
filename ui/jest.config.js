@@ -9,7 +9,9 @@ module.exports = {
   testMatch: ['**/*.spec.ts'],
   clearMocks: true,
   transform: {
-    '^.+\\.ts$': ['ts-jest', { tsconfig: { module: 'commonjs', esModuleInterop: true, resolveJsonModule: true } }]
+    '^.+\\.ts$': ['ts-jest', { tsconfig: { module: 'commonjs', esModuleInterop: true, resolveJsonModule: true } }],
+    // toml-patch ships ES modules only; Jest runs CommonJS.
+    '^.+/node_modules/@decimalturn/toml-patch/.+\\.js$': ['ts-jest', { tsconfig: { module: 'commonjs', allowJs: true } }],
   },
-  transformIgnorePatterns: ['/node_modules/(?!smol-toml)'],
+  transformIgnorePatterns: ['/node_modules/(?!(smol-toml|@decimalturn/toml-patch)/)'],
 };
