@@ -351,6 +351,9 @@ jobs:
           mkdir -p ../dist
           cp dist/tedge-dot-ui.zip "../dist/tedge-dot-ui_${VERSION}.zip"
           grep -q "\"version\": \"$VERSION\"" dist/tedge-dot-ui/cumulocity.json
+          # The extension page shows the README; the changelog travels with it.
+          unzip -l dist/tedge-dot-ui.zip | grep -q " README.md$"
+          unzip -l dist/tedge-dot-ui.zip | grep -q " CHANGELOG.md$"
       - uses: actions/upload-artifact@v4
         with:
           name: packages-ui

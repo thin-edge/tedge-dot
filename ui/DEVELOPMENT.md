@@ -30,3 +30,11 @@ Device Management 1025 runs without zone.js change detection: keep component sta
 
 The release workflow sets the version from the release; `package.json` keeps the version
 release-please writes.
+
+Every build packages `README.md` (shown on the extension's page) and a `CHANGELOG.md` at the root
+of the zip. `npm run changelog` (part of `npm run build`) copies the repository's `CHANGELOG.md` by
+default; set `TEDGE_DOT_UI_CHANGELOG` to package another file, such as a test build's changelog:
+
+```sh
+TEDGE_DOT_UI_CHANGELOG=dist/CHANGELOG.md npm run build
+```

@@ -15,7 +15,7 @@
             "main": "src/main.ts",
             "tsConfig": "tsconfig.json",
             "polyfills": ["zone.js"],
-            "assets": [],
+            "assets": [{ "glob": "CHANGELOG.md", "input": "src/generated", "output": "/" }],
             "styles": ["src/styles.scss"]
           },
           "configurations": {
