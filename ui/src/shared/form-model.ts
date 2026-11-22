@@ -215,6 +215,39 @@ export function pointSummary(config: Config, device: Config, point: Config): str
   return parts.join(' · ');
 }
 
+/** Labels that sentence case gets wrong: acronyms, units, and terms with their own spelling. */
+const LABELS: Record<string, string> = {
+  id: 'ID',
+  node_id: 'Node ID',
+  unit_id: 'Unit ID',
+  web_id: 'Web ID',
+  oid: 'OID',
+  tls: 'TLS',
+  dbc_file: 'DBC file',
+  af_database: 'AF database',
+  application_uri: 'Application URI',
+  base_url: 'Base URL',
+  connect_timeout_s: 'Connect timeout (s)',
+  request_timeout_s: 'Request timeout (s)',
+  baudrate: 'Baud rate',
+  databits: 'Data bits',
+  stopbits: 'Stop bits',
+  datatype: 'Data type',
+  mqtt: 'MQTT',
+  max_inflight: 'Max. requests in flight',
+  max_inflight_total: 'Max. requests in flight, total',
+};
+
+/** A TOML key as a form label, in sentence case: `poll_interval` is "Poll interval". */
+export function labelOf(key: string): string {
+  const known = LABELS[key];
+  if (known) {
+    return known;
+  }
+  const words = key.replace(/[_.]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** A value as a text field shows it: nothing for no value, JSON for tables and arrays. */
 export function displayValue(value: unknown): string {
   if (value === undefined || value === null) {

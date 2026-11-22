@@ -8,6 +8,7 @@ import {
   commentLines,
   displayValue,
   extraKeys,
+  labelOf,
   pointSummary,
   removeDevice,
   removePoint,
@@ -174,5 +175,15 @@ describe('small helpers', () => {
     expect(pointSummary(opcua, opcua.device[0], opcua.device[0].point[0])).toBe('float64 · subscribed');
     const modbus = newConfig('modbus');
     expect(pointSummary(modbus, { poll_interval: '5s' }, { datatype: 'uint16', report: {} })).toBe('uint16 · polled 5s · own report');
+  });
+});
+
+describe('labelOf', () => {
+  it('writes keys as sentence-case labels', () => {
+    expect(labelOf('poll_interval')).toBe('Poll interval');
+    expect(labelOf('point_separator')).toBe('Point separator');
+    expect(labelOf('node_id')).toBe('Node ID');
+    expect(labelOf('mqtt')).toBe('MQTT');
+    expect(labelOf('connect_timeout_s')).toBe('Connect timeout (s)');
   });
 });
