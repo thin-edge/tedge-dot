@@ -38,6 +38,7 @@ comments. Its field help is in `site/src/lib/help.ts`.
 **Goals:**
 - One place in Device Management to keep, edit, check and send connector files.
 - Writing a connector file in a form, without knowing its TOML keys.
+- Point libraries kept, edited and delivered from Cumulocity like connector files.
 - A device tab that looks and works like the Configuration tab, limited to connector files.
 - Adding a connector file to a gateway without touching the gateway.
 - No change to gateways, packages or tedge-dot.
@@ -45,7 +46,8 @@ comments. Its field help is in `site/src/lib/help.ts`.
 **Non-Goals:**
 - Validation with tedge-dot's own loader, rollback, and discovering files nobody registered. A
   gateway-side configuration plugin can add these later.
-- Per-gateway values, revisions, a fleet view, point libraries and secrets.
+- Per-gateway values, revisions, a fleet view, secrets, and libraries from Cloud Fieldbus device
+  protocols or software packages.
 
 ## Decisions
 
@@ -160,6 +162,73 @@ fields a protocol table has, adding and removing devices and points, switching p
 an edit into the text) lives in `src/shared/` with unit tests, which edit the repository's
 commented demo configurations.
 
+### D10. Point libraries as repository entries
+
+A point library (contract §3.4: `[library]` and `[[point]]`, a device type's point list without
+connection data) is a repository entry like a connector file. Its configuration type is
+`tedge-dot-points.<protocol>.<name>` and its file is
+`/etc/tedge/plugins/ot/points.d/<protocol>/<name>.toml`, where `<protocol>` is the library's
+`[library] protocol` and `<name>` follows the connector file name rule. Connector file names may
+not start with `points.`, so the two kinds never share a type: every `tedge-dot-` type that does
+not start with `tedge-dot-points.` is a connector file.
+
+A library is registered (D3) and sent (D7) like a connector file. Its `[[files]]` block also sets
+`parent_user = 'tedge'`, `parent_group = 'tedge'` and `parent_mode = 0o755`, because the gateway's
+`points.d` holds no protocol folders until the first library arrives, and thin-edge's file plugin
+creates the missing folder with those values (thin-edge 2.1). tedge-dot re-reads the libraries its
+connector files reference on its own, so a new version of a library applies without a restart.
+
+The tedge-dot packages install libraries too (`demo-sim` per protocol, in
+`/usr/share/tedge-dot/points.d`, as `.goreleaser.yaml` lists them). The build step of D4 copies
+those files into `ui/`, so the plugin knows them: they count as existing libraries, the form can
+show their points, and they are never sent.
+
+### D11. A second list, and the editor for libraries
+
+The OT connectors page gets a second card, Point libraries, below Connector files, with the same
+actions: add, upload, edit, delete, send to a gateway and send to a group. Its rows show name,
+description, protocol, library name and last update. Deleting a library that connector entries
+reference names those entries first.
+
+The editor serves both kinds. For a library it asks for the protocol and the library name instead
+of a file name (both fixed once saved, as the file name is), validates with the config builder's
+`validateLibrary` and `point-library.schema.json`, and its form shows the `[library]` settings
+(type, description, version, and OPC UA's namespaces) and the points, with the same point fields
+as a device's. Form edits keep comments as in D9; new points go at the end of the file. Upload
+(8.7) adds a library file as a library instead of refusing it.
+
+The device tab lists the gateway's libraries next to its connector files, with their own icon, so
+snapshots, saving to the repository and sending work for libraries too, and Add connector file
+offers libraries as well.
+
+### D12. References only to libraries that exist
+
+A device's `points_from` may only name a library that exists for the file's protocol: a repository
+library or a packaged one (D10). A path, which tedge-dot accepts, is refused, because Cumulocity
+can neither deliver nor check the file it names. An unknown reference is a validation problem
+like a schema error, so Save stays disabled until it is fixed.
+
+The form's Point libraries field is an ordered list with a dropdown of the libraries available for
+the protocol, and buttons to remove and reorder. The form resolves the references with tedge-dot's
+rules (§3.4: libraries in order, then the device's own points; a point with an id that exists
+patches it, `meta` merged recursively, `map` replaced, other fields replaced) and shows the
+inherited points read-only with the library they come from, marks the device's own points that
+override one, and shows the device type a device inherits. Resolution is plain TypeScript, tested
+with the same cases as `impl/rust/crates/sdk/src/library.rs`; it only drives what the form shows
+and the reference check, the gateway resolves on its own.
+
+### D13. Sending a connector file with its libraries
+
+Sending a connector file to a gateway first collects the repository libraries its devices
+reference (packaged ones are on every gateway) and the ones the gateway does not offer. Those are
+registered together with the connector file in one edit of the list of managed files, with one
+confirmation that shows every appended block, and sent before the connector file, which is sent
+only after they succeeded. A library the gateway already offers is not sent again; sending the
+library itself updates it.
+
+A group send stays one bulk operation without registration (D7). Its pre-check also lists the
+gateways that lack a library the file references, and libraries can be sent to a group first.
+
 ## Risks / Trade-offs
 
 - [A file tedge-dot refuses counts as installed, and its connector stays stopped after the next
@@ -168,6 +237,14 @@ commented demo configurations.
 - [A form edit changes or drops a file's comments] → Edits are written into the text and checked
   against the edited values; when that fails, the user is asked before the file is rewritten.
   Removing a device or point removes the comments inside its section, which describe it.
+- [The plugin's resolution of library references drifts from tedge-dot's] → It only drives the
+  display and the reference check; the tests mirror `library.rs`'s cases, and the gateway resolves
+  on its own.
+- [A gateway runs another tedge-dot version or a vendor pack, with other packaged libraries] → The
+  plugin knows the libraries of its own tedge-dot version; the guide says so, and a site library of
+  the same name shadows a packaged one.
+- [Every library adds a type to each gateway's list of managed files] → Only libraries a gateway's
+  files reference are added, one edit per send.
 - [The form and the docs site's builder drift apart] → Both use the same model, options and help
   texts; the site's tests hold the options and texts to the schema.
 - [The UI edits thin-edge.io's list of managed files] → It only appends one block for a path in the

@@ -10,9 +10,10 @@ on the gateways.
 
 ### Requirement: OT connectors page
 The plugin SHALL add "OT connectors" to the Management menu, after "Configuration repository". The
-page SHALL list the configuration repository entries whose configuration type starts with
-`tedge-dot-`, and no other entries. Each row SHALL show the entry's name, description, file name
-(the type without the prefix), device type and last update.
+page SHALL list, as connector files, the configuration repository entries whose configuration type
+starts with `tedge-dot-` but not with `tedge-dot-points.`, and no other entries. Each row SHALL
+show the entry's name, description, file name (the type without the prefix), device type and last
+update.
 
 #### Scenario: Mixed repository
 - **WHEN** the repository holds entries of the types `tedge-dot-opcua-pump`, `tedge.toml` and `mosquitto.conf`
@@ -22,8 +23,9 @@ page SHALL list the configuration repository entries whose configuration type st
 Users SHALL be able to add an entry with a name, a description, a file name, an optional device
 type and content, and to edit an entry's content in a code editor with TOML highlighting or in a
 form. The file
-name SHALL match `[A-Za-z0-9][A-Za-z0-9._-]*`. A saved entry SHALL have the configuration type
-`tedge-dot-<file name>` and point to an uploaded binary with the content.
+name SHALL match `[A-Za-z0-9][A-Za-z0-9._-]*` and SHALL NOT start with `points.`, which point
+libraries use. A saved entry SHALL have the configuration type `tedge-dot-<file name>` and point to
+an uploaded binary with the content.
 
 #### Scenario: New entry
 - **WHEN** a user adds the file name `line-3` with valid content
@@ -74,8 +76,9 @@ The OT connectors page SHALL add an existing `.toml` file to the repository, one
 The file SHALL be checked like the editor checks a file before saving, and SHALL become an entry
 whose file name is the uploaded name without `.toml`. A valid file SHALL be added with an optional
 device type. A file with a syntax or schema problem, or a file name the connector directory cannot
-hold, SHALL NOT be added, and SHALL be openable in the editor as a new entry. A point library or
-another TOML file without `[connector]` SHALL be refused with its reason.
+hold, SHALL NOT be added, and SHALL be openable in the editor as a new entry. A point library SHALL
+be checked as a library and added as a library entry. Another TOML file without `[connector]` or
+`[library]` SHALL be refused with its reason.
 
 #### Scenario: Valid file
 - **WHEN** a user uploads `line-3.toml`, a valid connector file
@@ -86,8 +89,55 @@ another TOML file without `[connector]` SHALL be refused with its reason.
 - **THEN** the dialog names the problem, does not add the file, and offers to open it in the editor
 
 #### Scenario: Point library
-- **WHEN** a user uploads `demo-sim.toml`, a point library
-- **THEN** the dialog refuses it as a point library and adds nothing
+- **WHEN** a user uploads `acme-meter.toml`, a valid Modbus point library
+- **THEN** the repository holds a library entry of type `tedge-dot-points.modbus.acme-meter`
+
+### Requirement: Point libraries
+The OT connectors page SHALL list, as point libraries in a second list, the repository entries
+whose configuration type starts with `tedge-dot-points.`, with their name, description, protocol,
+library name and last update, and SHALL offer the same actions as for connector files. A library
+entry SHALL have the type `tedge-dot-points.<protocol>.<name>`, where `<protocol>` is its
+`[library] protocol` and `<name>` follows the file name rule. The editor SHALL validate a library
+with the contract's point-library schema, and its form SHALL show the `[library]` settings and the
+points. Deleting a library that connector entries reference SHALL name those entries before it
+asks for confirmation.
+
+#### Scenario: Library list
+- **WHEN** the repository holds `tedge-dot-line-3` and `tedge-dot-points.modbus.acme-meter`
+- **THEN** the page lists `tedge-dot-line-3` under Connector files and `acme-meter` (Modbus) under Point libraries
+
+#### Scenario: New library
+- **WHEN** a user adds the Modbus library `acme-meter` with one valid point
+- **THEN** the repository holds an entry of type `tedge-dot-points.modbus.acme-meter` with that file
+
+### Requirement: Library references
+A device's `points_from` SHALL only name libraries that exist for the file's protocol: repository
+libraries and the libraries the tedge-dot packages install. A path or an unknown name SHALL be a
+validation problem that prevents saving. The form SHALL offer the available libraries in a
+dropdown, keep their order, and show the points a device inherits, read-only and with their
+library, resolved with the contract's rules (§3.4).
+
+#### Scenario: Unknown library
+- **WHEN** a Modbus device names `points_from = ["acme-meter-v3"]` and no such library exists
+- **THEN** the editor names the unknown library at that device and Save stays disabled
+
+#### Scenario: Packaged library
+- **WHEN** a Modbus device names `points_from = ["demo-sim"]`
+- **THEN** the reference is valid and the form shows the points of the packaged `demo-sim` library
+
+#### Scenario: Override
+- **WHEN** a device references `acme-meter` and has its own point with the id of an inherited one
+- **THEN** the form shows that point as overriding the library's
+
+### Requirement: Sending with libraries
+Sending a connector file to a gateway SHALL first add the repository libraries its devices
+reference and the gateway does not offer: register them together with the file in one confirmed
+edit, send them, and send the connector file only after they succeeded. Libraries the gateway
+already offers SHALL not be sent again.
+
+#### Scenario: Missing library
+- **WHEN** a user sends `line-3`, whose device references `acme-meter`, to a gateway that offers neither
+- **THEN** one confirmation shows both `[[files]]` blocks, the gateway offers both types, `acme-meter` is installed first and then `line-3`
 
 ### Requirement: Validation before saving
 Before saving, the editor SHALL validate the content with the docs site's config builder
@@ -114,18 +164,21 @@ Deleting an entry SHALL ask for confirmation, then remove the entry and its bina
 Users SHALL be able to send an entry to one gateway, as a `c8y_DownloadConfigFile` operation with
 the entry's type and binary URL, after registering the file if the gateway lacks the type. They
 SHALL also be able to send it to a group, as a bulk operation with the same operation. Before a
-group send, the UI SHALL list the gateways in the group that do not offer the type. A group send
-SHALL never register files.
+group send, the UI SHALL list the gateways in the group that do not offer the type, or a repository
+library the connector file references. A group send SHALL never register files.
 
 #### Scenario: Send to a group
 - **WHEN** a user sends an entry to a group of 12 gateways, 3 of which do not offer its type
 - **THEN** the UI names those 3 gateways before sending, and one bulk operation is created for the group
 
 ### Requirement: Registering a file on a gateway
-To register `<name>` on a gateway, the UI SHALL request a fresh snapshot of
+To register a connector file `<name>` on a gateway, the UI SHALL request a fresh snapshot of
 `tedge-configuration-plugin`, append one `[[files]]` entry with the path
 `/etc/tedge/plugins/ot/<name>.toml`, the type `tedge-dot-<name>`, user and group `tedge` and mode
-`0o644`, and send the result back. It SHALL keep the rest of the file unchanged, byte for byte. It
+`0o644`, and send the result back. A point library `<protocol>.<name>` SHALL get the path
+`/etc/tedge/plugins/ot/points.d/<protocol>/<name>.toml`, the type
+`tedge-dot-points.<protocol>.<name>`, and additionally `parent_user` and `parent_group` `tedge` and
+`parent_mode` `0o755`. Files registered in one send SHALL be appended in one edit. It SHALL keep the rest of the file unchanged, byte for byte. It
 SHALL show the entry for confirmation before sending. It SHALL refuse when the path is already
 registered under another type. When the gateway offers the new type, the UI SHALL delete the
 temporary binary.
@@ -144,8 +197,8 @@ temporary binary.
 
 ### Requirement: OT connectors device tab
 Devices whose `c8y_SupportedConfigurations` contains `tedge-configuration-plugin` SHALL get an "OT
-connectors" tab. Other devices SHALL not get it. The tab SHALL list the device's `tedge-dot-` types
-with Device Management's configuration components. For the selected file, it SHALL request a
+connectors" tab. Other devices SHALL not get it. The tab SHALL list the device's `tedge-dot-` types,
+connector files and point libraries, with Device Management's configuration components. For the selected file, it SHALL request a
 snapshot, show the latest snapshot with its time, save it to the repository, download it, and send
 it from a repository entry. The tab SHALL offer "Add connector file" for entries the device does
 not offer, and SHALL open an entry on the OT connectors page from the preview.

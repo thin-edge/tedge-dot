@@ -22,6 +22,10 @@ gateway:
     builder covers (connector settings, reporting, grouping, MQTT, connection, devices and points,
     with the builder's help texts), so a file can be written without knowing its TOML keys. Form
     edits keep the file's comments and layout.
+  - Point libraries (contract §3.4) are kept and edited in a second list on the same page and
+    delivered like connector files. A connector file may only reference libraries that exist, which
+    the form offers in a dropdown, and it shows the points a device inherits. Sending a connector
+    file to a gateway adds the libraries it needs first.
   - An "OT connectors" tab on thin-edge.io gateways shows the gateway's connector files and the
     repository's entries, using Device Management's own configuration components. It can add a
     connector file to the gateway and register a file that is already there.
@@ -34,8 +38,8 @@ Gateways need no change: thin-edge.io's built-in file plugin installs the files,
 0.0.13 or later applies them on its own.
 
 Not in this change: a gateway-side plugin (discovering unregistered files, validation with
-tedge-dot's own loader, rollback), per-gateway values, revisions and fleet views, point libraries
-from Cumulocity, and secrets. Each is a follow-up change.
+tedge-dot's own loader, rollback), per-gateway values, revisions and fleet views, libraries from
+Cloud Fieldbus device protocols or software packages, and secrets. Each is a follow-up change.
 
 ## Capabilities
 
