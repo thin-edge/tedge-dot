@@ -107,7 +107,7 @@ import { UploadFileComponent } from './upload-file.component';
         <c8y-ui-empty-state
           [icon]="'list'"
           [title]="'No point libraries in the repository.' | translate"
-          [subtitle]="packagedText"
+          [subtitle]="'Add one, or upload a point library.' | translate"
           [horizontal]="true"
         ></c8y-ui-empty-state>
       } @else {
@@ -139,7 +139,6 @@ import { UploadFileComponent } from './upload-file.component';
             </tbody>
           </table>
         </div>
-        <p class="text-muted small p-l-16 p-r-16">{{ packagedText }}</p>
       }
     </div>
 
@@ -173,11 +172,6 @@ export class ConnectorsPageComponent implements OnInit {
   readonly libraries = computed(() => entriesOfKind(this.entries(), 'library'));
   readonly loading = signal(true);
   readonly fileOfType = fileOfType;
-
-  /** The packaged libraries, which connector files can reference without a repository entry. */
-  readonly packagedText = `Every gateway also has the libraries the tedge-dot packages install: ${packagedLibraries()
-    .map(l => `${l.protocol}/${l.name}`)
-    .join(', ')}.`;
 
   ngOnInit(): void {
     void this.load();
