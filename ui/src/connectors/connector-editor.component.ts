@@ -59,6 +59,9 @@ const MARKER_OWNER = 'tedge-dot';
       </div>
       <div class="inner-scroll">
         <div class="card-block">
+          @if (copyNote(); as note) {
+            <div class="alert alert-info" role="status">{{ note }}</div>
+          }
           <div class="row">
             <div class="col-md-3">
               <c8y-form-group>
@@ -284,6 +287,20 @@ export class ConnectorEditorComponent {
   /** Also set for an uploaded file, whose name is checked before the user touches the field. */
   readonly fileTouched = signal(false);
   readonly saving = signal(false);
+  /** For a copy: the name of the entry it was made from. */
+  readonly copyOf = signal<string | undefined>(undefined);
+  /** What a copy is, until it is saved. */
+  readonly copyNote = computed(() => {
+    const original = this.copyOf();
+    if (!original) {
+      return undefined;
+    }
+    const service = this.isLibrary() ? undefined : this.result().config?.['connector']?.service_name;
+    return (
+      `A copy of ${original}, not saved yet.` +
+      (service ? ` Its service name is ${service}, so it can run next to the original on the same gateway.` : '')
+    );
+  });
   readonly view = signal<'form' | 'toml'>('form');
 
   readonly heading = computed(() =>
@@ -380,11 +397,14 @@ export class ConnectorEditorComponent {
       this.description.set('');
       this.deviceType.set('');
       this.fileName.set('');
-      // An uploaded file that needs fixing comes here from the upload dialog.
+      // An uploaded file that needs fixing, or a copy of an entry, comes here from the page.
       const uploaded = this.pending.take();
+      this.copyOf.set(uploaded?.copyOf);
       if (uploaded) {
         this.kind.set(uploaded.kind);
-        this.name.set(uploaded.fileName);
+        this.name.set(uploaded.name ?? uploaded.fileName);
+        this.description.set(uploaded.description ?? '');
+        this.deviceType.set(uploaded.deviceType ?? '');
         this.fileName.set(uploaded.fileName);
         this.fileTouched.set(true);
         this.content.set(uploaded.text);
@@ -397,6 +417,7 @@ export class ConnectorEditorComponent {
       return;
     }
     this.isNew.set(false);
+    this.copyOf.set(undefined);
     try {
       const { data } = await this.inventory.detail(id);
       if (this.route.snapshot.paramMap.get('id') !== id) {

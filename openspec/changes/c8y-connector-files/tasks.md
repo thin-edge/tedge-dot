@@ -58,6 +58,7 @@
 - [x] 9.8 Registration of libraries (`parent_*` keys) and of several files in one edit; sending a connector file with its missing libraries first; group pre-check names missing libraries; unit tests
 - [x] 9.9 Device tab: libraries listed with their own icon; Add connector file offers libraries
 - [x] 9.10 Docs: the guide's point-library section, the README and the release highlight
+- [x] 9.11 Duplicate a connector file or point library into a new, unsaved entry; the copy of a connector file gets its own service name; unit tests and docs
 
 ## 10. Verification
 

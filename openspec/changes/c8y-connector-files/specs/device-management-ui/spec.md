@@ -153,6 +153,18 @@ config builder SHALL give the same verdict for the same content.
 - **WHEN** the fourth point of the first device declares `datatype = "float33"`
 - **THEN** the editor lists the schema's message for that point's `datatype`, and nothing is uploaded
 
+### Requirement: Duplicate entries
+Users SHALL be able to duplicate a connector file or point library entry. The copy SHALL open in
+the editor as a new entry that is not saved yet, with the original's content, description and
+device type, the name `<name> copy` and the file name `<file name>-copy` (with a number when that
+is taken). The copy of a connector file SHALL get the service name `tedge-dot-<file name>-copy`,
+written into the text without changing anything else in it.
+
+#### Scenario: Duplicating a connector file
+- **WHEN** a user duplicates the entry of `line-3.toml`, whose service name is `tedge-dot-line-3`
+- **THEN** the editor opens a new entry with the file name `line-3-copy` and the service name
+  `tedge-dot-line-3-copy`, and the repository is unchanged until the user saves
+
 ### Requirement: Delete entries
 Deleting an entry SHALL ask for confirmation, then remove the entry and its binary.
 

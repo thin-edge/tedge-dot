@@ -46,6 +46,10 @@ files first, point libraries in a second list (see [Point libraries](#point-libr
   added with *Add file*, optionally for one device type. A file with problems can be opened in the
   editor to fix it there. Other TOML files are refused.
 - **Edit** opens the file in the editor. Saving replaces the entry's file.
+- **Duplicate** opens a copy in the editor, not saved yet: the same content, description and
+  device type, named "<name> copy" with the file name `<file>-copy`. The copy of a connector file
+  gets the service name `tedge-dot-<file>-copy`, because a service name must be unique on a
+  gateway; everything else, comments included, stays as it is.
 - **Send to a gateway** installs the file on one gateway, adding it first when the gateway does
   not have it (see [Adding a file to a gateway](#adding-a-file-to-a-gateway)).
 - **Send to a group** creates one bulk operation for the devices in a group. A group send never
@@ -103,8 +107,8 @@ the same fields as a device's points. A device lists the libraries it inherits f
 id that exists patches it.
 
 The second list on the OT connectors page holds the repository's libraries, with the same actions
-as connector files: **Add point library**, **Upload point library**, **Edit**, **Send to a
-gateway**, **Send to a group** and **Delete**. Deleting a library that connector entries
+as connector files: **Add point library**, **Upload point library**, **Edit**, **Duplicate**,
+**Send to a gateway**, **Send to a group** and **Delete**. Deleting a library that connector entries
 reference names those entries first, because they cannot be saved again while the reference
 stays.
 

@@ -8,8 +8,10 @@ import { RepositoryService, SharedRepositoryModule } from '@c8y/ngx-components/r
 import { BsModalService } from 'ngx-bootstrap/modal';
 
 import { ConnectorOperationsService } from '../shared/connector-operations.service';
+import { copyFileName, duplicateText } from '../shared/duplicate';
 import { packagedLibraries } from '../shared/libraries';
 import { type FileKind, entriesOfKind, fileOfType } from '../shared/naming';
+import { PendingFileService } from '../shared/pending-file.service';
 import { managedEntriesQuery } from '../shared/queries';
 import { SendToGatewayComponent } from './send-to-gateway.component';
 import { SendToGroupComponent } from './send-to-group.component';
@@ -146,6 +148,9 @@ import { UploadFileComponent } from './upload-file.component';
       <button class="btn btn-default btn-xs m-r-4" type="button" (click)="edit(entry)">
         {{ 'Edit' | translate }}
       </button>
+      <button class="btn btn-default btn-xs m-r-4" type="button" (click)="duplicate(entry)">
+        {{ 'Duplicate' | translate }}
+      </button>
       <button class="btn btn-default btn-xs m-r-4" type="button" (click)="sendToGateway(entry)">
         {{ 'Send to a gateway' | translate }}
       </button>
@@ -166,6 +171,7 @@ export class ConnectorsPageComponent implements OnInit {
   private readonly modal = inject(ModalService);
   private readonly bsModal = inject(BsModalService);
   private readonly alert = inject(AlertService);
+  private readonly pending = inject(PendingFileService);
 
   readonly entries = signal<IManagedObject[]>([]);
   readonly connectors = computed(() => entriesOfKind(this.entries(), 'connector'));
@@ -200,6 +206,41 @@ export class ConnectorsPageComponent implements OnInit {
 
   edit(entry: IManagedObject): void {
     void this.router.navigate(['/ot-connectors', entry.id]);
+  }
+
+  /**
+   * Opens a copy of the entry in the editor, unsaved: the same content, description and device
+   * type, named "<name> copy" with the file name `<file>-copy`. A connector file gets its own
+   * service name, so the copy can run next to the original.
+   */
+  async duplicate(entry: IManagedObject): Promise<void> {
+    const file = fileOfType(entry['configurationType']);
+    if (!file) {
+      return;
+    }
+    let text: string;
+    try {
+      text = await this.ops.entryText(entry);
+    } catch (e) {
+      this.alert.addServerFailure(e);
+      return;
+    }
+    const sameKind = (f: ReturnType<typeof fileOfType>) => !!f && f.kind === file.kind && f.protocol === file.protocol;
+    const taken = [
+      ...this.entries().map(e => fileOfType(e['configurationType'])).filter(sameKind).map(f => f!.name),
+      ...(file.kind === 'library' ? packagedLibraries().filter(l => l.protocol === file.protocol).map(l => l.name) : []),
+    ];
+    const fileName = copyFileName(file.name, taken);
+    this.pending.hand({
+      kind: file.kind,
+      fileName,
+      text: duplicateText(file.kind, text, fileName),
+      name: `${entry['name']} copy`,
+      description: entry['description'] ?? '',
+      deviceType: entry['deviceType'] ?? '',
+      copyOf: entry['name'],
+    });
+    void this.router.navigate(['/ot-connectors', file.kind === 'library' ? 'new-library' : 'new']);
   }
 
   upload(kind: FileKind): void {
