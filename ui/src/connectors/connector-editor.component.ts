@@ -1,5 +1,6 @@
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { NgModel } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
 import { AlertService, CoreModule, ModalService, Status } from '@c8y/ngx-components';
@@ -30,6 +31,7 @@ import { TOML_LANGUAGE_ID, tomlLanguage } from '../shared/toml-language';
 import { type ValidationResult, describePointer, isValid, validateConnectorFile, validateLibraryFile } from '../shared/validation';
 import { ConnectorFormComponent } from './connector-form.component';
 import { LibraryFormComponent } from './library-form.component';
+import { ValidIfDirective } from './valid-if.directive';
 
 const MARKER_OWNER = 'tedge-dot';
 
@@ -40,7 +42,7 @@ const MARKER_OWNER = 'tedge-dot';
  */
 @Component({
   selector: 'tdot-connector-editor',
-  imports: [CoreModule, SharedRepositoryModule, EditorComponent, ConnectorFormComponent, LibraryFormComponent],
+  imports: [CoreModule, SharedRepositoryModule, EditorComponent, ConnectorFormComponent, LibraryFormComponent, ValidIfDirective],
   providers: [ConnectorOperationsService],
   template: `
     <!-- c8y-title sets the browser tab title only when it is created: a new one per heading
@@ -59,7 +61,7 @@ const MARKER_OWNER = 'tedge-dot';
         <div class="card-block">
           <div class="row">
             <div class="col-md-3">
-              <c8y-form-group [hasError]="nameTouched() && !name().trim()">
+              <c8y-form-group>
                 <label for="tdot-name">{{ 'Name' | translate }}</label>
                 <input
                   id="tdot-name"
@@ -67,18 +69,22 @@ const MARKER_OWNER = 'tedge-dot';
                   class="form-control"
                   required
                   [placeholder]="('e.g.' | translate) + ' Line 3 pumps'"
+                  #nameModel="ngModel"
                   [(ngModel)]="name"
+                  [tdotValidIf]="nameCheck"
                   (blur)="nameTouched.set(true)"
                 />
-                <c8y-messages>
-                  @if (nameTouched() && !name().trim()) {
-                    <c8y-message>{{ 'Enter a name for the repository entry.' | translate }}</c8y-message>
+                <!-- The messages are our own: c8y-messages fills in its own ones after a delay that,
+                     without zone.js, is not drawn until something else changes. -->
+                <c8y-messages [defaults]="noDefaultMessages">
+                  @if (nameError()) {
+                    <c8y-message>{{ nameRule | translate }}</c8y-message>
                   }
                 </c8y-messages>
               </c8y-form-group>
             </div>
             <div class="col-md-3">
-              <c8y-form-group [hasError]="fileTouched() && !fileValid()">
+              <c8y-form-group>
                 <label for="tdot-file">{{ (isLibrary() ? 'Library name' : 'File name') | translate }}</label>
                 <div class="input-group">
                   <input
@@ -88,20 +94,17 @@ const MARKER_OWNER = 'tedge-dot';
                     required
                     aria-describedby="tdot-file-msg"
                     [placeholder]="('e.g.' | translate) + (isLibrary() ? ' acme-meter' : ' opcua-pump')"
+                    #fileModel="ngModel"
                     [(ngModel)]="fileName"
+                    [tdotValidIf]="fileNameCheck()"
                     [disabled]="!isNew()"
                     (blur)="fileTouched.set(true)"
                   />
                   <span class="input-group-addon">.toml</span>
                 </div>
-                <c8y-messages id="tdot-file-msg" [helpMessage]="gatewayPath()">
-                  @if (fileTouched() && !fileValid()) {
-                    <c8y-message>
-                      {{ 'Letters, digits, ".", "_" and "-" only, starting with a letter or digit.' | translate }}
-                      @if (!isLibrary()) {
-                        {{ 'It may not start with "points.", which point libraries use.' | translate }}
-                      }
-                    </c8y-message>
+                <c8y-messages id="tdot-file-msg" [defaults]="noDefaultMessages" [helpMessage]="fileError() ? '' : gatewayPath()">
+                  @if (fileError()) {
+                    <c8y-message>{{ fileNameRule() | translate }}</c8y-message>
                   }
                 </c8y-messages>
               </c8y-form-group>
@@ -278,6 +281,7 @@ export class ConnectorEditorComponent {
   readonly startFrom = signal<ProtocolId>('opcua');
   readonly content = signal('');
   readonly nameTouched = signal(false);
+  /** Also set for an uploaded file, whose name is checked before the user touches the field. */
   readonly fileTouched = signal(false);
   readonly saving = signal(false);
   readonly view = signal<'form' | 'toml'>('form');
@@ -303,9 +307,30 @@ export class ConnectorEditorComponent {
   });
   /** A library's protocol: the one its type names once saved, else the file's. */
   readonly libraryProtocol = computed<string>(() => this.savedProtocol() ?? this.result().config?.['library']?.protocol ?? '');
-  readonly fileValid = computed(() =>
-    this.isLibrary() ? isValidName(normalizeName(this.fileName())) : isValidConnectorName(normalizeName(this.fileName()))
+  /**
+   * The checks of the name and file name fields. ValidIfDirective makes a field that fails its
+   * check invalid, so c8y-form-group marks it red once it is touched; the messages are our own.
+   */
+  readonly nameCheck = (value: string) => !!value.trim();
+  readonly nameRule = gettext('Enter a name for the repository entry.');
+  readonly nameError = computed(() => this.nameTouched() && !this.nameCheck(this.name()));
+  /** A library name, or a connector name that does not start with "points.". */
+  readonly fileNameCheck = computed(() =>
+    this.isLibrary()
+      ? (value: string) => isValidName(normalizeName(value))
+      : (value: string) => isValidConnectorName(normalizeName(value))
   );
+  readonly fileError = computed(() => this.fileTouched() && !this.fileValid());
+  /** No built-in texts, such as "This field is required.": the fields above show their own. */
+  readonly noDefaultMessages = {};
+  readonly fileNameRule = computed(() =>
+    this.isLibrary()
+      ? gettext('Letters, digits, ".", "_" and "-" only, starting with a letter or digit.')
+      : gettext('Letters, digits, ".", "_" and "-" only, starting with a letter or digit. It may not start with "points.", which point libraries use.')
+  );
+  readonly fileValid = computed(() => this.fileNameCheck()(this.fileName()));
+  private readonly nameModel = viewChild('nameModel', { read: NgModel });
+  private readonly fileModel = viewChild('fileModel', { read: NgModel });
   /** Where the file lands on a gateway, shown under the file name. */
   readonly gatewayPath = computed(() => {
     const name = this.fileValid() ? normalizeName(this.fileName()) : '<name>';
@@ -328,12 +353,21 @@ export class ConnectorEditorComponent {
 
   constructor() {
     effect(() => this.applyMarkers(this.result()));
+    // An uploaded file's name is checked at once: c8y-form-group marks only a touched field.
+    effect(() => {
+      if (this.fileTouched()) {
+        this.fileModel()?.control.markAsTouched();
+      }
+    });
     void this.loadCatalog();
     // The router keeps this component when only the id changes, e.g. from an entry to "new".
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe(params => void this.load(params.get('id')));
   }
 
   private async load(id: string | null): Promise<void> {
+    // Another file in the same editor: its fields start untouched, without red marks.
+    this.nameModel()?.control.markAsUntouched();
+    this.fileModel()?.control.markAsUntouched();
     this.nameTouched.set(false);
     this.fileTouched.set(false);
     if (!id || id === 'new' || id === 'new-library') {

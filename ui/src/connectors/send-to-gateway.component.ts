@@ -15,6 +15,7 @@ import {
   normalizeName,
 } from '../shared/naming';
 import { managedEntriesQuery } from '../shared/queries';
+import { ValidIfDirective } from './valid-if.directive';
 
 type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
 
@@ -30,7 +31,7 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
  */
 @Component({
   selector: 'tdot-send-to-gateway',
-  imports: [CoreModule, SharedRepositoryModule, NgTemplateOutlet],
+  imports: [CoreModule, SharedRepositoryModule, NgTemplateOutlet, ValidIfDirective],
   providers: [ConnectorOperationsService],
   template: `
     <div class="modal-header dialog-header">
@@ -60,9 +61,24 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
             </div>
           }
           @if (registerOnly) {
-            <c8y-form-group [hasError]="!!fileName() && !fileValid">
+            <c8y-form-group>
               <label for="tdot-reg-name">{{ 'File in /etc/tedge/plugins/ot' | translate }}</label>
-              <input id="tdot-reg-name" class="form-control" [(ngModel)]="fileName" placeholder="modbus" />
+              <input
+                id="tdot-reg-name"
+                class="form-control"
+                aria-describedby="tdot-reg-name-msg"
+                [(ngModel)]="fileName"
+                [tdotValidIf]="registerNameCheck"
+                (blur)="fileTouched.set(true)"
+                placeholder="modbus"
+              />
+              <c8y-messages id="tdot-reg-name-msg">
+                @if (fileTouched() && !registerNameCheck(fileName())) {
+                  <c8y-message>
+                    {{ 'Letters, digits, ".", "_" and "-" only, starting with a letter or digit. It may not start with "points.", which point libraries use.' | translate }}
+                  </c8y-message>
+                }
+              </c8y-messages>
             </c8y-form-group>
             <p class="text-muted">
               {{ 'The gateway then offers the file as a configuration type, so you can take snapshots of it and send new versions.' | translate }}
@@ -166,6 +182,7 @@ export class SendToGatewayComponent implements OnInit {
   readonly picked = signal<IManagedObject | undefined>(undefined);
   readonly chosen = signal<IManagedObject | undefined>(undefined);
   readonly fileName = signal('');
+  readonly fileTouched = signal(false);
   readonly step = signal('');
   readonly block = signal('');
   readonly doneText = signal('');
@@ -184,6 +201,9 @@ export class SendToGatewayComponent implements OnInit {
   get entryType(): string | undefined {
     return (this.entry ?? this.chosen())?.['configurationType'];
   }
+
+  /** An empty name is not an error yet; the Register button waits for a valid one. */
+  readonly registerNameCheck = (value: string) => !value || isValidConnectorName(normalizeName(value));
 
   get fileValid(): boolean {
     return isValidConnectorName(normalizeName(this.fileName()));
