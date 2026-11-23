@@ -48,16 +48,16 @@
 
 ## 9. Point libraries
 
-- [ ] 9.1 Naming: library types `tedge-dot-points.<protocol>.<name>` and paths, `points.` reserved for connector file names, connector and library types told apart everywhere; unit tests
-- [ ] 9.2 Build step: copy the packaged libraries `.goreleaser.yaml` installs into `ui/`
-- [ ] 9.3 Library validation (point-library schema) and form edits that keep comments for libraries (`[[point]]` at the end of the file); unit tests
-- [ ] 9.4 Resolution of `points_from` with the contract's rules, and the reference check (only existing libraries, no paths); unit tests mirroring `library.rs`
-- [ ] 9.5 OT connectors page: the Point libraries list with add, upload, edit, delete (naming referencing entries), send to a gateway and to a group
-- [ ] 9.6 Editor for libraries: protocol and library name, `[library]` settings and points in the form, TOML view
-- [ ] 9.7 Connector form: the Point libraries dropdown, inherited points read-only with their library, overrides marked, inherited device type
-- [ ] 9.8 Registration of libraries (`parent_*` keys) and of several files in one edit; sending a connector file with its missing libraries first; group pre-check names missing libraries; unit tests
-- [ ] 9.9 Device tab: libraries listed with their own icon; Add connector file offers libraries
-- [ ] 9.10 Docs: the guide's point-library section, the README and the release highlight
+- [x] 9.1 Naming: library types `tedge-dot-points.<protocol>.<name>` and paths, `points.` reserved for connector file names, connector and library types told apart everywhere; unit tests
+- [x] 9.2 Build step: copy the packaged libraries `.goreleaser.yaml` installs into `ui/`
+- [x] 9.3 Library validation (point-library schema) and form edits that keep comments for libraries (`[[point]]` at the end of the file); unit tests
+- [x] 9.4 Resolution of `points_from` with the contract's rules, and the reference check (only existing libraries, no paths); unit tests mirroring `library.rs`
+- [x] 9.5 OT connectors page: the Point libraries list with add, upload, edit, delete (naming referencing entries), send to a gateway and to a group
+- [x] 9.6 Editor for libraries: protocol and library name, `[library]` settings and points in the form, TOML view
+- [x] 9.7 Connector form: the Point libraries dropdown, inherited points read-only with their library, overrides marked, inherited device type
+- [x] 9.8 Registration of libraries (`parent_*` keys) and of several files in one edit; sending a connector file with its missing libraries first; group pre-check names missing libraries; unit tests
+- [x] 9.9 Device tab: libraries listed with their own icon; Add connector file offers libraries
+- [x] 9.10 Docs: the guide's point-library section, the README and the release highlight
 
 ## 10. Verification
 

@@ -1,9 +1,9 @@
 # Managing connector files from Cumulocity
 
-The Device Management plugin in [ui/](../ui/) keeps tedge-dot connector files in Cumulocity's
-configuration repository, checks and edits them in one place, and installs them on thin-edge.io
-gateways through configuration management. Nothing has to be installed or changed on the
-gateways.
+The Device Management plugin in [ui/](../ui/) keeps tedge-dot connector files and point
+libraries in Cumulocity's configuration repository, checks and edits them in one place, and
+installs them on thin-edge.io gateways through configuration management. Nothing has to be
+installed or changed on the gateways.
 
 ## Requirements
 
@@ -29,16 +29,22 @@ A connector file `/etc/tedge/plugins/ot/<name>.toml` is the configuration type
 digit. The OPC-UA solution blueprint registers `opcua-pump.toml` as `tedge-dot-opcua-pump`, so its
 gateways show up as they are.
 
+A point library `/etc/tedge/plugins/ot/points.d/<protocol>/<name>.toml` is the type
+`tedge-dot-points.<protocol>.<name>`, for example `tedge-dot-points.modbus.acme-meter`. Connector
+file names may not start with `points.`, so the two kinds never share a type.
+
 ## OT connectors in the Management menu
 
-The page lists the configuration repository entries whose type starts with `tedge-dot-`.
+The page lists the configuration repository entries whose type starts with `tedge-dot-`: connector
+files first, point libraries in a second list (see [Point libraries](#point-libraries)).
 
 - **Add connector file** opens the editor with a starting point for a protocol. Give the entry a
   name, the file name it gets on gateways, and optionally a device type.
 - **Upload connector file** adds an existing `.toml` file. The file is checked like the editor
   checks a file and becomes an entry named after it: `line-3.toml` is the type `tedge-dot-line-3`.
-  A valid file is added with *Add file*, optionally for one device type. A file with problems can
-  be opened in the editor to fix it there. Point libraries and other TOML files are refused.
+  A file with a `[library]` table becomes a point library of its protocol instead. A valid file is
+  added with *Add file*, optionally for one device type. A file with problems can be opened in the
+  editor to fix it there. Other TOML files are refused.
 - **Edit** opens the file in the editor. Saving replaces the entry's file.
 - **Send to a gateway** installs the file on one gateway, adding it first when the gateway does
   not have it (see [Adding a file to a gateway](#adding-a-file-to-a-gateway)).
@@ -75,25 +81,74 @@ builder: TOML syntax, then the contract schema (`doc/contract/schemas/config.sch
 each protocol's address shapes. Syntax errors are marked at their line; schema errors are listed
 with the key they concern, for example `device "Pump01" › point "flow" › datatype`.
 
-The check cannot see what only the gateway knows: whether a point library named in `points_from`
-exists there, or whether a file named by a setting can be read. **A file that tedge-dot refuses
-still counts as installed in Cumulocity**: the connector logs the problem and keeps its previous
-configuration until the next restart, after which it stays stopped until the file is fixed. Check
-the connector after sending a file that changes library references or file paths.
+Every name in a device's `points_from` must be a point library that exists for the file's
+protocol: one in the repository, or one the tedge-dot packages install (see
+[Point libraries](#point-libraries)). A path is refused, because Cumulocity can neither deliver
+nor check the file it names. Like a schema error, an unknown reference keeps *Save* disabled.
+
+The check cannot see what only the gateway knows, such as whether a file named by a setting can
+be read. **A file that tedge-dot refuses still counts as installed in Cumulocity**: the connector
+logs the problem and keeps its previous configuration until the next restart, after which it
+stays stopped until the file is fixed. Check the connector after sending a file that changes file
+paths.
+
+## Point libraries
+
+A point library (contract §3.4) is the point list of one device type, without connection data:
+a `[library]` table with the protocol and optionally the device type, and `[[point]]` entries with
+the same fields as a device's points. A device lists the libraries it inherits from in
+`points_from`; tedge-dot applies them in order, then the device's own points, and a point with an
+id that exists patches it.
+
+The second list on the OT connectors page holds the repository's libraries, with the same actions
+as connector files: **Add point library**, **Upload point library**, **Edit**, **Send to a
+gateway**, **Send to a group** and **Delete**. Deleting a library that connector entries
+reference names those entries first, because they cannot be saved again while the reference
+stays.
+
+In the editor, a library has a library name instead of a file name. Its form shows the protocol,
+the `[library]` settings (device type, version, description, and for OPC UA the namespaces) and
+the points, with the same point fields as a device. The protocol and the name are fixed once the
+library is saved, because its type and its folder on gateways name them.
+
+In a connector file, each device's **Point libraries** field is an ordered list: add a library
+from the ones available for the protocol, move it up or down, or remove it. Below it, *From point
+libraries* lists the points the device inherits, read-only, with the library each comes from.
+*Override* adds a point with the same id to the device, which patches the library's point; the
+device's own points that override one are marked. A device without its own type shows the type it
+inherits from its first library that declares one.
+
+The tedge-dot packages install a `demo-sim` library for each protocol in
+`/usr/share/tedge-dot/points.d`. The plugin knows the libraries of its own tedge-dot version:
+connector files can reference them without a repository entry, and they are never sent. A
+repository library of the same name takes their place, as on the gateway.
+
+Sending a connector file to a gateway brings the repository libraries it references. The ones the
+gateway does not offer yet are added to its list of managed files in the same edit as the
+connector file, with one confirmation, and sent before it. A library the gateway already offers is
+not sent again; send the library itself to update it. tedge-dot re-reads the libraries its
+connector files reference, so a new version applies without a restart.
+
+A group send stays one bulk operation and adds no files: its check also lists the devices that
+lack a library the file references, and reminds you to send changed libraries to the group
+first.
 
 ## The OT connectors tab
 
 Every device that offers the configuration type `tedge-configuration-plugin` gets an **OT
 connectors** tab after Configuration: thin-edge.io gateways, and child devices that run their own
-thin-edge.io agent. It works like the Configuration tab, limited to connector files:
+thin-edge.io agent. It works like the Configuration tab, limited to connector files and point
+libraries:
 
-- **On device** lists the gateway's connector files. *Get snapshot from device* reads the file;
-  the preview can save the snapshot to the repository or download it.
+- **On device** lists the gateway's connector files and, below them, its point libraries. *Get
+  snapshot from device* reads the file; the preview can save the snapshot to the repository or
+  download it.
 - **Available from repository** lists the repository entries of the selected file's type. Unlike
   the Configuration tab, it leaves out entries without a type, which would replace the connector
   file with unrelated content. *Send configuration to device* installs one; *Edit in repository*
   opens it on the OT connectors page.
-- **Add connector file** installs a repository entry the gateway does not have yet.
+- **Add connector file** installs a repository entry the gateway does not have yet: a connector
+  file, with the libraries it references, or a point library.
 - **Register a file on the gateway** makes a file that is already there, such as a packaged
   `modbus.toml`, a configuration type, so you can take snapshots of it and send new versions.
 
@@ -101,7 +156,8 @@ thin-edge.io agent. It works like the Configuration tab, limited to connector fi
 
 thin-edge.io's file plugin manages the files listed in
 `/etc/tedge/plugins/tedge-configuration-plugin.toml`, and offers that list itself as the type
-`tedge-configuration-plugin`. To add the connector file `<name>`, the plugin:
+`tedge-configuration-plugin`. To add the connector file `<name>` (and the libraries it needs),
+the plugin:
 
 1. requests a snapshot of `tedge-configuration-plugin` from the gateway;
 2. stops if the list already has `/etc/tedge/plugins/ot/<name>.toml` under another type, or the
@@ -118,9 +174,15 @@ thin-edge.io's file plugin manages the files listed in
    mode = 0o644
    ```
 
+   A point library's entry also sets `parent_user = 'tedge'`, `parent_group = 'tedge'` and
+   `parent_mode = 0o755`, so the file plugin creates its protocol folder in `points.d` when the
+   first library of that protocol arrives (thin-edge.io 2.1). Every file the send needs is in one
+   entry list and one confirmation.
+
 4. sends the extended list back, leaving everything else in it unchanged byte for byte, and
    removes the temporary upload afterwards;
-5. waits until the gateway offers `tedge-dot-<name>`, then sends the connector file.
+5. waits until the gateway offers every new type, sends the new libraries and waits for each to
+   succeed, then sends the connector file.
 
 ## Moving from a file registered by hand
 
