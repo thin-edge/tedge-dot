@@ -35,10 +35,10 @@ The page lists the configuration repository entries whose type starts with `tedg
 
 - **Add connector file** opens the editor with a starting point for a protocol. Give the entry a
   name, the file name it gets on gateways, and optionally a device type.
-- **Upload connector files** adds existing `.toml` files. Each file is checked like the editor
+- **Upload connector file** adds an existing `.toml` file. The file is checked like the editor
   checks a file and becomes an entry named after it: `line-3.toml` is the type `tedge-dot-line-3`.
-  Valid files are added in one step, optionally for one device type. A file with problems can be
-  opened in the editor to fix it there. Point libraries and other TOML files are refused.
+  A valid file is added with *Add file*, optionally for one device type. A file with problems can
+  be opened in the editor to fix it there. Point libraries and other TOML files are refused.
 - **Edit** opens the file in the editor. Saving replaces the entry's file.
 - **Send to a gateway** installs the file on one gateway, adding it first when the gateway does
   not have it (see [Adding a file to a gateway](#adding-a-file-to-a-gateway)).

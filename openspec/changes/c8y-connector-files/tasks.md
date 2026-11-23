@@ -44,7 +44,7 @@
 - [x] 8.4 Form and TOML toggle in the editor: read-only form until the rewrite is accepted, no form on a syntax error, which view a file opens in
 - [x] 8.5 Docs: the guide and the release highlight describe the form
 - [x] 8.6 Form edits keep comments: write edits into the text with toml-patch, add new devices and points in place, check every result, ask before a full rewrite
-- [x] 8.7 Upload existing `.toml` files on the OT connectors page: check each file, add the valid ones, open the others in the editor
+- [x] 8.7 Upload an existing `.toml` file on the OT connectors page: check it, add it when valid, open it in the editor otherwise
 
 ## 9. Verification
 

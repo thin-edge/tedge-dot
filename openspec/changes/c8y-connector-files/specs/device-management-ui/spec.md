@@ -69,13 +69,13 @@ read them.
 - **WHEN** the content has an unclosed string on line 12
 - **THEN** the form view shows no form and names line 12
 
-### Requirement: Upload connector files
-The OT connectors page SHALL add existing `.toml` files to the repository. Each file SHALL be
-checked like the editor checks a file before saving, and SHALL become an entry whose file name is
-the uploaded name without `.toml`. Valid files SHALL be added together, with an optional device
-type for all of them. A file with a syntax or schema problem, or a file name the connector
-directory cannot hold, SHALL NOT be added, and SHALL be openable in the editor as a new entry. A
-point library or another TOML file without `[connector]` SHALL be refused with its reason.
+### Requirement: Upload a connector file
+The OT connectors page SHALL add an existing `.toml` file to the repository, one file per upload.
+The file SHALL be checked like the editor checks a file before saving, and SHALL become an entry
+whose file name is the uploaded name without `.toml`. A valid file SHALL be added with an optional
+device type. A file with a syntax or schema problem, or a file name the connector directory cannot
+hold, SHALL NOT be added, and SHALL be openable in the editor as a new entry. A point library or
+another TOML file without `[connector]` SHALL be refused with its reason.
 
 #### Scenario: Valid file
 - **WHEN** a user uploads `line-3.toml`, a valid connector file

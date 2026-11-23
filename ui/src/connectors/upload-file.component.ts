@@ -16,16 +16,16 @@ interface Upload {
 type State = 'pick' | 'saving' | 'done';
 
 /**
- * Adds existing connector files to the configuration repository. Each file is checked like the
- * editor checks a file; valid files are added as they are, others can be opened in the editor.
+ * Adds an existing connector file to the configuration repository. The file is checked like the
+ * editor checks a file; a valid file is added as it is, another can be opened in the editor.
  */
 @Component({
-  selector: 'tdot-upload-files',
+  selector: 'tdot-upload-file',
   imports: [CoreModule, SharedRepositoryModule, DropAreaComponent],
   template: `
     <div class="modal-header dialog-header">
       <i c8yIcon="upload"></i>
-      <h4>{{ 'Upload connector files' | translate }}</h4>
+      <h4>{{ 'Upload connector file' | translate }}</h4>
     </div>
     <div class="modal-body">
       @if (state() === 'pick') {
@@ -33,12 +33,12 @@ type State = 'pick' | 'saving' | 'done';
           <c8y-drop-area
             class="drop-area-sm"
             accept=".toml"
-            [maxAllowedFiles]="20"
-            [title]="'Drop TOML files or click to browse' | translate"
-            [attr.aria-label]="'Drop TOML files or click to browse' | translate"
+            [maxAllowedFiles]="1"
+            [title]="'Drop a TOML file or click to browse' | translate"
+            [attr.aria-label]="'Drop a TOML file or click to browse' | translate"
             (dropped)="onDropped($event)"
           ></c8y-drop-area>
-          <c8y-messages [helpMessage]="'Each file becomes a repository entry named after the file: line-3.toml installs as /etc/tedge/plugins/ot/line-3.toml.' | translate"></c8y-messages>
+          <c8y-messages [helpMessage]="'The file becomes a repository entry named after it: line-3.toml installs as /etc/tedge/plugins/ot/line-3.toml.' | translate"></c8y-messages>
         </c8y-form-group>
         <c8y-form-group>
           <label for="tdot-upload-device-type">{{ 'Device type' | translate }}</label>
@@ -49,7 +49,7 @@ type State = 'pick' | 'saving' | 'done';
             [value]="deviceType()"
             (input)="deviceType.set($any($event.target).value)"
           />
-          <c8y-messages [helpMessage]="'Applies to every uploaded file. Empty: offered to every device type' | translate"></c8y-messages>
+          <c8y-messages [helpMessage]="'Empty: offered to every device type' | translate"></c8y-messages>
         </c8y-form-group>
         @if (uploads().length) {
           <ul class="list-group">
@@ -78,7 +78,7 @@ type State = 'pick' | 'saving' | 'done';
           </ul>
         }
       } @else if (state() === 'saving') {
-        <p><i c8yIcon="spinner" class="icon-spin"></i> {{ 'Adding the files to the repository' | translate }}…</p>
+        <p><i c8yIcon="spinner" class="icon-spin"></i> {{ 'Adding the file to the repository' | translate }}…</p>
       } @else {
         @if (added().length) {
           <div class="alert alert-success" role="status">
@@ -98,7 +98,7 @@ type State = 'pick' | 'saving' | 'done';
       @if (state() === 'pick') {
         <button type="button" class="btn btn-default" (click)="close()">{{ 'Cancel' | translate }}</button>
         <button type="button" class="btn btn-primary" [disabled]="!ready().length" (click)="addReady()">
-          {{ 'Add' | translate }} {{ ready().length }} {{ (ready().length === 1 ? 'file' : 'files') | translate }}
+          {{ 'Add file' | translate }}
         </button>
       } @else if (state() === 'saving') {
         <button type="button" class="btn btn-primary btn-pending" aria-busy="true" disabled>{{ 'Adding' | translate }}</button>
@@ -108,13 +108,13 @@ type State = 'pick' | 'saving' | 'done';
     </div>
   `,
 })
-export class UploadFilesComponent {
+export class UploadFileComponent {
   private readonly repository = inject(RepositoryService);
   private readonly modalRef = inject(BsModalRef);
   private readonly router = inject(Router);
   private readonly pending = inject(PendingFileService);
 
-  /** Set by the opener: called after files were added. */
+  /** Set by the opener: called after the file was added. */
   onFinished?: () => void;
 
   readonly state = signal<State>('pick');

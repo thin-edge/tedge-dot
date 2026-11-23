@@ -11,7 +11,7 @@ import { nameOf } from '../shared/naming';
 import { connectorEntriesQuery } from '../shared/queries';
 import { SendToGatewayComponent } from './send-to-gateway.component';
 import { SendToGroupComponent } from './send-to-group.component';
-import { UploadFilesComponent } from './upload-files.component';
+import { UploadFileComponent } from './upload-file.component';
 
 /** Management > OT connectors: the configuration repository's connector files. */
 @Component({
@@ -23,7 +23,7 @@ import { UploadFilesComponent } from './upload-files.component';
     <c8y-action-bar-item [placement]="'right'">
       <button class="btn btn-link" type="button" (click)="upload()">
         <i c8yIcon="upload"></i>
-        {{ 'Upload connector files' | translate }}
+        {{ 'Upload connector file' | translate }}
       </button>
     </c8y-action-bar-item>
     <c8y-action-bar-item [placement]="'right'">
@@ -139,7 +139,7 @@ export class ConnectorsPageComponent implements OnInit {
   }
 
   upload(): void {
-    this.bsModal.show(UploadFilesComponent, {
+    this.bsModal.show(UploadFileComponent, {
       initialState: { onFinished: () => void this.load() },
       class: 'modal-lg',
       ignoreBackdropClick: true,
