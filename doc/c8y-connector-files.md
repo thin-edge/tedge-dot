@@ -11,8 +11,18 @@ installed or changed on the gateways.
 - Gateways with thin-edge.io 2.x and tedge-dot 0.0.13 or later. Earlier tedge-dot releases do not
   apply a changed file on their own; they need a reload after each update, for example the
   `config_update` workflow step the OPC-UA solution blueprint uses.
-- The permissions Device Management's configuration repository needs: inventory admin to change
-  repository entries, device control to send operations.
+- These roles, which are the ones the platform asks for:
+  - Adding an entry: inventory admin or inventory create, or managed-object admin or create
+    together with binary admin or create. Without them, the OT connectors page hides *Add*,
+    *Upload* and *Duplicate*, as Device Management hides *Save to repository* on a snapshot.
+  - Changing or deleting an entry: inventory admin or managed-object admin, or owning the entry.
+  - Sending to a gateway: device control admin, or admin rights on the device through an inventory
+    role. Adding a file the gateway does not have yet also uploads a temporary file: inventory
+    admin or create, or binary admin or create.
+  - Sending to a group: bulk operation admin.
+
+  The other actions stay visible, as in Device Management; the platform refuses what a user may
+  not do, and the plugin shows its message.
 
 ## Installing the plugin
 

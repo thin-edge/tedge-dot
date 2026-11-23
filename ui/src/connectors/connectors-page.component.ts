@@ -2,7 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
-import { AlertService, CoreModule, ModalService, Status } from '@c8y/ngx-components';
+import { AlertService, CoreModule, ModalService, Permissions, Status } from '@c8y/ngx-components';
 import { gettext } from '@c8y/ngx-components/gettext';
 import { RepositoryService, SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import { BsModalService } from 'ngx-bootstrap/modal';
@@ -12,6 +12,7 @@ import { copyFileName, duplicateText } from '../shared/duplicate';
 import { packagedLibraries } from '../shared/libraries';
 import { type FileKind, entriesOfKind, fileOfType } from '../shared/naming';
 import { PendingFileService } from '../shared/pending-file.service';
+import { canAddEntries } from '../shared/permissions';
 import { managedEntriesQuery } from '../shared/queries';
 import { SendToGatewayComponent } from './send-to-gateway.component';
 import { SendToGroupComponent } from './send-to-group.component';
@@ -27,30 +28,33 @@ import { UploadFileComponent } from './upload-file.component';
   providers: [ConnectorOperationsService],
   template: `
     <c8y-title>{{ 'OT connectors' | translate }}</c8y-title>
-    <c8y-action-bar-item [placement]="'right'">
-      <button class="btn btn-link" type="button" (click)="add('connector')">
-        <i c8yIcon="plus-circle"></i>
-        {{ 'Add connector file' | translate }}
-      </button>
-    </c8y-action-bar-item>
-    <c8y-action-bar-item [placement]="'right'">
-      <button class="btn btn-link" type="button" (click)="upload('connector')">
-        <i c8yIcon="upload"></i>
-        {{ 'Upload connector file' | translate }}
-      </button>
-    </c8y-action-bar-item>
-    <c8y-action-bar-item [placement]="'right'">
-      <button class="btn btn-link" type="button" (click)="add('library')">
-        <i c8yIcon="plus-circle"></i>
-        {{ 'Add point library' | translate }}
-      </button>
-    </c8y-action-bar-item>
-    <c8y-action-bar-item [placement]="'right'">
-      <button class="btn btn-link" type="button" (click)="upload('library')">
-        <i c8yIcon="upload"></i>
-        {{ 'Upload point library' | translate }}
-      </button>
-    </c8y-action-bar-item>
+    <!-- Adding entries needs the roles Device Management asks for to save to the repository. -->
+    @if (canAdd) {
+      <c8y-action-bar-item [placement]="'right'">
+        <button class="btn btn-link" type="button" (click)="add('connector')">
+          <i c8yIcon="plus-circle"></i>
+          {{ 'Add connector file' | translate }}
+        </button>
+      </c8y-action-bar-item>
+      <c8y-action-bar-item [placement]="'right'">
+        <button class="btn btn-link" type="button" (click)="upload('connector')">
+          <i c8yIcon="upload"></i>
+          {{ 'Upload connector file' | translate }}
+        </button>
+      </c8y-action-bar-item>
+      <c8y-action-bar-item [placement]="'right'">
+        <button class="btn btn-link" type="button" (click)="add('library')">
+          <i c8yIcon="plus-circle"></i>
+          {{ 'Add point library' | translate }}
+        </button>
+      </c8y-action-bar-item>
+      <c8y-action-bar-item [placement]="'right'">
+        <button class="btn btn-link" type="button" (click)="upload('library')">
+          <i c8yIcon="upload"></i>
+          {{ 'Upload point library' | translate }}
+        </button>
+      </c8y-action-bar-item>
+    }
     <c8y-action-bar-item [placement]="'right'">
       <button class="btn btn-link" type="button" (click)="load()">
         <i c8yIcon="refresh" [class.icon-spin]="loading()"></i>
@@ -66,7 +70,7 @@ import { UploadFileComponent } from './upload-file.component';
         <c8y-ui-empty-state
           [icon]="'gears'"
           [title]="'No connector files in the repository.' | translate"
-          [subtitle]="'Add one, or save a snapshot from a gateway.' | translate"
+          [subtitle]="canAdd ? ('Add one, or save a snapshot from a gateway.' | translate) : ''"
           [horizontal]="true"
         ></c8y-ui-empty-state>
       } @else {
@@ -109,7 +113,7 @@ import { UploadFileComponent } from './upload-file.component';
         <c8y-ui-empty-state
           [icon]="'list'"
           [title]="'No point libraries in the repository.' | translate"
-          [subtitle]="'Add one, or upload a point library.' | translate"
+          [subtitle]="canAdd ? ('Add one, or upload a point library.' | translate) : ''"
           [horizontal]="true"
         ></c8y-ui-empty-state>
       } @else {
@@ -148,9 +152,11 @@ import { UploadFileComponent } from './upload-file.component';
       <button class="btn btn-default btn-xs m-r-4" type="button" (click)="edit(entry)">
         {{ 'Edit' | translate }}
       </button>
-      <button class="btn btn-default btn-xs m-r-4" type="button" (click)="duplicate(entry)">
-        {{ 'Duplicate' | translate }}
-      </button>
+      @if (canAdd) {
+        <button class="btn btn-default btn-xs m-r-4" type="button" (click)="duplicate(entry)">
+          {{ 'Duplicate' | translate }}
+        </button>
+      }
       <button class="btn btn-default btn-xs m-r-4" type="button" (click)="sendToGateway(entry)">
         {{ 'Send to a gateway' | translate }}
       </button>
@@ -172,12 +178,15 @@ export class ConnectorsPageComponent implements OnInit {
   private readonly bsModal = inject(BsModalService);
   private readonly alert = inject(AlertService);
   private readonly pending = inject(PendingFileService);
+  private readonly permissions = inject(Permissions);
 
   readonly entries = signal<IManagedObject[]>([]);
   readonly connectors = computed(() => entriesOfKind(this.entries(), 'connector'));
   readonly libraries = computed(() => entriesOfKind(this.entries(), 'library'));
   readonly loading = signal(true);
   readonly fileOfType = fileOfType;
+  /** Whether the user can add entries; without it, Add, Upload and Duplicate are hidden. */
+  readonly canAdd = canAddEntries(roles => this.permissions.hasAnyRole(roles));
 
   ngOnInit(): void {
     void this.load();

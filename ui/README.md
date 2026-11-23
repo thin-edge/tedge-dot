@@ -25,8 +25,9 @@ Cumulocity Device Management, and install them on your gateways without logging 
 
 - Cumulocity with Device Management 1025.
 - Gateways with thin-edge.io 2.x and tedge-dot 0.0.13 or later.
-- Permission to change the configuration repository (inventory admin) and to send operations
-  (device control).
+- Inventory admin to add, change and delete entries, device control admin to send them to a
+  gateway, and bulk operation admin to send them to a group. Users who can't add entries don't see
+  *Add*, *Upload* and *Duplicate*. The guide lists the finer roles that work too.
 
 ## Getting started
 
