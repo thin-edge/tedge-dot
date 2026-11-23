@@ -11,6 +11,7 @@ import { nameOf } from '../shared/naming';
 import { connectorEntriesQuery } from '../shared/queries';
 import { SendToGatewayComponent } from './send-to-gateway.component';
 import { SendToGroupComponent } from './send-to-group.component';
+import { UploadFilesComponent } from './upload-files.component';
 
 /** Management > OT connectors: the configuration repository's connector files. */
 @Component({
@@ -19,6 +20,12 @@ import { SendToGroupComponent } from './send-to-group.component';
   providers: [ConnectorOperationsService],
   template: `
     <c8y-title>{{ 'OT connectors' | translate }}</c8y-title>
+    <c8y-action-bar-item [placement]="'right'">
+      <button class="btn btn-link" type="button" (click)="upload()">
+        <i c8yIcon="upload"></i>
+        {{ 'Upload connector files' | translate }}
+      </button>
+    </c8y-action-bar-item>
     <c8y-action-bar-item [placement]="'right'">
       <button class="btn btn-link" type="button" (click)="add()">
         <i c8yIcon="plus-circle"></i>
@@ -129,6 +136,14 @@ export class ConnectorsPageComponent implements OnInit {
 
   sendToGateway(entry: IManagedObject): void {
     this.bsModal.show(SendToGatewayComponent, { initialState: { entry }, class: 'modal-lg', ignoreBackdropClick: true });
+  }
+
+  upload(): void {
+    this.bsModal.show(UploadFilesComponent, {
+      initialState: { onFinished: () => void this.load() },
+      class: 'modal-lg',
+      ignoreBackdropClick: true,
+    });
   }
 
   sendToGroup(entry: IManagedObject): void {

@@ -10,6 +10,7 @@ import type * as Monaco from 'monaco-editor';
 
 import { PROTOCOL_IDS, emitToml, newConfig, type Config, type ProtocolId } from '../generated/config-builder';
 import { commentLines } from '../shared/form-model';
+import { PendingFileService } from '../shared/pending-file.service';
 import { writeKeepingLayout } from '../shared/toml-write';
 import { isValidName, nameOf, normalizeName, pathOf, typeOf } from '../shared/naming';
 import { TOML_LANGUAGE_ID, tomlLanguage } from '../shared/toml-language';
@@ -206,6 +207,7 @@ export class ConnectorEditorComponent {
   private readonly repository = inject(RepositoryService);
   private readonly alert = inject(AlertService);
   private readonly modal = inject(ModalService);
+  private readonly pending = inject(PendingFileService);
 
   readonly protocols = PROTOCOL_IDS;
   readonly editorOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
@@ -255,7 +257,19 @@ export class ConnectorEditorComponent {
       this.description.set('');
       this.deviceType.set('');
       this.fileName.set('');
-      this.useTemplate(this.startFrom());
+      // An uploaded file that needs fixing comes here from the upload dialog.
+      const uploaded = this.pending.take();
+      if (uploaded) {
+        this.name.set(uploaded.fileName);
+        this.fileName.set(uploaded.fileName);
+        this.fileTouched.set(true);
+        this.content.set(uploaded.text);
+        if (!this.result().config) {
+          this.showToml();
+        }
+      } else {
+        this.useTemplate(this.startFrom());
+      }
       return;
     }
     this.isNew.set(false);
