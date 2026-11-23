@@ -62,4 +62,4 @@
 
 ## 10. Verification
 
-- [ ] 10.1 On a test tenant with a thin-edge.io gateway, install the plugin, run the spec's scenarios, and record the results in the PR
+- [x] 10.1 On a test tenant with a thin-edge.io gateway, install the plugin, run the spec's scenarios, and record the results in the PR
