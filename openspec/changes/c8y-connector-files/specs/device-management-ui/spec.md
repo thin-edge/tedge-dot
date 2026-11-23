@@ -69,6 +69,26 @@ read them.
 - **WHEN** the content has an unclosed string on line 12
 - **THEN** the form view shows no form and names line 12
 
+### Requirement: Upload connector files
+The OT connectors page SHALL add existing `.toml` files to the repository. Each file SHALL be
+checked like the editor checks a file before saving, and SHALL become an entry whose file name is
+the uploaded name without `.toml`. Valid files SHALL be added together, with an optional device
+type for all of them. A file with a syntax or schema problem, or a file name the connector
+directory cannot hold, SHALL NOT be added, and SHALL be openable in the editor as a new entry. A
+point library or another TOML file without `[connector]` SHALL be refused with its reason.
+
+#### Scenario: Valid file
+- **WHEN** a user uploads `line-3.toml`, a valid connector file
+- **THEN** the repository holds an entry of type `tedge-dot-line-3` whose binary is that file
+
+#### Scenario: File with a problem
+- **WHEN** a user uploads `pump.toml` with `log_level = "loud"`
+- **THEN** the dialog names the problem, does not add the file, and offers to open it in the editor
+
+#### Scenario: Point library
+- **WHEN** a user uploads `demo-sim.toml`, a point library
+- **THEN** the dialog refuses it as a point library and adds nothing
+
 ### Requirement: Validation before saving
 Before saving, the editor SHALL validate the content with the docs site's config builder
 validation and the contract schema. It SHALL mark syntax errors at their line and column, and list
