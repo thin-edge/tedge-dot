@@ -31,9 +31,18 @@ export function shapeFields(schema: any): ShapeField[] {
       return { key, kind: 'check' };
     }
     const kind: FieldKind = s?.type === 'integer' || s?.type === 'number' ? s.type : 'text';
-    const placeholder = typeof s?.description === 'string' ? s.description.slice(0, 24) : undefined;
-    return { key, kind, placeholder };
+    return { key, kind, placeholder: exampleIn(s?.description) };
   });
+}
+
+/**
+ * The example a description gives after "e.g.", without the sentence's closing punctuation:
+ * "RTU: e.g. /dev/ttyRS485." gives "/dev/ttyRS485". The field shows it after its own "e.g.";
+ * a description without an example gives none (the field's help shows the description).
+ */
+export function exampleIn(description: unknown): string | undefined {
+  const m = typeof description === 'string' ? /\be\.g\.\s+(\S+)/.exec(description) : null;
+  return m ? m[1].replace(/[.,;:)]+$/, '') || undefined : undefined;
 }
 
 /** The keys of a table that the form has no field for, in the table's order. */
@@ -142,7 +151,16 @@ export function addLibraryPoint(library: Config): Config {
 }
 
 export function removeLibraryPoint(library: Config, p: number): Config {
-  return { ...library, point: (Array.isArray(library.point) ? library.point : []).filter((_, i) => i !== p) };
+  return withList(library, 'point', (Array.isArray(library.point) ? library.point : []).filter((_, i) => i !== p));
+}
+
+/**
+ * `table` with `key` set to `items`, or without `key` when no items are left: an empty array
+ * would be written as `key = []` at the top of its table, where it says nothing.
+ */
+function withList(table: Config, key: string, items: Config[]): Config {
+  const { [key]: _old, ...rest } = table;
+  return items.length ? { ...rest, [key]: items } : rest;
 }
 
 /** A new point library of `protocol`: the [library] table and one point from the template. */
@@ -166,17 +184,13 @@ export function switchLibraryProtocol(library: Config, protocol: string): Config
 }
 
 export function removeDevice(config: Config, d: number): Config {
-  return { ...config, device: devicesOf(config).filter((_, i) => i !== d) };
+  return withList(config, 'device', devicesOf(config).filter((_, i) => i !== d));
 }
 
 export function removePoint(config: Config, d: number, p: number): Config {
   const devices = devicesOf(config);
-  const device = devices[d];
-  return setAt(
-    config,
-    `/device/${d}/point`,
-    pointsOf(device).filter((_, i) => i !== p)
-  );
+  const device = withList(devices[d] ?? {}, 'point', pointsOf(devices[d]).filter((_, i) => i !== p));
+  return { ...config, device: devices.map((dev, i) => (i === d ? device : dev)) };
 }
 
 /**

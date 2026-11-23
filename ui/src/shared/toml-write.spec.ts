@@ -2,8 +2,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { getAt, parseToml, setAt, type Config } from '../generated/config-builder';
-import { addDevice, addPoint, commentLines, removeDevice, removePoint, switchProtocol } from './form-model';
-import { sameConfig, writeKeepingLayout } from './toml-write';
+import {
+  addDevice,
+  addPoint,
+  commentLines,
+  newLibrary,
+  removeDevice,
+  removeLibraryPoint,
+  removePoint,
+  switchProtocol,
+} from './form-model';
+import { emitLibraryToml, sameConfig, writeKeepingLayout } from './toml-write';
 import { validateConnectorFile } from './validation';
 
 const repo = join(__dirname, '..', '..', '..');
@@ -67,6 +76,79 @@ describe('writeKeepingLayout', () => {
     const back = writeKeepingLayout(twoDevices, removeDevice(parseToml(twoDevices), 1));
     expect(back).toBeDefined();
     expect(parseToml(back!)['device']).toHaveLength(1);
+  });
+
+  it('adds a new top-level table above the devices, not after the last point', () => {
+    const text = [
+      '[connector]',
+      'protocol = "opcua"',
+      '',
+      '# The pump on line 3',
+      '[[device]]',
+      'name = "Pump01"',
+      'protocol_address = { endpoint = "opc.tcp://127.0.0.1:4840/" }',
+      '',
+      '  [[device.point]]',
+      '  id = "flow"',
+      '  datatype = "float64"',
+      '  address = { node_id = "ns=2;i=9" }',
+      '',
+    ].join('\n');
+    const written = edit(text, c => setAt(c, '/connection/security_policy', 'None'));
+    expect(written).toBe(
+      [
+        '[connector]',
+        'protocol = "opcua"',
+        '',
+        '[connection]',
+        'security_policy = "None"',
+        '',
+        '# The pump on line 3',
+        '[[device]]',
+        'name = "Pump01"',
+        'protocol_address = { endpoint = "opc.tcp://127.0.0.1:4840/" }',
+        '',
+        '  [[device.point]]',
+        '  id = "flow"',
+        '  datatype = "float64"',
+        '  address = { node_id = "ns=2;i=9" }',
+        '',
+      ].join('\n')
+    );
+  });
+
+  it('adds new top-level tables in the builder order, separated from what is above', () => {
+    const text = ['[connector]', 'protocol = "opcua"', '[[device]]', 'name = "Pump01"', ''].join('\n');
+    const written = edit(text, c => setAt(setAt(c, '/connection/security_mode', 'None'), '/mqtt/port', 1884));
+    expect(written).toBe(
+      ['[connector]', 'protocol = "opcua"', '', '[mqtt]', 'port = 1884', '', '[connection]', 'security_mode = "None"', '', '[[device]]', 'name = "Pump01"', ''].join(
+        '\n'
+      )
+    );
+  });
+
+  it('removes the last point and the last device without leaving an empty list', () => {
+    const text = demo('opcua.toml');
+    let config = parseToml(text);
+    while (config['device'][0]['point']?.length) {
+      config = removePoint(config, 0, 0);
+    }
+    const noPoints = writeKeepingLayout(text, config);
+    expect(noPoints).toBeDefined();
+    expect(noPoints).not.toMatch(/^\s*point\s*=/m);
+    expect(noPoints).not.toMatch(/^\s*\[\[device\.point\]\]/m);
+    const noDevices = writeKeepingLayout(text, removeDevice(parseToml(text), 0));
+    expect(noDevices).toBeDefined();
+    expect(noDevices).not.toMatch(/^\s*device\s*=/m);
+    expect(noDevices).not.toMatch(/^\s*\[\[device\]\]/m);
+  });
+
+  it('removes the last point of a point library without leaving an empty list', () => {
+    const text = emitLibraryToml(newLibrary('modbus'));
+    const written = writeKeepingLayout(text, removeLibraryPoint(parseToml(text), 0));
+    expect(written).toBeDefined();
+    expect(written).not.toMatch(/^\s*point\s*=/m);
+    expect(written).not.toMatch(/^\s*\[\[point\]\]/m);
   });
 
   it('adds the first device to a file without devices', () => {

@@ -18,6 +18,7 @@ import {
   removeDevice,
   removePoint,
   rewriteChanges,
+  exampleIn,
   shapeFields,
   splitList,
   switchProtocol,
@@ -72,6 +73,19 @@ describe('shapeFields and extraKeys', () => {
     expect(byKey['host'].kind).toBe('text');
   });
 
+  it('offers the example a description gives as the placeholder, without its own "e.g."', () => {
+    const placeholder = (protocol: string, table: 'protocol_address' | 'address', key: string) =>
+      shapeFields(protocolInfo(protocol)[table]).find(f => f.key === key)?.placeholder;
+    expect(placeholder('opcua', 'address', 'node_id')).toBe('ns=2;s=Temperature');
+    expect(placeholder('opcua', 'protocol_address', 'endpoint')).toBe('opc.tcp://192.168.0.20:4840/');
+    expect(placeholder('modbus', 'protocol_address', 'serial_port')).toBe('/dev/ttyRS485');
+    expect(placeholder('modbus', 'protocol_address', 'port')).toBeUndefined();
+    expect(exampleIn('SocketCAN interface, e.g. can0.')).toBe('can0');
+    expect(exampleIn('The PI Web API root, e.g. https://pi.example.com/piwebapi (http:// only)')).toBe('https://pi.example.com/piwebapi');
+    expect(exampleIn('TCP: usually 502.')).toBeUndefined();
+    expect(exampleIn(undefined)).toBeUndefined();
+  });
+
   it('a shape without properties has no fields', () => {
     expect(shapeFields({ type: 'object' })).toEqual([]);
     expect(shapeFields(undefined)).toEqual([]);
@@ -103,6 +117,21 @@ describe('devices and points', () => {
     expect(config.device[0].point.map((p: any) => p.id)).toEqual(['temperature_2']);
     config = removeDevice(config, 0);
     expect(config.device.map((d: any) => d.name)).toEqual(['plc2']);
+  });
+
+  it('drops the list with its last item, so no empty list is written', () => {
+    let config = addDevice(newConfig('modbus'));
+    const points = config.device[0].point.length;
+    for (let i = 0; i < points; i++) {
+      config = removePoint(config, 0, 0);
+    }
+    expect('point' in config.device[0]).toBe(false);
+    expect(config.device[0].name).toBeDefined();
+    while (config.device?.length) {
+      config = removeDevice(config, 0);
+    }
+    expect('device' in config).toBe(false);
+    expect('point' in removeLibraryPoint(newLibrary('modbus'), 0)).toBe(false);
   });
 });
 

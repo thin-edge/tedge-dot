@@ -208,8 +208,26 @@ export function emitLibraryToml(library: Config): string {
 }
 
 /**
- * The text with tables for the devices and points `next` has beyond `current`, appended where
- * they belong. Only additions at the end are handled, which is what the form does.
+ * The top-level tables, such as `[connection]`, that `next` has and `current` does not, in the
+ * config builder's layout and order, separated by blank lines. toml-patch would append them
+ * after the last `[[device.point]]`, indented like it.
+ */
+function newTables(current: Config, next: Config): string[] {
+  const added = Object.fromEntries(
+    Object.entries(next).filter(
+      ([key, value]) => current[key] === undefined && key !== 'device' && value && typeof value === 'object' && !Array.isArray(value)
+    )
+  );
+  if (!Object.keys(added).length) {
+    return [];
+  }
+  return emitToml(added).replace(/\n$/, '').split('\n');
+}
+
+/**
+ * The text with the top-level tables `next` has beyond `current` above the first device, and the
+ * tables for the devices and points it has beyond `current` appended where they belong. Only
+ * additions at the end are handled, which is what the form does.
  */
 function addNewTables(text: string, current: Config, next: Config): string | undefined {
   // A point library: new `[[point]]` tables go at the end of the file.
@@ -242,6 +260,21 @@ function addNewTables(text: string, current: Config, next: Config): string | und
     }
     const after = lastContentLine(lines, section.start, section.end);
     inserts.push({ after, block: want.slice(have.length).flatMap(p => ['', ...pointBlock(p)]) });
+  }
+
+  const tables = newTables(current, next);
+  if (tables.length) {
+    const firstDevice = headers(lines).find(h => h.kind === 'device');
+    if (firstDevice) {
+      // Above the first device and the comments right above it, which belong to the device.
+      let at = firstDevice.line;
+      while (at > 0 && isComment(lines[at - 1])) {
+        at--;
+      }
+      // `after` is the line the block follows; the block ends with the blank line before the device.
+      inserts.push({ after: at - 1, block: [...(at > 0 && lines[at - 1].trim() ? [''] : []), ...tables, ''] });
+    }
+    // Without devices, toml-patch appends the tables at the end, which is where they belong.
   }
 
   if (nextDevices.length > currentDevices.length) {

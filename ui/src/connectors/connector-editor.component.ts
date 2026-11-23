@@ -43,7 +43,11 @@ const MARKER_OWNER = 'tedge-dot';
   imports: [CoreModule, SharedRepositoryModule, EditorComponent, ConnectorFormComponent, LibraryFormComponent],
   providers: [ConnectorOperationsService],
   template: `
-    <c8y-title>{{ heading() | translate }}</c8y-title>
+    <!-- c8y-title sets the browser tab title only when it is created: a new one per heading
+         keeps the tab title right when the router reuses this editor for another file. -->
+    @for (h of [heading()]; track h) {
+      <c8y-title>{{ h | translate }}</c8y-title>
+    }
 
     <div class="card card--fullpage">
       <div class="card-header separator">
