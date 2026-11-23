@@ -6,7 +6,8 @@ Management, and install them on your gateways without logging in to them.
 ## What you get
 
 - **Management > OT connectors**: your connector files, kept in the configuration repository. Add,
-  edit, and delete them, and send them to one gateway or to a group.
+  upload, edit, and delete them, and send them to one gateway or to a group. Uploaded files are
+  checked first; a file with problems opens in the editor.
 - **A form and a TOML editor**: write a connector file in a form, with a short help text for every
   setting, or edit its TOML directly. Changes made in the form keep the file's comments. Before
   you save, the editor checks the file and shows each problem at the setting it concerns.
