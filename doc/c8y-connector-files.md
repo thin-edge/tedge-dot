@@ -64,8 +64,10 @@ grouping and measurement settings, `[mqtt]`, `[connection]`, and each device wit
 `protocol_address` and points. Each field has a help text, and a schema error shows under the
 field it concerns. *Add device*, *Add point* and the remove buttons start from the protocol's
 templates, and switching the protocol gives every device and point the new protocol's address
-fields while keeping ids and policies. Keys the form has no field for stay in the file and are
-listed as "Also set, kept as is".
+fields while keeping policies. Device names and point ids that are still the old protocol's
+defaults become the new protocol's: from OPC UA to SNMP, `opc1` becomes `switch1` and
+`temperature_2` becomes `uptime_2`. Names you chose stay. Keys the form has no field for stay in
+the file and are listed as "Also set, kept as is".
 
 A form edit changes only the lines it concerns, so the file keeps its comments and layout. New
 devices and points are added at the end of their device's section in the config builder's

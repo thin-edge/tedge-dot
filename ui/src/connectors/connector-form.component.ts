@@ -723,7 +723,7 @@ export class FormLibrariesComponent {
               }
             </select>
           </div>
-          <c8y-messages [helpMessage]="'Switching gives devices and points new addresses and keeps their IDs.' | translate"></c8y-messages>
+          <c8y-messages [helpMessage]="'Switching gives devices and points new addresses. Default names such as opc1 and temperature change with it; names you chose stay.' | translate"></c8y-messages>
         </c8y-form-group>
       </div>
     </div>

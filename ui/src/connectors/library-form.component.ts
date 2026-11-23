@@ -45,7 +45,7 @@ const KNOWN = {
           <c8y-messages
             [helpMessage]="(protocolFixed()
               ? 'Fixed once saved: the library type and its folder on the gateway name it.'
-              : 'Switching gives points new addresses and keeps their IDs.') | translate"
+              : 'Switching gives points new addresses. A default ID such as temperature changes with it; IDs you chose stay.') | translate"
           >
             @if (state.error('/library/protocol'); as e) {
               <c8y-message>{{ e }}</c8y-message>

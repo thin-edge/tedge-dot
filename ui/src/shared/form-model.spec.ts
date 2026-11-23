@@ -141,13 +141,37 @@ describe('switchProtocol', () => {
     const opcua = switchProtocol(modbus, 'opcua');
     expect(opcua.connector.protocol).toBe('opcua');
     expect(opcua.connector.service_name).toBe('tedge-dot-opcua');
-    expect(opcua.device[0].name).toBe('plc1');
+    expect(opcua.device[0].name).toBe('opc1');
     expect(opcua.device[0].protocol_address).toEqual(protocolInfo('opcua').newDevice.protocol_address);
     expect(opcua.device[0].point[0].id).toBe('temperature');
     expect(opcua.device[0].point[0].report).toEqual({ on_change: true });
     expect(opcua.device[0].point[0].address).toEqual(protocolInfo('opcua').newPoint.address);
     expect(opcua.device[0].point[0].datatype).toBe(protocolInfo('opcua').newPoint.datatype);
     expect(validateConnectorFile(emitToml(opcua)).fields).toEqual([]);
+  });
+
+  it('gives default device names and point ids the new protocol defaults, keeping the number', () => {
+    let config = addPoint(addDevice(newConfig('opcua')), 0);
+    config = setAt(config, '/device/0/point/2', { ...config.device[0].point[0], id: 'flow' });
+    config = setAt(config, '/device/2', { ...config.device[0], name: 'Pump01' });
+    const snmp = switchProtocol(config, 'snmp');
+    expect(snmp.device.map((d: any) => d.name)).toEqual(['switch1', 'switch2', 'Pump01']);
+    expect(snmp.device[0].point.map((p: any) => p.id)).toEqual(['uptime', 'uptime_2', 'flow']);
+    expect(validateConnectorFile(emitToml(snmp)).fields).toEqual([]);
+  });
+
+  it('does not rename a device or point onto a name the user already uses', () => {
+    let config = addDevice(newConfig('opcua'));
+    config = setAt(config, '/device/1/name', 'plc1');
+    config = setAt(config, '/device/0/point/1', { ...config.device[0].point[0], id: 'temperature_x' });
+    const modbus = switchProtocol(config, 'modbus');
+    expect(modbus.device.map((d: any) => d.name)).toEqual(['plc1_2', 'plc1']);
+    expect(modbus.device[0].point.map((p: any) => p.id)).toEqual(['temperature', 'temperature_x']);
+  });
+
+  it('gives a library point with the default id the new protocol default', () => {
+    const canbus = switchLibraryProtocol(newLibrary('opcua'), 'canbus');
+    expect(canbus.point[0].id).toBe(protocolInfo('canbus').newPoint.id);
   });
 
   it('keeps a service name that is not the old default, and drops the old [connection]', () => {

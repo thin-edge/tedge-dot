@@ -194,14 +194,49 @@ export function removePoint(config: Config, d: number, p: number): Config {
 }
 
 /**
+ * `value` with its default part replaced: a name made from the old protocol's default (`opc1`,
+ * `temperature_2`) is made from the new one's (`plc1`, `uptime_2`), keeping the number. Anything
+ * else was chosen by the user and stays.
+ */
+function renamedDefault(value: unknown, from: unknown, to: unknown, pattern: (stem: string) => RegExp): unknown {
+  if (typeof value !== 'string' || typeof from !== 'string' || typeof to !== 'string') {
+    return value;
+  }
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = pattern(escape(from)).exec(value);
+  return m ? `${to}${m[1] ?? ''}` : value;
+}
+
+/** Each value renamed by `rename`, with a suffix where that would repeat a value already used. */
+function renamedAll(values: unknown[], rename: (value: unknown) => unknown): unknown[] {
+  const taken: unknown[] = [];
+  return values.map(value => {
+    const next = rename(value);
+    const unique = next !== value && typeof next === 'string' ? uniqueId(next, [...taken, ...values.filter(v => v !== value)]) : next;
+    taken.push(unique);
+    return unique;
+  });
+}
+
+/**
  * The configuration on another protocol: every device and point gets the new protocol's address
  * template and the template's data type (an address and its data type belong together, as the
- * register count of a Modbus value shows), the protocol's own tables and keys go, and ids and
- * policies stay. A service name that was the old protocol's default becomes the new one's.
+ * register count of a Modbus value shows), the protocol's own tables and keys go, and policies
+ * stay. Names that were the old protocol's defaults become the new one's: the service name, device
+ * names such as `opc1`, and point ids such as `temperature`; names the user chose stay.
  */
 export function switchProtocol(config: Config, protocol: string): Config {
   const info = protocolInfo(protocol);
   const old = config.connector?.protocol ?? '';
+  const oldInfo = protocolInfo(old);
+  const stem = (template: Config) => String(template?.name ?? '').replace(/\d+$/, '');
+  const deviceNames = renamedAll(devicesOf(config).map(d => d.name), name =>
+    renamedDefault(name, stem(oldInfo.newDevice), stem(info.newDevice), from => new RegExp(`^${from}(\\d+)$`))
+  );
+  const pointIds = (device: Config) =>
+    renamedAll(pointsOf(device).map(p => p.id), id =>
+      renamedDefault(id, oldInfo.newPoint?.id, info.newPoint?.id, from => new RegExp(`^${from}(_\\d+)?$`))
+    );
   const { sampling_interval, ...connector } = config.connector ?? {};
   const serviceName =
     connector.service_name === undefined || connector.service_name === `tedge-dot-${old}`
@@ -215,20 +250,25 @@ export function switchProtocol(config: Config, protocol: string): Config {
       service_name: serviceName,
       ...(protocol === 'opcua' && sampling_interval !== undefined ? { sampling_interval } : {}),
     },
-    device: devicesOf(config).map(device => ({
-      ...device,
-      protocol_address: structuredClone(info.newDevice.protocol_address),
-      point: pointsOf(device).map(point => {
-        const { address, subscribe, sampling_interval: pointSampling, datatype, ...rest } = point;
-        return {
-          ...rest,
-          ...(info.newPoint.datatype !== undefined ? { datatype: info.newPoint.datatype } : datatype !== undefined ? { datatype } : {}),
-          ...(protocol === 'opcua' && pointSampling !== undefined ? { sampling_interval: pointSampling } : {}),
-          ...(protocol === 'opcua' && subscribe !== undefined ? { subscribe } : {}),
-          address: structuredClone(info.newPoint.address),
-        };
-      }),
-    })),
+    device: devicesOf(config).map((device, d) => {
+      const ids = pointIds(device);
+      return {
+        ...device,
+        ...(device.name !== undefined ? { name: deviceNames[d] } : {}),
+        protocol_address: structuredClone(info.newDevice.protocol_address),
+        point: pointsOf(device).map((point, p) => {
+          const { address, subscribe, sampling_interval: pointSampling, datatype, ...rest } = point;
+          return {
+            ...rest,
+            ...(point.id !== undefined ? { id: ids[p] } : {}),
+            ...(info.newPoint.datatype !== undefined ? { datatype: info.newPoint.datatype } : datatype !== undefined ? { datatype } : {}),
+            ...(protocol === 'opcua' && pointSampling !== undefined ? { sampling_interval: pointSampling } : {}),
+            ...(protocol === 'opcua' && subscribe !== undefined ? { subscribe } : {}),
+            address: structuredClone(info.newPoint.address),
+          };
+        }),
+      };
+    }),
   };
   if (!Array.isArray(config.device)) {
     delete next['device'];
