@@ -192,11 +192,38 @@ function blockLines(config: Config, marker: string): string[] {
 const pointBlock = (point: Config) => blockLines({ device: [{ point: [point] }] }, '  [[device.point]]');
 const deviceBlock = (device: Config) => blockLines({ device: [device] }, '[[device]]');
 
+/** A library's `[[point]]` table in the config builder's layout, without the device indent. */
+export function libraryPointBlock(point: Config): string[] {
+  return pointBlock(point).map((line, i) => (i === 0 ? '[[point]]' : line.replace(/^ {2}/, '')));
+}
+
+/** A point library in the config builder's layout: `[library]`, then one `[[point]]` per point. */
+export function emitLibraryToml(library: Config): string {
+  const { point, ...rest } = library;
+  const lines = emitToml(rest).replace(/\n$/, '').split('\n');
+  for (const p of (Array.isArray(point) ? point : []) as Config[]) {
+    lines.push('', ...libraryPointBlock(p));
+  }
+  return lines.join('\n') + '\n';
+}
+
 /**
  * The text with tables for the devices and points `next` has beyond `current`, appended where
  * they belong. Only additions at the end are handled, which is what the form does.
  */
 function addNewTables(text: string, current: Config, next: Config): string | undefined {
+  // A point library: new `[[point]]` tables go at the end of the file.
+  if (next['library'] !== undefined && Array.isArray(next['point'])) {
+    const have: Config[] = Array.isArray(current['point']) ? current['point'] : [];
+    const want: Config[] = next['point'];
+    if (want.length <= have.length) {
+      return text;
+    }
+    const lines = text.split('\n');
+    const after = lastNonBlankLine(lines, -1, lines.length);
+    lines.splice(after + 1, 0, ...want.slice(have.length).flatMap(p => ['', ...libraryPointBlock(p)]));
+    return lines.join('\n');
+  }
   const currentDevices: Config[] = Array.isArray(current['device']) ? current['device'] : [];
   const nextDevices: Config[] = Array.isArray(next['device']) ? next['device'] : [];
   const lines = text.split('\n');

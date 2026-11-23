@@ -3,16 +3,16 @@
  *
  * thin-edge.io's file plugin manages the files listed in
  * /etc/tedge/plugins/tedge-configuration-plugin.toml, and offers that list itself as the type
- * `tedge-configuration-plugin`. To add a connector file from Cumulocity, the UI takes a snapshot
- * of the list, appends one `[[files]]` entry, and sends it back. thin-edge.io re-reads the list
- * and then offers the new type.
+ * `tedge-configuration-plugin`. To add connector files and point libraries from Cumulocity, the UI
+ * takes a snapshot of the list, appends a `[[files]]` entry per file, and sends it back.
+ * thin-edge.io re-reads the list and then offers the new types.
  *
  * The edit only ever appends: everything already in the file stays byte for byte, including
  * comments and entries this plugin knows nothing about.
  */
 import { parse } from 'smol-toml';
 
-import { pathOf, typeOf } from './naming';
+import { type ManagedFile } from './naming';
 
 /** One entry of the list, as thin-edge.io reads it. */
 export interface RegisteredFile {
@@ -22,12 +22,12 @@ export interface RegisteredFile {
 }
 
 export type RegistrationPlan =
-  /** The file is registered under its type already: nothing to send. */
+  /** Every file is registered under its type already: nothing to send. */
   | { kind: 'registered' }
-  /** The path, or the type, is taken by another entry: registering would clash. */
+  /** A path, or a type, is taken by another entry: registering would clash. */
   | { kind: 'conflict'; path: string; type: string; message: string }
-  /** Append `block`; `text` is the whole new file. */
-  | { kind: 'append'; block: string; text: string };
+  /** Append `block` for `files`; `text` is the whole new list. */
+  | { kind: 'append'; files: ManagedFile[]; block: string; text: string };
 
 /** The entries of a tedge-configuration-plugin.toml. Throws when the text is not TOML. */
 export function registeredFiles(text: string): RegisteredFile[] {
@@ -43,59 +43,72 @@ export function registeredFiles(text: string): RegisteredFile[] {
     });
 }
 
-/** The block appended for `name`. */
-export function registrationBlock(name: string): string {
+/**
+ * The block appended for `file`. A point library lives in a protocol folder that does not exist
+ * until the first library arrives; thin-edge.io's file plugin creates it with the parent settings.
+ */
+export function registrationBlock(file: ManagedFile): string {
   return [
     '# Added by the tedge-dot OT connectors plugin for Device Management',
     '[[files]]',
-    `path = '${pathOf(name)}'`,
-    `type = '${typeOf(name)}'`,
+    `path = '${file.path}'`,
+    `type = '${file.type}'`,
     "user = 'tedge'",
     "group = 'tedge'",
     'mode = 0o644',
+    ...(file.kind === 'library' ? ["parent_user = 'tedge'", "parent_group = 'tedge'", 'parent_mode = 0o755'] : []),
     '',
   ].join('\n');
 }
 
 /**
- * What registering connector file `name` means for the list in `text`.
+ * What registering `files` means for the list in `text`: the files not registered yet are
+ * appended in one edit.
  *
  * Throws when the current list cannot be read, or when the appended text would not read back
- * with exactly one new entry (for example because the list is written in a form that an appended
- * table would break). In both cases nothing should be sent.
+ * with exactly the new entries (for example because the list is written in a form that an
+ * appended table would break). In both cases nothing should be sent.
  */
-export function planRegistration(text: string, name: string): RegistrationPlan {
+export function planRegistration(text: string, files: readonly ManagedFile[]): RegistrationPlan {
   let entries: RegisteredFile[];
   try {
     entries = registeredFiles(text);
   } catch (e) {
     throw new Error(`The gateway's tedge-configuration-plugin.toml is not valid TOML: ${errorText(e)}`);
   }
-  const path = pathOf(name);
-  const type = typeOf(name);
 
-  const samePath = entries.find(e => e.path === path);
-  if (samePath) {
-    return samePath.type === type
-      ? { kind: 'registered' }
-      : {
-          kind: 'conflict',
-          path,
-          type: samePath.type,
-          message: `${path} is already registered as the type "${samePath.type}".`,
-        };
+  const missing: ManagedFile[] = [];
+  for (const file of files) {
+    const samePath = entries.find(e => e.path === file.path);
+    if (samePath) {
+      if (samePath.type === file.type) {
+        continue;
+      }
+      return {
+        kind: 'conflict',
+        path: file.path,
+        type: samePath.type,
+        message: `${file.path} is already registered as the type "${samePath.type}".`,
+      };
+    }
+    const sameType = entries.find(e => e.type === file.type);
+    if (sameType) {
+      return {
+        kind: 'conflict',
+        path: sameType.path,
+        type: file.type,
+        message: `The type "${file.type}" is already registered for ${sameType.path}.`,
+      };
+    }
+    if (!missing.some(m => m.type === file.type)) {
+      missing.push(file);
+    }
   }
-  const sameType = entries.find(e => e.type === type);
-  if (sameType) {
-    return {
-      kind: 'conflict',
-      path: sameType.path,
-      type,
-      message: `The type "${type}" is already registered for ${sameType.path}.`,
-    };
+  if (!missing.length) {
+    return { kind: 'registered' };
   }
 
-  const block = registrationBlock(name);
+  const block = missing.map(registrationBlock).join('\n');
   const separator = text === '' || text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
   const next = text + separator + block;
 
@@ -105,11 +118,11 @@ export function planRegistration(text: string, name: string): RegistrationPlan {
   } catch (e) {
     throw new Error(`An entry cannot be appended to this tedge-configuration-plugin.toml: ${errorText(e)}`);
   }
-  const added = after.filter(e => e.path === path && e.type === type);
-  if (after.length !== entries.length + 1 || added.length !== 1) {
+  const added = missing.every(m => after.filter(e => e.path === m.path && e.type === m.type).length === 1);
+  if (after.length !== entries.length + missing.length || !added) {
     throw new Error('An entry cannot be appended to this tedge-configuration-plugin.toml: it does not read back.');
   }
-  return { kind: 'append', block, text: next };
+  return { kind: 'append', files: missing, block, text: next };
 }
 
 function errorText(e: unknown): string {

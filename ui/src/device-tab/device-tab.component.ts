@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, viewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
@@ -19,11 +19,12 @@ import {
 import { BsModalService } from 'ngx-bootstrap/modal';
 
 import { SendToGatewayComponent } from '../connectors/send-to-gateway.component';
-import { connectorTypes } from '../shared/gateway';
+import { connectorTypes, libraryTypes } from '../shared/gateway';
 
 /**
  * The OT connectors tab of a thin-edge.io gateway: Device Management's Configuration tab, limited
- * to connector files, plus adding a connector file and registering one that is already there.
+ * to connector files and, in a second list, point libraries, plus adding a file from the
+ * repository and registering one that is already there.
  */
 @Component({
   selector: 'tdot-device-tab',
@@ -56,7 +57,7 @@ import { connectorTypes } from '../shared/gateway';
 
     <div class="card content-fullpage">
       <div class="card-header separator">
-        <div class="card-title">{{ 'Connector files' | translate }}</div>
+        <div class="card-title">{{ 'Connector files and point libraries' | translate }}</div>
       </div>
       <c8y-resizable-grid
         [orientation]="'vertical'"
@@ -71,11 +72,22 @@ import { connectorTypes } from '../shared/gateway';
           <div class="card--grid grid__col--4-8--md m-b-0 flex-grow min-height-0">
             <div class="card--grid__inner-scroll bg-level-1">
               <c8y-device-configuration-list
+                #connectorList
                 [itemIcon]="'plug'"
                 [items]="items()"
                 [emptyState]="deviceEmptyState"
-                (configSelected)="onTypeSelected($event)"
+                (configSelected)="onTypeSelected($event, 'connector')"
               ></c8y-device-configuration-list>
+              @if (libraryItems().length) {
+                <p class="text-label-small text-muted p-l-16 p-t-16 m-b-0">{{ 'Point libraries' | translate }}</p>
+                <c8y-device-configuration-list
+                  #libraryList
+                  [itemIcon]="'list'"
+                  [items]="libraryItems()"
+                  [emptyState]="deviceEmptyState"
+                  (configSelected)="onTypeSelected($event, 'library')"
+                ></c8y-device-configuration-list>
+              }
             </div>
             <div class="card--grid__inner-scroll d-flex d-col flex-grow min-height-0 bg-component">
               <div class="card-block d-flex d-col flex-grow min-height-0">
@@ -95,8 +107,8 @@ import { connectorTypes } from '../shared/gateway';
                     <legend>{{ 'Preview' | translate }}</legend>
                     <c8y-ui-empty-state
                       [icon]="'file-text'"
-                      [title]="'No connector file selected.' | translate"
-                      [subtitle]="'Select a connector file to preview.' | translate"
+                      [title]="'No file selected.' | translate"
+                      [subtitle]="'Select a connector file or point library to preview.' | translate"
                       [horizontal]="true"
                     ></c8y-ui-empty-state>
                   </fieldset>
@@ -115,8 +127,8 @@ import { connectorTypes } from '../shared/gateway';
               @if (!configurationType()) {
                 <c8y-ui-empty-state
                   [icon]="'plug'"
-                  [title]="'No connector file selected.' | translate"
-                  [subtitle]="'Select a connector file above to see its repository entries.' | translate"
+                  [title]="'No file selected.' | translate"
+                  [subtitle]="'Select a connector file or point library to see its repository entries.' | translate"
                   [horizontal]="true"
                 ></c8y-ui-empty-state>
               } @else {
@@ -177,6 +189,9 @@ export class DeviceTabComponent implements OnInit {
 
   readonly device = signal<IManagedObject>({} as IManagedObject);
   readonly items = signal<SupportedConfigurationItem[]>([]);
+  readonly libraryItems = signal<SupportedConfigurationItem[]>([]);
+  private readonly connectorList = viewChild<DeviceConfigurationListComponent>('connectorList');
+  private readonly libraryList = viewChild<DeviceConfigurationListComponent>('libraryList');
   readonly configurationType = signal<string | undefined>(undefined);
   readonly configSnapshot = signal<ConfigurationSnapshot | undefined>(undefined);
   readonly repositoryItems = signal<SupportedConfigurationItem[]>([]);
@@ -207,11 +222,16 @@ export class DeviceTabComponent implements OnInit {
   ngOnInit(): void {
     const device: IManagedObject = this.route.snapshot.parent?.data['contextData'];
     this.device.set(device);
-    this.items.set(connectorTypes(device).map(name => ({ name })));
+    this.showTypes(device);
   }
 
   /** The list emits the selected item, though its output is typed as a string. */
-  async onTypeSelected(item: unknown): Promise<void> {
+  async onTypeSelected(item: unknown, list: 'connector' | 'library'): Promise<void> {
+    // One selection across both lists.
+    const other = list === 'connector' ? this.libraryList() : this.connectorList();
+    if (other) {
+      other.selectedConfig = undefined;
+    }
     this.configurationType.set(typeof item === 'string' ? item : (item as SupportedConfigurationItem).name);
     this.configSnapshot.set(undefined);
     await this.updateSnapshots();
@@ -252,7 +272,7 @@ export class DeviceTabComponent implements OnInit {
     try {
       const { data } = await this.inventory.detail(this.device().id);
       this.device.set(data);
-      this.items.set(connectorTypes(data).map(name => ({ name })));
+      this.showTypes(data);
       if (this.configurationType()) {
         await this.updateSnapshots();
       }
@@ -263,6 +283,12 @@ export class DeviceTabComponent implements OnInit {
 
   add(): void {
     this.openDialog(false);
+  }
+
+  /** The connector file types and the point library types the gateway offers. */
+  private showTypes(device: IManagedObject): void {
+    this.items.set(connectorTypes(device).map(name => ({ name })));
+    this.libraryItems.set(libraryTypes(device).map(name => ({ name })));
   }
 
   register(): void {

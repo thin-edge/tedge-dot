@@ -8,7 +8,7 @@
  *
  * What only the gateway knows, such as which point libraries exist there, is out of reach.
  */
-import { parseToml, validateConfig, type Config, type FieldError } from '../generated/config-builder';
+import { parseToml, validateConfig, validateLibrary, type Config, type FieldError } from '../generated/config-builder';
 
 export interface TomlSyntaxError {
   /** 1-based. */
@@ -40,6 +40,33 @@ export function validateConnectorFile(text: string): ValidationResult {
   }
   const fields = validateConfig(config).map(f => ({ ...f, label: describePointer(config, f.path) }));
   return { fields, config };
+}
+
+/**
+ * Validates the text of a point library (contract §3.4) with the contract's point-library schema.
+ * A point id repeated within one library is an error too: there is no order to apply it in.
+ */
+export function validateLibraryFile(text: string): ValidationResult {
+  let config: Config;
+  try {
+    config = parseToml(text);
+  } catch (e) {
+    return { syntax: syntaxError(e), fields: [] };
+  }
+  const fields: FieldError[] = validateLibrary(config);
+  const seen = new Map<string, number>();
+  (Array.isArray(config['point']) ? config['point'] : []).forEach((point: Config, index: number) => {
+    const id = point?.['id'];
+    if (typeof id !== 'string') {
+      return;
+    }
+    if (seen.has(id)) {
+      fields.push({ path: `/point/${index}/id`, message: `repeats the point id "${id}" of point ${seen.get(id)! + 1}` });
+    } else {
+      seen.set(id, index);
+    }
+  });
+  return { fields: fields.map(f => ({ ...f, label: describePointer(config, f.path) })), config };
 }
 
 export function isValid(result: ValidationResult): boolean {

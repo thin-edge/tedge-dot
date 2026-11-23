@@ -2,16 +2,24 @@
  * Inventory queries the plugin sends. Plain strings in the platform's query language, built here
  * so they are tested without a tenant.
  */
-import { REGISTRATION_TYPE, TYPE_PREFIX } from './naming';
+import { LIBRARY_PREFIX, REGISTRATION_TYPE, TYPE_PREFIX } from './naming';
 
 /** A search term as a quoted query value: quotes and backslashes cannot end the string early. */
 export function queryValue(term: string): string {
   return term.replace(/[\\']/g, '');
 }
 
-/** Repository entries of connector files, by name. */
-export function connectorEntriesQuery(): string {
+/**
+ * Repository entries of connector files and point libraries, by name. The query language has no
+ * "does not start with", so callers tell the two kinds apart with `entriesOfKind`.
+ */
+export function managedEntriesQuery(): string {
   return `$filter=(type eq 'c8y_ConfigurationDump' and configurationType eq '${TYPE_PREFIX}*') $orderby=name`;
+}
+
+/** Repository entries of point libraries, by name. */
+export function libraryEntriesQuery(): string {
+  return `$filter=(type eq 'c8y_ConfigurationDump' and configurationType eq '${LIBRARY_PREFIX}*') $orderby=name`;
 }
 
 /** thin-edge.io gateways whose name contains `term`. */

@@ -11,9 +11,19 @@ import {
 } from '@c8y/client';
 import { RepositoryService } from '@c8y/ngx-components/repository/shared';
 
-import { REGISTRATION_TYPE, typeOf } from './naming';
-import { gatewaysQuery, groupsQuery } from './queries';
-import { type RegistrationSteps, registerConnectorFile } from './register-flow';
+import { parseToml } from '../generated/config-builder';
+import { LibraryCatalog, packagedLibraries, referencedLibraries, referencedLibraryFiles } from './libraries';
+import {
+  type EntryLike,
+  type ManagedFile,
+  REGISTRATION_TYPE,
+  entriesOfKind,
+  fileOfType,
+  libraryOf,
+  newestByType,
+} from './naming';
+import { gatewaysQuery, groupsQuery, libraryEntriesQuery, managedEntriesQuery } from './queries';
+import { type RegistrationSteps, registerFiles } from './register-flow';
 import { waitForOperation } from './wait';
 
 export { RegistrationCancelled } from './register-flow';
@@ -24,9 +34,15 @@ export type ConfirmRegistration = (block: string) => Promise<boolean>;
 /** Told what the plugin is doing, for a progress line. */
 export type Progress = (step: string) => void;
 
+/** A device in a group that lacks some of the types a send needs. */
+export interface MissingTypes {
+  device: IManagedObject;
+  types: string[];
+}
+
 /**
- * Talks to Cumulocity on behalf of the OT connectors page and device tab: registering a
- * connector file on a gateway, and sending repository entries to gateways and groups.
+ * Talks to Cumulocity on behalf of the OT connectors page and device tab: registering connector
+ * files and point libraries on a gateway, and sending repository entries to gateways and groups.
  *
  * Provided by the components that use it, next to RepositoryService, which the platform does not
  * provide at the root.
@@ -40,27 +56,27 @@ export class ConnectorOperationsService {
   private readonly bulk = inject(OperationBulkService);
   private readonly eventBinaries = inject(EventBinaryService);
 
-  /** Whether the gateway offers the connector file `name` as a configuration type. */
-  offers(device: IManagedObject, name: string): boolean {
+  /** Whether the gateway offers the configuration type `type`. */
+  offers(device: IManagedObject, type: string | undefined): boolean {
     const types: unknown = device['c8y_SupportedConfigurations'];
-    return Array.isArray(types) && types.includes(typeOf(name));
+    return !!type && Array.isArray(types) && types.includes(type);
   }
 
   /**
-   * Registers the connector file `name` in the gateway's tedge-configuration-plugin.toml and waits
-   * until the gateway offers its type (see register-flow.ts). Resolves with the updated device.
+   * Registers `files` in the gateway's tedge-configuration-plugin.toml, in one edit, and waits
+   * until the gateway offers their types (see register-flow.ts). Resolves with the updated device.
    */
   async register(
     device: IManagedObject,
-    name: string,
+    files: readonly ManagedFile[],
     confirm: ConfirmRegistration,
     progress: Progress
   ): Promise<IManagedObject> {
     let current = device;
     const steps: RegistrationSteps = {
-      offersType: async () => {
+      missingTypes: async types => {
         current = (await this.inventory.detail(device.id)).data;
-        return this.offers(current, name);
+        return types.filter(type => !this.offers(current, type));
       },
       latestSnapshotId: async () => {
         const event = await this.repository.getLatestConfigurationEvent(device.id, REGISTRATION_TYPE);
@@ -70,8 +86,75 @@ export class ConnectorOperationsService {
       latestSnapshot: () => this.latestListSnapshot(device),
       sendList: text => this.sendRegistrationList(device, text),
     };
-    await registerConnectorFile(steps, name, { confirm, progress });
+    await registerFiles(steps, files, { confirm, progress });
     return current;
+  }
+
+  /** The text of a repository entry's file. */
+  async entryText(entry: IManagedObject): Promise<string> {
+    return entry['url'] ? this.repository.getBinaryText(entry['url'], { allowExternal: false }) : '';
+  }
+
+  /** The repository's point libraries: the newest entry of each library type, by name. */
+  async libraryEntries(): Promise<IManagedObject[]> {
+    const { data } = await this.inventory.list({ query: libraryEntriesQuery(), pageSize: 2000 });
+    return [...newestByType(data as (IManagedObject & { configurationType?: string })[]).values()];
+  }
+
+  /**
+   * The libraries a connector file may reference: the repository's, with their text, and the
+   * packaged ones. A library whose text cannot be read still counts as existing.
+   */
+  async catalog(): Promise<LibraryCatalog> {
+    const entries = await this.libraryEntries();
+    const repository = await Promise.all(
+      entries.map(async entry => {
+        const { protocol, name } = libraryOf(entry['configurationType'])!;
+        let config;
+        try {
+          config = parseToml(await this.entryText(entry));
+        } catch {
+          config = undefined;
+        }
+        return { protocol, name, source: 'repository' as const, config };
+      })
+    );
+    return new LibraryCatalog([...packagedLibraries(), ...repository]);
+  }
+
+  /**
+   * The repository libraries a connector entry references, in the order its devices name them.
+   * A file that does not parse references none: the editor does not save such a file.
+   */
+  async librariesOf(entry: IManagedObject): Promise<IManagedObject[]> {
+    let config;
+    try {
+      config = parseToml(await this.entryText(entry));
+    } catch {
+      return [];
+    }
+    const entries = await this.libraryEntries();
+    const byType = new Map(entries.map(e => [e['configurationType'] as string, e]));
+    return referencedLibraryFiles(config, byType.keys()).map(file => byType.get(file.type)!);
+  }
+
+  /**
+   * The connector entries whose devices reference the library `name` of `protocol`. Reads every
+   * connector entry's file, so it is meant for a single action such as deleting a library.
+   */
+  async connectorsReferencing(protocol: string, name: string): Promise<IManagedObject[]> {
+    const { data } = await this.inventory.list({ query: managedEntriesQuery(), pageSize: 2000 });
+    const referencing = await Promise.all(
+      entriesOfKind(data as (IManagedObject & EntryLike)[], 'connector').map(async entry => {
+        try {
+          const config = parseToml(await this.entryText(entry));
+          return config['connector']?.protocol === protocol && referencedLibraries(config).includes(name) ? entry : undefined;
+        } catch {
+          return undefined;
+        }
+      })
+    );
+    return referencing.filter((e): e is IManagedObject & EntryLike => !!e);
   }
 
   /** Sends a repository entry to one gateway. */
@@ -85,14 +168,22 @@ export class ConnectorOperationsService {
     return data;
   }
 
+  /** Sends a repository entry to one gateway and waits until the gateway applied it. */
+  async sendToGatewayAndWait(device: IManagedObject, entry: IManagedObject): Promise<void> {
+    const created = await this.sendToGateway(device, entry);
+    const id = required(created.id, 'operation');
+    await waitForOperation(async () => (await this.operations.detail(id)).data, `sending ${entry['name']}`);
+  }
+
   /** Sends a repository entry to every device in a group, as one bulk operation. */
   async sendToGroup(groupId: string | number, entry: IManagedObject): Promise<IOperationBulk> {
+    const what = fileOfType(entry['configurationType'])?.kind === 'library' ? 'point library' : 'connector file';
     const bulk: IOperationBulk = {
       groupId,
       startDate: new Date().toISOString(),
       creationRamp: 1,
       operationPrototype: {
-        description: `Send connector file ${entry['name']} (${entry['configurationType']})`,
+        description: `Send ${what} ${entry['name']} (${entry['configurationType']})`,
         c8y_DownloadConfigFile: { type: entry['configurationType'], url: entry['url'] },
       },
     };
@@ -101,13 +192,16 @@ export class ConnectorOperationsService {
   }
 
   /**
-   * The devices directly in a group, and those of them that do not offer the connector file
-   * `name`. Subgroups are not searched.
+   * The devices directly in a group, and those of them that do not offer every one of `types`,
+   * with the types each lacks. Subgroups are not searched.
    */
-  async checkGroup(groupId: string | number, name: string): Promise<{ devices: number; missing: IManagedObject[] }> {
+  async checkGroup(groupId: string | number, types: readonly string[]): Promise<{ devices: number; missing: MissingTypes[] }> {
     const { data } = await this.inventory.childAssetsList(groupId, { pageSize: 2000 });
     const devices = data.filter(mo => mo['c8y_IsDevice'] !== undefined);
-    return { devices: devices.length, missing: devices.filter(mo => !this.offers(mo, name)) };
+    const missing = devices
+      .map(device => ({ device, types: types.filter(type => !this.offers(device, type)) }))
+      .filter(m => m.types.length > 0);
+    return { devices: devices.length, missing };
   }
 
   /** thin-edge.io gateways whose name contains `term`. */
@@ -130,7 +224,6 @@ export class ConnectorOperationsService {
     await waitForOperation(async () => (await this.operations.detail(requestId)).data, 'Getting the list of managed files');
   }
 
-  /** The newest snapshot of the gateway's list of managed files, with its text. */
   /**
    * The newest snapshot of the list of managed files: the latest event of that type and its
    * attached file. RepositoryService.getConfigSnapshot drops the event id, which tells a new

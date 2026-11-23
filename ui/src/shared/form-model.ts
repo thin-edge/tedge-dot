@@ -133,6 +133,38 @@ export function addPoint(config: Config, d: number): Config {
   return setAt(config, `/device/${d}/point/${points.length}`, { ...template, id });
 }
 
+/** A new point at the end of a point library, from its protocol's template, with a new id. */
+export function addLibraryPoint(library: Config): Config {
+  const template = structuredClone(protocolInfo(library.library?.protocol ?? '').newPoint);
+  const points = Array.isArray(library.point) ? library.point : [];
+  const id = uniqueId(String(template.id ?? 'point'), points.map(p => p.id));
+  return setAt(library, `/point/${points.length}`, { ...template, id });
+}
+
+export function removeLibraryPoint(library: Config, p: number): Config {
+  return { ...library, point: (Array.isArray(library.point) ? library.point : []).filter((_, i) => i !== p) };
+}
+
+/** A new point library of `protocol`: the [library] table and one point from the template. */
+export function newLibrary(protocol: string): Config {
+  return addLibraryPoint({ library: { protocol }, point: [] });
+}
+
+/**
+ * A point library on another protocol, by the rules of `switchProtocol`: points get the new
+ * protocol's address template and data type, and OPC UA's namespaces go with OPC UA.
+ */
+export function switchLibraryProtocol(library: Config, protocol: string): Config {
+  const old = library.library?.protocol ?? '';
+  const switched = switchProtocol({ connector: { protocol: old }, device: [{ point: library.point ?? [] }] }, protocol);
+  const { namespaces, ...table } = library.library ?? {};
+  return {
+    ...library,
+    library: { ...table, protocol, ...(protocol === 'opcua' && namespaces !== undefined ? { namespaces } : {}) },
+    point: switched.device[0].point,
+  };
+}
+
 export function removeDevice(config: Config, d: number): Config {
   return { ...config, device: devicesOf(config).filter((_, i) => i !== d) };
 }
@@ -199,7 +231,7 @@ export function isPushed(protocol: string, point: Config): boolean {
 /** A collapsed point at a glance: datatype, unit, how it is read, and the policies it sets itself. */
 export function pointSummary(config: Config, device: Config, point: Config): string {
   const parts: string[] = [point.datatype, point.unit].filter(Boolean).map(String);
-  const protocol = config.connector?.protocol ?? '';
+  const protocol = config.connector?.protocol ?? config.library?.protocol ?? '';
   const interval = point.poll_interval ?? device?.poll_interval;
   if (isPushed(protocol, point)) {
     parts.push(`subscribed${point.sampling_interval ? ` ${point.sampling_interval}` : ''}`);

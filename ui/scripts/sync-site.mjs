@@ -1,7 +1,8 @@
 // Brings the docs site's connector-file model into the UI, so the repository holds one copy of it:
 // the config builder's module (site/src/lib/config-builder.ts) with its protocol shapes
 // (site/src/data/protocols.json) and the contract schemas (doc/contract/schemas), the forms' option
-// lists (site/src/lib/form-options.ts) and the field help (site/src/lib/help.ts). The copies go to
+// lists (site/src/lib/form-options.ts), the field help (site/src/lib/help.ts) and the point libraries
+// the packages install (demo/points.d, as .goreleaser.yaml lists them). The copies go to
 // src/generated/, which is not committed. Run before every build and test (see package.json).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -37,6 +38,19 @@ for (const [from, to] of imports) {
   code = code.replace(from, to);
 }
 writeFileSync(join(out, 'config-builder.ts'), header(builder) + code);
+
+// The point libraries the tedge-dot packages install (.goreleaser.yaml lists them), so the plugin
+// knows them: references to them are valid, and the form shows their points.
+const goreleaser = readFileSync(join(repo, '.goreleaser.yaml'), 'utf8');
+const packaged = [];
+const pattern = /src:\s*(demo\/points\.d\/[^\s]+\.toml)\s*\n\s*dst:\s*\/usr\/share\/tedge-dot\/points\.d\/([a-z0-9-]+)\/([^/\s]+)\.toml/g;
+for (const [, source, protocol, name] of goreleaser.matchAll(pattern)) {
+  packaged.push({ protocol, name, text: readFileSync(join(repo, source), 'utf8') });
+}
+if (!packaged.length) {
+  throw new Error('.goreleaser.yaml lists no packaged point libraries; update scripts/sync-site.mjs');
+}
+writeFileSync(join(out, 'packaged-libraries.json'), JSON.stringify(packaged, null, 2) + '\n');
 
 // Modules without imports, copied as they are.
 for (const source of ['site/src/lib/form-options.ts', 'site/src/lib/help.ts']) {

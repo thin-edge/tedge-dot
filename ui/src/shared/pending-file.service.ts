@@ -1,7 +1,10 @@
 import { Injectable } from '@angular/core';
 
+import { type FileKind } from './naming';
+
 export interface PendingFile {
-  /** The connector file name, without `.toml`. */
+  kind: FileKind;
+  /** The file name, without `.toml`. */
   fileName: string;
   text: string;
 }

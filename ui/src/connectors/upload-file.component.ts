@@ -4,7 +4,7 @@ import { CoreModule, DropAreaComponent, type DroppedFile } from '@c8y/ngx-compon
 import { RepositoryService, RepositoryType, SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import { BsModalRef } from 'ngx-bootstrap/modal';
 
-import { typeOf } from '../shared/naming';
+import { type FileKind } from '../shared/naming';
 import { PendingFileService } from '../shared/pending-file.service';
 import { type UploadCheck, canOpenInEditor, checkUpload } from '../shared/upload';
 
@@ -16,8 +16,9 @@ interface Upload {
 type State = 'pick' | 'saving' | 'done';
 
 /**
- * Adds an existing connector file to the configuration repository. The file is checked like the
- * editor checks a file; a valid file is added as it is, another can be opened in the editor.
+ * Adds an existing connector file or point library to the configuration repository. The file is
+ * checked like the editor checks a file; a valid file is added as it is, another can be opened in
+ * the editor. What the file is follows from its content: a point library has a [library] table.
  */
 @Component({
   selector: 'tdot-upload-file',
@@ -25,7 +26,7 @@ type State = 'pick' | 'saving' | 'done';
   template: `
     <div class="modal-header dialog-header">
       <i c8yIcon="upload"></i>
-      <h4>{{ 'Upload connector file' | translate }}</h4>
+      <h4>{{ (kind === 'library' ? 'Upload point library' : 'Upload connector file') | translate }}</h4>
     </div>
     <div class="modal-body">
       @if (state() === 'pick') {
@@ -38,7 +39,11 @@ type State = 'pick' | 'saving' | 'done';
             [attr.aria-label]="'Drop a TOML file or click to browse' | translate"
             (dropped)="onDropped($event)"
           ></c8y-drop-area>
-          <c8y-messages [helpMessage]="'The file becomes a repository entry named after it: line-3.toml installs as /etc/tedge/plugins/ot/line-3.toml.' | translate"></c8y-messages>
+          <c8y-messages
+            [helpMessage]="(kind === 'library'
+              ? 'The file becomes a repository entry named after it: a modbus library acme-meter.toml installs as /etc/tedge/plugins/ot/points.d/modbus/acme-meter.toml.'
+              : 'The file becomes a repository entry named after it: line-3.toml installs as /etc/tedge/plugins/ot/line-3.toml.') | translate"
+          ></c8y-messages>
         </c8y-form-group>
         <c8y-form-group>
           <label for="tdot-upload-device-type">{{ 'Device type' | translate }}</label>
@@ -63,8 +68,11 @@ type State = 'pick' | 'saving' | 'done';
                 ></i>
                 <div class="flex-grow">
                   <strong>{{ u.check.source }}</strong>
-                  @if (u.check.status !== 'library' && u.check.status !== 'not-connector') {
-                    <span class="text-muted"> › {{ typeOf(u.check.fileName) }}</span>
+                  @if (u.check.file; as f) {
+                    <span class="text-muted"> › {{ f.path }}</span>
+                    @if (f.kind !== kind) {
+                      <span class="tag tag--info m-l-8">{{ (f.kind === 'library' ? 'point library' : 'connector file') | translate }}</span>
+                    }
                   }
                   @if (u.check.reason) {
                     <p class="text-muted small m-b-0">{{ u.check.reason }}</p>
@@ -114,6 +122,8 @@ export class UploadFileComponent {
   private readonly router = inject(Router);
   private readonly pending = inject(PendingFileService);
 
+  /** Set by the opener: what the dialog is for, which only changes its texts. */
+  kind: FileKind = 'connector';
   /** Set by the opener: called after the file was added. */
   onFinished?: () => void;
 
@@ -123,7 +133,6 @@ export class UploadFileComponent {
   readonly added = signal<string[]>([]);
   readonly failed = signal<string[]>([]);
   readonly ready = computed(() => this.uploads().filter(u => u.check.status === 'ready'));
-  readonly typeOf = typeOf;
 
   async onDropped(files: DroppedFile[]): Promise<void> {
     const uploads: Upload[] = [];
@@ -139,9 +148,10 @@ export class UploadFileComponent {
   }
 
   openInEditor(upload: Upload): void {
-    this.pending.hand({ fileName: upload.check.fileName, text: upload.text });
+    const kind = upload.check.kind;
+    this.pending.hand({ kind, fileName: upload.check.fileName, text: upload.text });
     this.modalRef.hide();
-    void this.router.navigate(['/ot-connectors', 'new']);
+    void this.router.navigate(['/ot-connectors', kind === 'library' ? 'new-library' : 'new']);
   }
 
   async addReady(): Promise<void> {
@@ -150,13 +160,16 @@ export class UploadFileComponent {
     const failed: string[] = [];
     const deviceType = this.deviceType().trim() || undefined;
     for (const { check, text } of this.ready()) {
+      if (!check.file) {
+        continue;
+      }
       try {
         await this.repository.create(
           {
             version: check.fileName,
             description: '',
             deviceType,
-            configurationType: typeOf(check.fileName),
+            configurationType: check.file.type,
             binary: { file: new File([text], `${check.fileName}.toml`, { type: 'text/plain' }) },
           },
           RepositoryType.CONFIGURATION

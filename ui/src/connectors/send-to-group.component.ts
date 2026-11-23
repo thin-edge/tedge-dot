@@ -4,15 +4,16 @@ import { CoreModule } from '@c8y/ngx-components';
 import { SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import { BsModalRef } from 'ngx-bootstrap/modal';
 
-import { ConnectorOperationsService } from '../shared/connector-operations.service';
-import { nameOf } from '../shared/naming';
+import { ConnectorOperationsService, type MissingTypes } from '../shared/connector-operations.service';
+import { type ManagedFile, fileOfType } from '../shared/naming';
 
 type State = 'pick' | 'checked' | 'running' | 'done' | 'error';
 
 /**
- * Sends a connector file to every device in a group, as one bulk operation. A group send never
- * registers files: gateways that do not offer the type are listed first, because their
- * operations would fail.
+ * Sends a connector file or point library to every device in a group, as one bulk operation. A
+ * group send never registers files: gateways that do not offer the type, or a repository library
+ * the connector file references, are listed first, because their operations would fail or the
+ * connector would miss points.
  */
 @Component({
   selector: 'tdot-send-to-group',
@@ -21,10 +22,13 @@ type State = 'pick' | 'checked' | 'running' | 'done' | 'error';
   template: `
     <div class="modal-header dialog-header">
       <i c8yIcon="c8y-group"></i>
-      <h4>{{ 'Send connector file to a group' | translate }}</h4>
+      <h4>{{ (isLibrary ? 'Send point library to a group' : 'Send connector file to a group') | translate }}</h4>
     </div>
     <div class="modal-body">
-      <p>{{ 'Connector file' | translate }}: <strong>{{ entry?.['name'] }}</strong> · {{ name }}.toml</p>
+      <p>
+        {{ (isLibrary ? 'Point library' : 'Connector file') | translate }}: <strong>{{ entry?.['name'] }}</strong> ·
+        {{ file?.path }}
+      </p>
       @switch (state()) {
         @case ('pick') {
           <c8y-form-group>
@@ -51,17 +55,26 @@ type State = 'pick' | 'checked' | 'running' | 'done' | 'error';
           } @else if (missing().length) {
             <p class="text-warning">
               <i c8yIcon="exclamation-triangle"></i>
-              {{ missing().length }} {{ 'of' | translate }} {{ deviceCount() }} {{ 'devices in this group do not offer this file, so their operations will fail. Add the file to each of them from its OT connectors tab first:' | translate }}
+              {{ missing().length }} {{ 'of' | translate }} {{ deviceCount() }}
+              {{ (libraries().length
+                ? 'devices in this group lack this file or a point library it references. Add the file to each of them from its OT connectors tab first; that adds its point libraries too:'
+                : 'devices in this group do not offer this file, so their operations will fail. Add the file to each of them from its OT connectors tab first:') | translate }}
             </p>
             <ul>
-              @for (d of missing(); track d.id) {
-                <li>{{ d['name'] }}</li>
+              @for (m of missing(); track m.device.id) {
+                <li>{{ m.device['name'] }} <span class="text-muted">· {{ lacks(m) }}</span></li>
               }
             </ul>
           } @else if (deviceCount() === 1) {
             <p>{{ 'The one device in this group offers this file.' | translate }}</p>
           } @else {
             <p>{{ 'All' | translate }} {{ deviceCount() }} {{ 'devices in this group offer this file.' | translate }}</p>
+          }
+          @if (deviceCount() > 0 && libraries().length) {
+            <p class="text-muted">
+              {{ 'A group send does not send the point libraries the file references. If you changed one, send it to the group first:' | translate }}
+              {{ libraryNames() }}
+            </p>
           }
         }
         @case ('running') {
@@ -108,13 +121,37 @@ export class SendToGroupComponent {
   readonly term = signal('');
   readonly groups = signal<IManagedObject[]>([]);
   readonly picked = signal<IManagedObject | undefined>(undefined);
-  readonly missing = signal<IManagedObject[]>([]);
+  readonly missing = signal<MissingTypes[]>([]);
+  readonly libraries = signal<IManagedObject[]>([]);
   readonly deviceCount = signal(0);
   readonly doneText = signal('');
   readonly errorText = signal('');
 
-  get name(): string {
-    return nameOf(this.entry?.['configurationType']) ?? '';
+  get file(): ManagedFile | undefined {
+    return fileOfType(this.entry?.['configurationType']);
+  }
+
+  get isLibrary(): boolean {
+    return this.file?.kind === 'library';
+  }
+
+  libraryNames(): string {
+    return this.libraries()
+      .map(l => l['name'])
+      .join(', ');
+  }
+
+  /** What a device lacks, for people. */
+  lacks(missing: MissingTypes): string {
+    return missing.types
+      .map(type => {
+        if (type === this.file?.type) {
+          return 'this file';
+        }
+        const library = this.libraries().find(l => l['configurationType'] === type);
+        return `point library ${library?.['name'] ?? fileOfType(type)?.name ?? type}`;
+      })
+      .join(', ');
   }
 
   constructor() {
@@ -130,8 +167,15 @@ export class SendToGroupComponent {
     if (!group) {
       return;
     }
+    const file = this.file;
+    if (!this.entry || !file) {
+      return;
+    }
     try {
-      const { devices, missing } = await this.ops.checkGroup(group.id, this.name);
+      const libraries = file.kind === 'connector' ? await this.ops.librariesOf(this.entry) : [];
+      this.libraries.set(libraries);
+      const types = [file.type, ...libraries.map(l => l['configurationType'] as string)];
+      const { devices, missing } = await this.ops.checkGroup(group.id, types);
       this.deviceCount.set(devices);
       this.missing.set(missing);
       this.state.set('checked');

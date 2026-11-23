@@ -1,3 +1,4 @@
+import { NgTemplateOutlet } from '@angular/common';
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { IManagedObject, InventoryService } from '@c8y/client';
 import { CoreModule } from '@c8y/ngx-components';
@@ -5,14 +6,23 @@ import { SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import { BsModalRef } from 'ngx-bootstrap/modal';
 
 import { ConnectorOperationsService, RegistrationCancelled } from '../shared/connector-operations.service';
-import { isValidName, nameOf, normalizeName, pathOf, typeOf } from '../shared/naming';
-import { connectorEntriesQuery } from '../shared/queries';
+import {
+  type ManagedFile,
+  connectorFile,
+  entriesOfKind,
+  fileOfType,
+  isValidConnectorName,
+  normalizeName,
+} from '../shared/naming';
+import { managedEntriesQuery } from '../shared/queries';
 
 type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
 
 /**
- * Adds a connector file to one gateway: registers it in thin-edge.io's list of managed files when
- * the gateway does not offer its type yet, then sends the repository entry.
+ * Adds a connector file or point library to one gateway: registers it in thin-edge.io's list of
+ * managed files when the gateway does not offer its type yet, then sends the repository entry. A
+ * connector file brings the repository libraries it references: those the gateway does not offer
+ * are registered in the same edit and sent first.
  *
  * Opened from the OT connectors page (with an entry, to pick a gateway), from the device tab
  * (with a gateway, to pick an entry), or from the device tab to register a file that is already
@@ -20,12 +30,12 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
  */
 @Component({
   selector: 'tdot-send-to-gateway',
-  imports: [CoreModule, SharedRepositoryModule],
+  imports: [CoreModule, SharedRepositoryModule, NgTemplateOutlet],
   providers: [ConnectorOperationsService],
   template: `
     <div class="modal-header dialog-header">
       <i c8yIcon="plug"></i>
-      <h4>{{ (registerOnly ? 'Register a file on the gateway' : 'Add connector file to a gateway') | translate }}</h4>
+      <h4>{{ title | translate }}</h4>
     </div>
     <div class="modal-body">
       @switch (state()) {
@@ -40,7 +50,7 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
               @for (g of gateways(); track g.id) {
                 <button type="button" class="list-group-item" [class.active]="picked()?.id === g.id" (click)="picked.set(g)">
                   {{ g['name'] }}
-                  @if (entryName && ops.offers(g, entryName)) {
+                  @if (ops.offers(g, entryType)) {
                     <span class="tag tag--info m-l-8">{{ 'has this file' | translate }}</span>
                   }
                 </button>
@@ -60,22 +70,33 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
           } @else if (!entry) {
             <label>{{ 'Connector file' | translate }}</label>
             <div class="list-group">
-              @for (e of entries(); track e.id) {
-                <button type="button" class="list-group-item" [class.active]="chosen()?.id === e.id" (click)="chosen.set(e)">
-                  <strong>{{ e['name'] }}</strong> · {{ fileOf(e) }}
-                  @if (device && ops.offers(device, nameOf(e['configurationType']) ?? '')) {
-                    <span class="tag tag--info m-l-8">{{ 'on this gateway' | translate }}</span>
-                  }
-                  @if (e['description']) {
-                    <div class="text-muted small">{{ e['description'] }}</div>
-                  }
-                </button>
+              @for (e of connectorEntries(); track e.id) {
+                <ng-container *ngTemplateOutlet="entryItem; context: { $implicit: e }"></ng-container>
               } @empty {
                 <p class="text-muted">{{ 'The repository has no connector files yet.' | translate }}</p>
               }
             </div>
+            @if (libraryEntries().length) {
+              <label>{{ 'Point library' | translate }}</label>
+              <div class="list-group">
+                @for (e of libraryEntries(); track e.id) {
+                  <ng-container *ngTemplateOutlet="entryItem; context: { $implicit: e }"></ng-container>
+                }
+              </div>
+            }
+            <ng-template #entryItem let-e>
+              <button type="button" class="list-group-item" [class.active]="chosen()?.id === e.id" (click)="chosen.set(e)">
+                <strong>{{ e['name'] }}</strong> · {{ fileLabel(e) }}
+                @if (device && ops.offers(device, e['configurationType'])) {
+                  <span class="tag tag--info m-l-8">{{ 'on this gateway' | translate }}</span>
+                }
+                @if (e['description']) {
+                  <div class="text-muted small">{{ e['description'] }}</div>
+                }
+              </button>
+            </ng-template>
           } @else {
-            <p>{{ 'Connector file' | translate }}: <strong>{{ entry['name'] }}</strong> · {{ fileOf(entry) }}</p>
+            <p>{{ kindLabel(entry) | translate }}: <strong>{{ entry['name'] }}</strong> · {{ fileLabel(entry) }}</p>
           }
         }
         @case ('running') {
@@ -83,9 +104,15 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
         }
         @case ('confirm') {
           <p>
-            {{ 'The gateway does not offer this file yet. This entry will be appended to its /etc/tedge/plugins/tedge-configuration-plugin.toml; nothing else in that file changes:' | translate }}
+            {{ 'The gateway does not offer every file yet. These entries will be appended to its /etc/tedge/plugins/tedge-configuration-plugin.toml; nothing else in that file changes:' | translate }}
           </p>
           <pre class="m-b-0">{{ block() }}</pre>
+          @if (librariesToSend().length) {
+            <p class="m-t-16 m-b-0">
+              {{ 'The connector file references point libraries the gateway does not have yet. They are sent first:' | translate }}
+              {{ librariesToSend().join(', ') }}
+            </p>
+          }
         }
         @case ('done') {
           <p class="text-success"><i c8yIcon="check-circle"></i> {{ doneText() }}</p>
@@ -130,11 +157,12 @@ export class SendToGatewayComponent implements OnInit {
   registerOnly = false;
   onFinished?: () => void;
 
-  readonly nameOf = nameOf;
   readonly state = signal<State>('pick');
   readonly term = signal('');
   readonly gateways = signal<IManagedObject[]>([]);
-  readonly entries = signal<IManagedObject[]>([]);
+  readonly connectorEntries = signal<IManagedObject[]>([]);
+  readonly libraryEntries = signal<IManagedObject[]>([]);
+  readonly librariesToSend = signal<string[]>([]);
   readonly picked = signal<IManagedObject | undefined>(undefined);
   readonly chosen = signal<IManagedObject | undefined>(undefined);
   readonly fileName = signal('');
@@ -144,12 +172,21 @@ export class SendToGatewayComponent implements OnInit {
   readonly errorText = signal('');
   private resolveConfirm?: (ok: boolean) => void;
 
-  get entryName(): string | undefined {
-    return nameOf((this.entry ?? this.chosen())?.['configurationType']);
+  get title(): string {
+    if (this.registerOnly) {
+      return 'Register a file on the gateway';
+    }
+    return this.entry && fileOfType(this.entry['configurationType'])?.kind === 'library'
+      ? 'Add point library to a gateway'
+      : 'Add connector file to a gateway';
+  }
+
+  get entryType(): string | undefined {
+    return (this.entry ?? this.chosen())?.['configurationType'];
   }
 
   get fileValid(): boolean {
-    return isValidName(normalizeName(this.fileName()));
+    return isValidConnectorName(normalizeName(this.fileName()));
   }
 
   get ready(): boolean {
@@ -165,14 +202,23 @@ export class SendToGatewayComponent implements OnInit {
       await this.search();
     }
     if (!this.entry && !this.registerOnly) {
-      const { data } = await this.inventory.list({ query: connectorEntriesQuery(), pageSize: 2000 });
-      this.entries.set(data);
+      const { data } = await this.inventory.list({ query: managedEntriesQuery(), pageSize: 2000 });
+      this.connectorEntries.set(entriesOfKind(data, 'connector'));
+      this.libraryEntries.set(entriesOfKind(data, 'library'));
     }
   }
 
-  fileOf(entry: IManagedObject): string {
-    const name = nameOf(entry['configurationType']);
-    return name ? `${name}.toml` : '';
+  /** Where the entry's file lands, relative to /etc/tedge/plugins/ot. */
+  fileLabel(entry: IManagedObject): string {
+    const file = fileOfType(entry['configurationType']);
+    if (!file) {
+      return '';
+    }
+    return file.kind === 'library' ? `points.d/${file.protocol}/${file.name}.toml` : `${file.name}.toml`;
+  }
+
+  kindLabel(entry: IManagedObject): string {
+    return fileOfType(entry['configurationType'])?.kind === 'library' ? 'Point library' : 'Connector file';
   }
 
   async search(term = this.term()): Promise<void> {
@@ -186,15 +232,26 @@ export class SendToGatewayComponent implements OnInit {
   async run(): Promise<void> {
     const gateway = this.device ?? this.picked();
     const entry = this.entry ?? this.chosen();
-    const name = this.registerOnly ? normalizeName(this.fileName()) : nameOf(entry?.['configurationType']);
-    if (!gateway || !name) {
+    const file: ManagedFile | undefined = this.registerOnly
+      ? connectorFile(normalizeName(this.fileName()))
+      : fileOfType(entry?.['configurationType']);
+    if (!gateway || !file) {
       return;
     }
     this.state.set('running');
+    this.librariesToSend.set([]);
     try {
+      let libraries: IManagedObject[] = [];
+      if (!this.registerOnly && entry && file.kind === 'connector') {
+        this.step.set('Looking up the point libraries the connector file references');
+        libraries = await this.ops.librariesOf(entry);
+      }
+      const toSend = libraries.filter(l => !this.ops.offers(gateway, l['configurationType']));
+      this.librariesToSend.set(toSend.map(l => l['name']));
+      const files = [file, ...libraries.map(l => fileOfType(l['configurationType'])!)];
       const updated = await this.ops.register(
         gateway,
-        name,
+        files,
         block =>
           new Promise<boolean>(resolve => {
             this.block.set(block);
@@ -207,11 +264,18 @@ export class SendToGatewayComponent implements OnInit {
         step => this.step.set(step)
       );
       if (this.registerOnly || !entry) {
-        this.doneText.set(`${gateway['name']} offers ${typeOf(name)} for ${pathOf(name)}.`);
+        this.doneText.set(`${gateway['name']} offers ${file.type} for ${file.path}.`);
       } else {
-        this.step.set('Sending the connector file');
+        for (const library of toSend) {
+          this.step.set(`Sending the point library ${library['name']}`);
+          await this.ops.sendToGatewayAndWait(updated, library);
+        }
+        this.step.set(file.kind === 'library' ? 'Sending the point library' : 'Sending the connector file');
         const operation = await this.ops.sendToGateway(updated, entry);
-        this.doneText.set(`Operation ${operation.id} sends ${entry['name']} to ${gateway['name']}. Its status is on the gateway's Control tab.`);
+        const after = toSend.length ? `, after the point ${toSend.length === 1 ? 'library' : 'libraries'} ${toSend.map(l => l['name']).join(', ')}` : '';
+        this.doneText.set(
+          `Operation ${operation.id} sends ${entry['name']} to ${gateway['name']}${after}. Its status is on the gateway's Control tab.`
+        );
       }
       this.state.set('done');
       this.onFinished?.();

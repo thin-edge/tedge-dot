@@ -1,4 +1,18 @@
-import { isConnectorType, isValidName, nameOf, normalizeName, pathOf, typeOf } from './naming';
+import {
+  entriesOfKind,
+  fileOfType,
+  isConnectorType,
+  isLibraryType,
+  isValidConnectorName,
+  isValidName,
+  libraryFile,
+  libraryOf,
+  nameOf,
+  newestByType,
+  normalizeName,
+  pathOf,
+  typeOf,
+} from './naming';
 
 describe('naming', () => {
   it('maps a file name to its type and path and back', () => {
@@ -29,5 +43,42 @@ describe('naming', () => {
     expect(normalizeName('  opcua-pump.toml ')).toBe('opcua-pump');
     expect(normalizeName('line-3.TOML')).toBe('line-3');
     expect(normalizeName('modbus')).toBe('modbus');
+  });
+
+  it('maps a point library to its type and path and back', () => {
+    expect(libraryFile('modbus', 'acme-meter')).toEqual({
+      kind: 'library',
+      name: 'acme-meter',
+      protocol: 'modbus',
+      type: 'tedge-dot-points.modbus.acme-meter',
+      path: '/etc/tedge/plugins/ot/points.d/modbus/acme-meter.toml',
+    });
+    expect(libraryOf('tedge-dot-points.modbus.acme-meter')).toEqual({ protocol: 'modbus', name: 'acme-meter' });
+    expect(libraryOf('tedge-dot-points.aveva-pi.site.v2')).toEqual({ protocol: 'aveva-pi', name: 'site.v2' });
+    expect(libraryOf('tedge-dot-points.modbus')).toBeUndefined();
+    expect(libraryOf('tedge-dot-points.Mod/bus.x')).toBeUndefined();
+  });
+
+  it('keeps connector files and libraries apart', () => {
+    expect(isLibraryType('tedge-dot-points.modbus.acme-meter')).toBe(true);
+    expect(isConnectorType('tedge-dot-points.modbus.acme-meter')).toBe(false);
+    expect(nameOf('tedge-dot-points.modbus.acme-meter')).toBeUndefined();
+    expect(isValidConnectorName('points.modbus')).toBe(false);
+    expect(isValidConnectorName('pointsfile')).toBe(true);
+    expect(fileOfType('tedge-dot-line-3')?.kind).toBe('connector');
+    expect(fileOfType('tedge-dot-points.snmp.ups')?.path).toBe('/etc/tedge/plugins/ot/points.d/snmp/ups.toml');
+    expect(fileOfType('tedge.toml')).toBeUndefined();
+  });
+
+  it('splits repository entries by kind and picks the newest of a type', () => {
+    const entries = [
+      { name: 'a', configurationType: 'tedge-dot-line-3', lastUpdated: '2026-01-01T00:00:00Z' },
+      { name: 'b', configurationType: 'tedge-dot-points.modbus.meter', lastUpdated: '2026-01-01T00:00:00Z' },
+      { name: 'c', configurationType: 'tedge-dot-points.modbus.meter', lastUpdated: '2026-02-01T00:00:00Z' },
+      { name: 'd', configurationType: 'tedge.toml' },
+    ];
+    expect(entriesOfKind(entries, 'connector').map(e => e.name)).toEqual(['a']);
+    expect(entriesOfKind(entries, 'library').map(e => e.name)).toEqual(['b', 'c']);
+    expect(newestByType(entries).get('tedge-dot-points.modbus.meter')?.name).toBe('c');
   });
 });

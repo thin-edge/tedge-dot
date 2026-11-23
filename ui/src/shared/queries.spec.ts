@@ -1,4 +1,4 @@
-import { connectorEntriesQuery, gatewaysQuery, groupsQuery, queryValue } from './queries';
+import { gatewaysQuery, groupsQuery, libraryEntriesQuery, managedEntriesQuery, queryValue } from './queries';
 
 describe('queries', () => {
   it('keeps a search term inside its quotes', () => {
@@ -6,9 +6,12 @@ describe('queries', () => {
     expect(queryValue('a\\')).toBe('a');
   });
 
-  it('lists connector entries by type prefix', () => {
-    expect(connectorEntriesQuery()).toBe(
+  it('lists repository entries by type prefix', () => {
+    expect(managedEntriesQuery()).toBe(
       "$filter=(type eq 'c8y_ConfigurationDump' and configurationType eq 'tedge-dot-*') $orderby=name"
+    );
+    expect(libraryEntriesQuery()).toBe(
+      "$filter=(type eq 'c8y_ConfigurationDump' and configurationType eq 'tedge-dot-points.*') $orderby=name"
     );
   });
 

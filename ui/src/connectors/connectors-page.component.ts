@@ -1,4 +1,5 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
 import { AlertService, CoreModule, ModalService, Status } from '@c8y/ngx-components';
@@ -7,29 +8,45 @@ import { RepositoryService, SharedRepositoryModule } from '@c8y/ngx-components/r
 import { BsModalService } from 'ngx-bootstrap/modal';
 
 import { ConnectorOperationsService } from '../shared/connector-operations.service';
-import { nameOf } from '../shared/naming';
-import { connectorEntriesQuery } from '../shared/queries';
+import { packagedLibraries } from '../shared/libraries';
+import { type FileKind, entriesOfKind, fileOfType } from '../shared/naming';
+import { managedEntriesQuery } from '../shared/queries';
 import { SendToGatewayComponent } from './send-to-gateway.component';
 import { SendToGroupComponent } from './send-to-group.component';
 import { UploadFileComponent } from './upload-file.component';
 
-/** Management > OT connectors: the configuration repository's connector files. */
+/**
+ * Management > OT connectors: the configuration repository's connector files and, in a second
+ * list, its point libraries.
+ */
 @Component({
   selector: 'tdot-connectors-page',
-  imports: [CoreModule, SharedRepositoryModule],
+  imports: [CoreModule, SharedRepositoryModule, NgTemplateOutlet],
   providers: [ConnectorOperationsService],
   template: `
     <c8y-title>{{ 'OT connectors' | translate }}</c8y-title>
     <c8y-action-bar-item [placement]="'right'">
-      <button class="btn btn-link" type="button" (click)="upload()">
+      <button class="btn btn-link" type="button" (click)="add('connector')">
+        <i c8yIcon="plus-circle"></i>
+        {{ 'Add connector file' | translate }}
+      </button>
+    </c8y-action-bar-item>
+    <c8y-action-bar-item [placement]="'right'">
+      <button class="btn btn-link" type="button" (click)="upload('connector')">
         <i c8yIcon="upload"></i>
         {{ 'Upload connector file' | translate }}
       </button>
     </c8y-action-bar-item>
     <c8y-action-bar-item [placement]="'right'">
-      <button class="btn btn-link" type="button" (click)="add()">
+      <button class="btn btn-link" type="button" (click)="add('library')">
         <i c8yIcon="plus-circle"></i>
-        {{ 'Add connector file' | translate }}
+        {{ 'Add point library' | translate }}
+      </button>
+    </c8y-action-bar-item>
+    <c8y-action-bar-item [placement]="'right'">
+      <button class="btn btn-link" type="button" (click)="upload('library')">
+        <i c8yIcon="upload"></i>
+        {{ 'Upload point library' | translate }}
       </button>
     </c8y-action-bar-item>
     <c8y-action-bar-item [placement]="'right'">
@@ -39,11 +56,11 @@ import { UploadFileComponent } from './upload-file.component';
       </button>
     </c8y-action-bar-item>
 
-    <div class="card content-fullpage">
+    <div class="card">
       <div class="card-header separator">
         <div class="card-title">{{ 'Connector files' | translate }}</div>
       </div>
-      @if (!loading() && entries().length === 0) {
+      @if (!loading() && connectors().length === 0) {
         <c8y-ui-empty-state
           [icon]="'gears'"
           [title]="'No connector files in the repository.' | translate"
@@ -64,7 +81,7 @@ import { UploadFileComponent } from './upload-file.component';
               </tr>
             </thead>
             <tbody>
-              @for (entry of entries(); track entry.id) {
+              @for (entry of connectors(); track entry.id) {
                 <tr>
                   <td><a class="interact" (click)="edit(entry)">{{ entry['name'] }}</a></td>
                   <td>{{ entry['description'] }}</td>
@@ -72,18 +89,7 @@ import { UploadFileComponent } from './upload-file.component';
                   <td>{{ entry['deviceType'] }}</td>
                   <td>{{ entry['lastUpdated'] | c8yDate }}</td>
                   <td class="text-right text-nowrap">
-                    <button class="btn btn-default btn-xs m-r-4" type="button" (click)="edit(entry)">
-                      {{ 'Edit' | translate }}
-                    </button>
-                    <button class="btn btn-default btn-xs m-r-4" type="button" (click)="sendToGateway(entry)">
-                      {{ 'Send to a gateway' | translate }}
-                    </button>
-                    <button class="btn btn-default btn-xs m-r-4" type="button" (click)="sendToGroup(entry)">
-                      {{ 'Send to a group' | translate }}
-                    </button>
-                    <button class="btn btn-danger btn-xs" type="button" (click)="remove(entry)">
-                      {{ 'Delete' | translate }}
-                    </button>
+                    <ng-container *ngTemplateOutlet="actions; context: { $implicit: entry }"></ng-container>
                   </td>
                 </tr>
               }
@@ -92,18 +98,86 @@ import { UploadFileComponent } from './upload-file.component';
         </div>
       }
     </div>
+
+    <div class="card">
+      <div class="card-header separator">
+        <div class="card-title">{{ 'Point libraries' | translate }}</div>
+      </div>
+      @if (!loading() && libraries().length === 0) {
+        <c8y-ui-empty-state
+          [icon]="'list'"
+          [title]="'No point libraries in the repository.' | translate"
+          [subtitle]="packagedText"
+          [horizontal]="true"
+        ></c8y-ui-empty-state>
+      } @else {
+        <div class="table-responsive">
+          <table class="table large-padding">
+            <thead>
+              <tr>
+                <th>{{ 'Name' | translate }}</th>
+                <th>{{ 'Description' | translate }}</th>
+                <th>{{ 'Protocol' | translate }}</th>
+                <th>{{ 'Library' | translate }}</th>
+                <th>{{ 'Last updated' | translate }}</th>
+                <th class="text-right">{{ 'Actions' | translate }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (entry of libraries(); track entry.id) {
+                <tr>
+                  <td><a class="interact" (click)="edit(entry)">{{ entry['name'] }}</a></td>
+                  <td>{{ entry['description'] }}</td>
+                  <td>{{ fileOfType(entry['configurationType'])?.protocol }}</td>
+                  <td>{{ fileOfType(entry['configurationType'])?.name }}</td>
+                  <td>{{ entry['lastUpdated'] | c8yDate }}</td>
+                  <td class="text-right text-nowrap">
+                    <ng-container *ngTemplateOutlet="actions; context: { $implicit: entry }"></ng-container>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <p class="text-muted small p-l-16 p-r-16">{{ packagedText }}</p>
+      }
+    </div>
+
+    <ng-template #actions let-entry>
+      <button class="btn btn-default btn-xs m-r-4" type="button" (click)="edit(entry)">
+        {{ 'Edit' | translate }}
+      </button>
+      <button class="btn btn-default btn-xs m-r-4" type="button" (click)="sendToGateway(entry)">
+        {{ 'Send to a gateway' | translate }}
+      </button>
+      <button class="btn btn-default btn-xs m-r-4" type="button" (click)="sendToGroup(entry)">
+        {{ 'Send to a group' | translate }}
+      </button>
+      <button class="btn btn-danger btn-xs" type="button" (click)="remove(entry)">
+        {{ 'Delete' | translate }}
+      </button>
+    </ng-template>
   `,
 })
 export class ConnectorsPageComponent implements OnInit {
   private readonly inventory = inject(InventoryService);
   private readonly repository = inject(RepositoryService);
+  private readonly ops = inject(ConnectorOperationsService);
   private readonly router = inject(Router);
   private readonly modal = inject(ModalService);
   private readonly bsModal = inject(BsModalService);
   private readonly alert = inject(AlertService);
 
   readonly entries = signal<IManagedObject[]>([]);
+  readonly connectors = computed(() => entriesOfKind(this.entries(), 'connector'));
+  readonly libraries = computed(() => entriesOfKind(this.entries(), 'library'));
   readonly loading = signal(true);
+  readonly fileOfType = fileOfType;
+
+  /** The packaged libraries, which connector files can reference without a repository entry. */
+  readonly packagedText = `Every gateway also has the libraries the tedge-dot packages install: ${packagedLibraries()
+    .map(l => `${l.protocol}/${l.name}`)
+    .join(', ')}.`;
 
   ngOnInit(): void {
     void this.load();
@@ -112,7 +186,7 @@ export class ConnectorsPageComponent implements OnInit {
   async load(): Promise<void> {
     this.loading.set(true);
     try {
-      const { data } = await this.inventory.list({ query: connectorEntriesQuery(), pageSize: 2000 });
+      const { data } = await this.inventory.list({ query: managedEntriesQuery(), pageSize: 2000 });
       this.entries.set(data);
     } catch (e) {
       this.alert.addServerFailure(e);
@@ -122,28 +196,28 @@ export class ConnectorsPageComponent implements OnInit {
   }
 
   fileOf(entry: IManagedObject): string {
-    const name = nameOf(entry['configurationType']);
-    return name ? `${name}.toml` : '';
+    const file = fileOfType(entry['configurationType']);
+    return file ? `${file.name}.toml` : '';
   }
 
-  add(): void {
-    void this.router.navigate(['/ot-connectors', 'new']);
+  add(kind: FileKind): void {
+    void this.router.navigate(['/ot-connectors', kind === 'library' ? 'new-library' : 'new']);
   }
 
   edit(entry: IManagedObject): void {
     void this.router.navigate(['/ot-connectors', entry.id]);
   }
 
-  sendToGateway(entry: IManagedObject): void {
-    this.bsModal.show(SendToGatewayComponent, { initialState: { entry }, class: 'modal-lg', ignoreBackdropClick: true });
-  }
-
-  upload(): void {
+  upload(kind: FileKind): void {
     this.bsModal.show(UploadFileComponent, {
-      initialState: { onFinished: () => void this.load() },
+      initialState: { kind, onFinished: () => void this.load() },
       class: 'modal-lg',
       ignoreBackdropClick: true,
     });
+  }
+
+  sendToGateway(entry: IManagedObject): void {
+    this.bsModal.show(SendToGatewayComponent, { initialState: { entry }, class: 'modal-lg', ignoreBackdropClick: true });
   }
 
   sendToGroup(entry: IManagedObject): void {
@@ -151,23 +225,50 @@ export class ConnectorsPageComponent implements OnInit {
   }
 
   async remove(entry: IManagedObject): Promise<void> {
+    const file = fileOfType(entry['configurationType']);
+    const isLibrary = file?.kind === 'library';
+    let message = `${entry['name']}: the repository entry and its file are deleted. Gateways keep their copy.`;
+    if (isLibrary && file?.protocol) {
+      try {
+        const referencing = await this.referencingAfterDelete(entry, file.protocol, file.name);
+        if (referencing.length) {
+          message +=
+            ` These connector entries reference the library: ${referencing.map(e => e['name']).join(', ')}.` +
+            ' They cannot be saved again until the reference is removed.';
+        }
+      } catch (e) {
+        this.alert.addServerFailure(e);
+        return;
+      }
+    }
     const confirmed = await this.modal
-      .confirm(
-        gettext('Delete connector file'),
-        `${entry['name']}: the repository entry and its file are deleted. Gateways keep their copy.`,
-        Status.DANGER,
-        { ok: gettext('Delete'), cancel: gettext('Cancel') }
-      )
+      .confirm(isLibrary ? gettext('Delete point library') : gettext('Delete connector file'), message, Status.DANGER, {
+        ok: gettext('Delete'),
+        cancel: gettext('Cancel'),
+      })
       .catch(() => false);
     if (!confirmed) {
       return;
     }
     try {
       await this.repository.delete(entry);
-      this.alert.success(gettext('Connector file deleted.'));
+      this.alert.success(isLibrary ? gettext('Point library deleted.') : gettext('Connector file deleted.'));
       await this.load();
     } catch (e) {
       this.alert.addServerFailure(e);
     }
+  }
+
+  /**
+   * The connector entries that would reference a library no longer known once `entry` is gone:
+   * none while another entry of the same type or a packaged library of that name remains.
+   */
+  private async referencingAfterDelete(entry: IManagedObject, protocol: string, name: string): Promise<IManagedObject[]> {
+    const others = this.libraries().filter(e => e.id !== entry.id && e['configurationType'] === entry['configurationType']);
+    const packaged = packagedLibraries().some(l => l.protocol === protocol && l.name === name);
+    if (others.length || packaged) {
+      return [];
+    }
+    return this.ops.connectorsReferencing(protocol, name);
   }
 }

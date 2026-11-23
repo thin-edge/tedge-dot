@@ -7,6 +7,8 @@ import { TooltipDirective } from 'ngx-bootstrap/tooltip';
 import { PROTOCOL_IDS, SCHEMA, coerce, getAt, protocolInfo, setAt, type Config } from '../generated/config-builder';
 import { AGGREGATES, OUTPUTS, POLICIES, REPORT_FIELDS } from '../generated/form-options';
 import { HELP, helpForPath } from '../generated/help';
+import LIBRARY_SCHEMA from '../generated/point-library.schema.json';
+import { type LibraryCatalog, type ResolvedDevice, resolveDevice } from '../shared/libraries';
 import {
   addDevice,
   addPoint,
@@ -30,6 +32,7 @@ import { type FieldProblem } from '../shared/validation';
 const POINT = SCHEMA.$defs.point.properties;
 const DEVICE = SCHEMA.$defs.device.properties;
 const CONNECTOR = SCHEMA.properties.connector.properties;
+const LIBRARY = LIBRARY_SCHEMA.properties.library.properties as Record<string, { description?: string }>;
 const DEPRECATED_OUTPUT: Record<string, string> = { samples: 'single', measurements: 'group' };
 /** The grid columns of one field. */
 const FIELD_COLUMNS = 'col-xs-12 col-sm-6 col-md-3';
@@ -54,7 +57,8 @@ export class FormState {
   private source: FormSource = { config: () => ({}), problems: () => [], apply: () => undefined };
   readonly config = computed<Config>(() => this.source.config());
   readonly errors = computed<ReadonlyMap<string, string>>(() => new Map(this.source.problems().map(p => [p.path, p.message])));
-  readonly protocol = computed<string>(() => this.config()['connector']?.protocol ?? '');
+  /** The protocol of a connector file, or of a point library. */
+  readonly protocol = computed<string>(() => this.config()['connector']?.protocol ?? this.config()['library']?.protocol ?? '');
   /** Sections the user opened or closed; the others follow their default. */
   private readonly toggled = signal<ReadonlyMap<string, boolean>>(new Map());
 
@@ -75,7 +79,8 @@ export class FormState {
   }
 
   help(path: string): string | undefined {
-    return helpForPath(path, this.protocol());
+    const library = /^\/library\/([a-z_]+)$/.exec(path);
+    return library ? LIBRARY[library[1]]?.description : helpForPath(path, this.protocol());
   }
 
   isOpen(key: string, byDefault: boolean): boolean {
@@ -466,6 +471,221 @@ export class FormGroupingComponent {
 }
 
 /**
+ * One point, collapsed to its summary: the point fields of a device in a connector file and of a
+ * point library are the same (contract §3.4).
+ */
+@Component({
+  selector: 'tdot-point',
+  imports: [
+    CoreModule,
+    CollapseDirective,
+    TooltipDirective,
+    FormFieldComponent,
+    FormShapeComponent,
+    FormReportComponent,
+    FormGroupingComponent,
+  ],
+  template: `
+    <div class="border-left p-l-16 m-b-8">
+      <div class="d-flex a-i-center">
+        <button
+          type="button"
+          class="btn-clean text-left flex-grow p-t-4 p-b-4"
+          [attr.aria-expanded]="open()"
+          [attr.aria-controls]="regionId()"
+          (click)="state.toggle(base(), byDefault())"
+        >
+          <i class="m-r-4" [c8yIcon]="open() ? 'chevron-up' : 'chevron-down'"></i>
+          <strong>{{ point()['id'] || ('Point' | translate) + ' ' + (index() + 1) }}</strong>
+          <span class="text-muted m-l-8">{{ summary() }}</span>
+          @if (overrides(); as library) {
+            <span class="tag tag--info m-l-8">{{ 'overrides' | translate }} {{ library }}</span>
+          }
+        </button>
+        <button
+          type="button"
+          class="btn btn-dot btn-dot--danger"
+          [attr.aria-label]="('Remove point' | translate) + ' ' + (point()['id'] || index() + 1)"
+          [tooltip]="'Remove point' | translate"
+          [delay]="500"
+          (click)="remove.emit()"
+        >
+          <i c8yIcon="minus-circle"></i>
+        </button>
+      </div>
+      <div class="collapse" role="region" [id]="regionId()" [collapse]="!open()" [isAnimated]="true">
+        <div class="row d-flex flex-wrap">
+          <tdot-field [path]="base() + '/id'" />
+          <tdot-field [path]="base() + '/datatype'" kind="choice" [options]="datatypes" />
+          <tdot-field [path]="base() + '/access'" kind="choice" [options]="accesses" />
+          <tdot-field [path]="base() + '/unit'" />
+          <tdot-field [path]="base() + '/poll_interval'" hint="Empty: the device setting" />
+          @if (state.protocol() === 'opcua') {
+            <tdot-field [path]="base() + '/sampling_interval'" hint="Empty: the device setting" />
+            <tdot-field [path]="base() + '/subscribe'" kind="toggle" [fallback]="true" />
+          }
+        </div>
+        <tdot-shape [base]="base() + '/address'" [schema]="info().address" legend="Address" />
+        <tdot-report [base]="base() + '/report'" level="point" />
+        @if (grouped()) {
+          <tdot-grouping [owner]="base()" level="point" />
+        }
+        @if (extra().length) {
+          <p class="text-muted small">{{ 'Also set, kept as is:' | translate }} @for (k of extra(); track k) {<code>{{ k }}</code> }</p>
+        }
+      </div>
+    </div>
+  `,
+})
+export class FormPointComponent {
+  readonly state = inject(FormState);
+  /** The point's path, such as /device/0/point/2 or, in a library, /point/2. */
+  readonly base = input.required<string>();
+  readonly index = input(0);
+  readonly summary = input('');
+  /** Whether the point's grouping settings are shown. */
+  readonly grouped = input(false);
+  /** The library whose point this one overrides, if it does. */
+  readonly overrides = input<string>();
+  readonly remove = output<void>();
+
+  readonly datatypes = POINT.datatype.enum as string[];
+  readonly accesses = POINT.access.enum as string[];
+  readonly point = computed<Config>(() => this.state.value(this.base()) ?? {});
+  readonly info = computed(() => protocolInfo(this.state.protocol()));
+  /** A point opens by itself when it has an error. */
+  readonly byDefault = computed(() => this.state.hasErrorUnder(`${this.base()}/`));
+  readonly open = computed(() => this.state.isOpen(this.base(), this.byDefault()));
+  readonly regionId = computed(() => `tdot-point${this.base().replace(/[^a-z0-9]+/gi, '-')}`);
+  readonly extra = computed(() => extraKeys(this.point(), KNOWN.point));
+}
+
+/**
+ * A device's point libraries (`points_from`): an ordered list of names, added from the libraries
+ * that exist for the file's protocol, so a reference cannot name one that does not.
+ */
+@Component({
+  selector: 'tdot-libraries',
+  imports: [CoreModule, TooltipDirective, FormHelpComponent],
+  host: { class: 'col-xs-12 col-md-6' },
+  template: `
+    <c8y-form-group class="form-group-sm" [hasError]="!!error()">
+      <label [for]="selectId()" title="points_from">
+        {{ 'Point libraries' | translate }}
+        <tdot-help [text]="state.help(path())" [label]="'Point libraries' | translate" title="points_from" />
+      </label>
+      @if (refs().length) {
+        <ul class="list-group m-b-8">
+          @for (ref of refs(); track $index; let i = $index; let first = $first; let last = $last) {
+            <li class="list-group-item d-flex a-i-center p-t-4 p-b-4">
+              <span class="flex-grow">
+                <span class="text-muted m-r-4">{{ i + 1 }}.</span>
+                <strong>{{ ref }}</strong>
+                @if (sourceOf(ref); as source) {
+                  <span class="text-muted small m-l-8">{{ source | translate }}</span>
+                } @else {
+                  <span class="text-danger small m-l-8">{{ 'not found' | translate }}</span>
+                }
+              </span>
+              <button
+                type="button"
+                class="btn btn-clean btn-sm"
+                [disabled]="first"
+                [attr.aria-label]="('Move up' | translate) + ' ' + ref"
+                [tooltip]="'Move up' | translate"
+                [delay]="500"
+                (click)="move(i, -1)"
+              >
+                <i c8yIcon="chevron-up"></i>
+              </button>
+              <button
+                type="button"
+                class="btn btn-clean btn-sm"
+                [disabled]="last"
+                [attr.aria-label]="('Move down' | translate) + ' ' + ref"
+                [tooltip]="'Move down' | translate"
+                [delay]="500"
+                (click)="move(i, 1)"
+              >
+                <i c8yIcon="chevron-down"></i>
+              </button>
+              <button
+                type="button"
+                class="btn btn-dot btn-dot--danger"
+                [attr.aria-label]="('Remove point library' | translate) + ' ' + ref"
+                [tooltip]="'Remove point library' | translate"
+                [delay]="500"
+                (click)="removeAt(i)"
+              >
+                <i c8yIcon="minus-circle"></i>
+              </button>
+            </li>
+          }
+        </ul>
+      }
+      <div class="c8y-select-wrapper">
+        <select class="form-control" [id]="selectId()" [disabled]="!available().length" (change)="pick($event)">
+          <option value="" selected>
+            {{ (available().length ? 'Add a point library' : refs().length ? 'No other library for this protocol' : 'No library for this protocol') | translate }}
+          </option>
+          @for (name of available(); track name) {
+            <option [value]="name">{{ name }}</option>
+          }
+        </select>
+      </div>
+      <c8y-messages [helpMessage]="'Applied in this order, then the points of the device itself. A point with an ID that exists patches it.' | translate">
+        @if (error(); as e) {
+          <c8y-message>{{ e }}</c8y-message>
+        }
+      </c8y-messages>
+    </c8y-form-group>
+  `,
+})
+export class FormLibrariesComponent {
+  readonly state = inject(FormState);
+  /** The device's path, such as /device/0. */
+  readonly device = input.required<string>();
+  readonly catalog = input<LibraryCatalog>();
+
+  readonly path = computed(() => `${this.device()}/points_from`);
+  readonly selectId = computed(() => `tdot${this.path().replace(/[^a-z0-9]+/gi, '-')}`);
+  readonly refs = computed<string[]>(() => {
+    const value = this.state.value(this.path());
+    return Array.isArray(value) ? value.map(String) : [];
+  });
+  readonly error = computed(() => this.state.error(this.path()));
+  readonly available = computed(() => (this.catalog()?.names(this.state.protocol()) ?? []).filter(n => !this.refs().includes(n)));
+
+  sourceOf(ref: string): string | undefined {
+    const known = this.catalog()?.get(this.state.protocol(), ref);
+    return known ? (known.source === 'packaged' ? 'installed with tedge-dot' : 'repository') : undefined;
+  }
+
+  pick(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    const name = select.value;
+    select.value = '';
+    if (name) {
+      this.write([...this.refs(), name]);
+    }
+  }
+
+  move(i: number, by: -1 | 1): void {
+    const refs = [...this.refs()];
+    [refs[i], refs[i + by]] = [refs[i + by], refs[i]];
+    this.write(refs);
+  }
+
+  removeAt(i: number): void {
+    this.write(this.refs().filter((_, j) => j !== i));
+  }
+
+  private write(refs: string[]): void {
+    this.state.set(this.path(), refs.length ? refs : undefined);
+  }
+}
+
+/**
  * The form view of a connector file. It shows `config` and emits each edit as a whole new
  * configuration; the editor writes that into the file's text.
  */
@@ -473,7 +693,6 @@ export class FormGroupingComponent {
   selector: 'tdot-connector-form',
   imports: [
     CoreModule,
-    CollapseDirective,
     TooltipDirective,
     FormFieldComponent,
     FormHelpComponent,
@@ -482,6 +701,8 @@ export class FormGroupingComponent {
     FormReportComponent,
     FormMeasurementComponent,
     FormGroupingComponent,
+    FormPointComponent,
+    FormLibrariesComponent,
   ],
   providers: [FormState],
   template: `
@@ -574,78 +795,71 @@ export class FormGroupingComponent {
         <div class="row d-flex flex-wrap">
           <tdot-field [path]="'/device/' + d + '/name'" />
           <tdot-field [path]="'/device/' + d + '/poll_interval'" hint="Empty: the connector setting" />
+          <tdot-libraries [device]="'/device/' + d" [catalog]="catalog()" />
         </div>
         <tdot-section
           [key]="'/device/' + d + '/settings'"
           title="Device settings"
-          detail="type, default mode, requests in flight, point libraries, protocol address"
+          detail="type, default mode, requests in flight, protocol address"
           [defaultOpen]="hasDeviceError(d)"
         >
           <div class="row d-flex flex-wrap">
-            <tdot-field [path]="'/device/' + d + '/type'" />
+            <tdot-field [path]="'/device/' + d + '/type'" [hint]="typeHint(d)" />
             <tdot-field [path]="'/device/' + d + '/default_mode'" kind="choice" [options]="defaultModes" />
             <tdot-field [path]="'/device/' + d + '/max_inflight'" kind="integer" hint="Empty: the connector setting" />
-            <tdot-field
-              [path]="'/device/' + d + '/points_from'"
-              label="Point libraries"
-              kind="list"
-              example="demo-sim"
-              hint="Comma-separated"
-            />
           </div>
           <tdot-shape [base]="'/device/' + d + '/protocol_address'" [schema]="info().protocol_address" legend="Protocol address" />
         </tdot-section>
 
         <div class="legend form-block">{{ 'Points' | translate }}</div>
-        @for (point of points(device); track $index; let p = $index) {
-          <div class="border-left p-l-16 m-b-8">
-            <div class="d-flex a-i-center">
-              <button
-                type="button"
-                class="btn-clean text-left flex-grow p-t-4 p-b-4"
-                [attr.aria-expanded]="pointOpen(d, p)"
-                [attr.aria-controls]="'tdot-point-' + d + '-' + p"
-                (click)="state.toggle(pointKey(d, p), pointDefault(d, p))"
-              >
-                <i class="m-r-4" [c8yIcon]="pointOpen(d, p) ? 'chevron-up' : 'chevron-down'"></i>
-                <strong>{{ point['id'] || ('Point' | translate) + ' ' + (p + 1) }}</strong>
-                <span class="text-muted m-l-8">{{ summary(device, point) }}</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-dot btn-dot--danger"
-                [attr.aria-label]="('Remove point' | translate) + ' ' + (point['id'] || p + 1)"
-                [tooltip]="'Remove point' | translate"
-                [delay]="500"
-                (click)="state.edit(removePointAt(d, p))"
-              >
-                <i c8yIcon="minus-circle"></i>
-              </button>
-            </div>
-            <div class="collapse" role="region" [id]="'tdot-point-' + d + '-' + p" [collapse]="!pointOpen(d, p)" [isAnimated]="true">
-              <div class="row d-flex flex-wrap">
-                <tdot-field [path]="pointPath(d, p, 'id')" />
-                <tdot-field [path]="pointPath(d, p, 'datatype')" kind="choice" [options]="datatypes" />
-                <tdot-field [path]="pointPath(d, p, 'access')" kind="choice" [options]="accesses" />
-                <tdot-field [path]="pointPath(d, p, 'unit')" />
-                <tdot-field [path]="pointPath(d, p, 'poll_interval')" hint="Empty: the device setting" />
-                @if (protocol() === 'opcua') {
-                  <tdot-field [path]="pointPath(d, p, 'sampling_interval')" hint="Empty: the device setting" />
-                  <tdot-field [path]="pointPath(d, p, 'subscribe')" kind="toggle" [fallback]="true" />
-                }
+        @if (resolved()[d]; as r) {
+          @if (r.inherited.length) {
+            <tdot-section [key]="'/device/' + d + '/inherited'" title="From point libraries" [detail]="inheritedDetail(r)">
+              <div class="table-responsive">
+                <table class="table table-condensed m-b-8">
+                  <thead>
+                    <tr>
+                      <th>{{ 'ID' | translate }}</th>
+                      <th>{{ 'Data type' | translate }}</th>
+                      <th>{{ 'Unit' | translate }}</th>
+                      <th>{{ 'Address' | translate }}</th>
+                      <th>{{ 'Library' | translate }}</th>
+                      <th class="text-right"><span class="sr-only">{{ 'Actions' | translate }}</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (ip of r.inherited; track $index) {
+                      <tr>
+                        <td>{{ ip.point['id'] }}</td>
+                        <td>{{ ip.point['datatype'] }}</td>
+                        <td>{{ ip.point['unit'] }}</td>
+                        <td class="text-code small">{{ show(ip.point['address']) }}</td>
+                        <td>{{ ip.library }}</td>
+                        <td class="text-right">
+                          <button type="button" class="btn btn-link btn-xs" (click)="state.edit(overridePoint(d, ip.point['id']))">
+                            {{ 'Override' | translate }}
+                          </button>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
               </div>
-              <tdot-shape [base]="pointPath(d, p, 'address')" [schema]="info().address" legend="Address" />
-              <tdot-report [base]="pointPath(d, p, 'report')" level="point" />
-              @if (grouped()) {
-                <tdot-grouping [owner]="'/device/' + d + '/point/' + p" level="point" />
-              }
-              @if (extra('/device/' + d + '/point/' + p, known.point).length) {
-                <p class="text-muted small">
-                  {{ 'Also set, kept as is:' | translate }} @for (k of extra('/device/' + d + '/point/' + p, known.point); track k) {<code>{{ k }}</code> }
-                </p>
-              }
-            </div>
-          </div>
+              <p class="text-muted small">
+                {{ 'Read-only here: edit the library to change them for every device. Override adds a point with the same ID to this device, which patches the point of the library.' | translate }}
+              </p>
+            </tdot-section>
+          }
+        }
+        @for (point of points(device); track $index; let p = $index) {
+          <tdot-point
+            [base]="pointKey(d, p)"
+            [index]="p"
+            [summary]="summary(device, point)"
+            [grouped]="grouped()"
+            [overrides]="resolved()[d]?.overrides?.get(p)"
+            (remove)="state.edit(removePointAt(d, p))"
+          />
         }
         @if (extra('/device/' + d, known.device).length) {
           <p class="text-muted small">{{ 'Also set, kept as is:' | translate }} @for (k of extra('/device/' + d, known.device); track k) {<code>{{ k }}</code> }</p>
@@ -667,13 +881,13 @@ export class ConnectorFormComponent {
   readonly state = inject(FormState);
   readonly config = input.required<Config>();
   readonly problems = input<readonly FieldProblem[]>([], { alias: 'errors' });
+  /** The point libraries devices may reference; without it, the form shows no inherited points. */
+  readonly catalog = input<LibraryCatalog>();
   readonly configChange = output<Config>();
 
   readonly protocols = PROTOCOL_IDS;
   readonly protocolHelp = HELP['connector.protocol'];
   readonly logLevels = CONNECTOR.log_level.enum as string[];
-  readonly datatypes = POINT.datatype.enum as string[];
-  readonly accesses = POINT.access.enum as string[];
   readonly defaultModes = DEVICE.default_mode.enum as string[];
   readonly known = KNOWN;
   readonly columns = FIELD_COLUMNS;
@@ -689,7 +903,14 @@ export class ConnectorFormComponent {
     () => Object.keys(this.info()?.connection?.properties ?? {}).length > 0 || this.config()['connection'] !== undefined
   );
 
+  /** What each device inherits from its point libraries. */
+  readonly resolved = computed<(ResolvedDevice | undefined)[]>(() => {
+    const catalog = this.catalog();
+    return this.devices().map(device => (catalog ? resolveDevice(device, this.protocol(), catalog) : undefined));
+  });
+
   readonly addDeviceFn = (config: Config) => addDevice(config);
+  readonly show = displayValue;
 
   constructor() {
     this.state.bind({
@@ -708,21 +929,24 @@ export class ConnectorFormComponent {
     return Array.isArray(device['point']) ? device['point'] : [];
   }
 
-  pointPath(d: number, p: number, key: string): string {
-    return `/device/${d}/point/${p}/${key}`;
-  }
-
   pointKey(d: number, p: number): string {
     return `/device/${d}/point/${p}`;
   }
 
-  /** A point opens by itself when it has an error. */
-  pointDefault(d: number, p: number): boolean {
-    return this.state.hasErrorUnder(`${this.pointKey(d, p)}/`);
+  inheritedDetail(resolved: ResolvedDevice): string {
+    const n = resolved.inherited.length;
+    return `${n} ${n === 1 ? 'point' : 'points'}`;
   }
 
-  pointOpen(d: number, p: number): boolean {
-    return this.state.isOpen(this.pointKey(d, p), this.pointDefault(d, p));
+  /** The hint of a device's type: the type it inherits when the field is empty. */
+  typeHint(d: number): string | undefined {
+    const type = this.resolved()[d]?.type;
+    return type ? `Empty: ${type.name}, from ${type.library}` : undefined;
+  }
+
+  /** Adds a point with an inherited point's ID to device `d`: it patches the library's point. */
+  overridePoint(d: number, id: string) {
+    return (config: Config) => setAt(config, `/device/${d}/point/${this.points(getAt(config, `/device/${d}`) ?? {}).length}`, { id });
   }
 
   summary(device: Config, point: Config): string {

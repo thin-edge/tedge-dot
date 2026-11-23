@@ -9,6 +9,8 @@ on:
       - "site/src/lib/config-builder.ts"
       - "site/src/lib/form-options.ts"
       - "site/src/lib/help.ts"
+      - "demo/points.d/**"
+      - ".goreleaser.yaml"
       - "site/src/data/protocols.json"
       - "doc/contract/schemas/**"
       - "packaging/config/**"

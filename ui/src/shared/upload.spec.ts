@@ -9,7 +9,8 @@ const read = (...path: string[]) => readFileSync(join(repo, ...path), 'utf8');
 describe('checkUpload', () => {
   it('accepts a valid connector file and names it after the file', () => {
     const check = checkUpload('modbus.toml', read('demo', 'config', 'modbus.toml'));
-    expect(check).toEqual({ source: 'modbus.toml', fileName: 'modbus', status: 'ready', reason: '' });
+    expect(check).toMatchObject({ source: 'modbus.toml', fileName: 'modbus', status: 'ready', reason: '' });
+    expect(check.file?.type).toBe('tedge-dot-modbus');
   });
 
   it('reports a syntax error with its line', () => {
@@ -25,10 +26,22 @@ describe('checkUpload', () => {
     expect(check.reason).toMatch(/^1 problem, for example connector › log_level/);
   });
 
-  it('recognises a point library', () => {
-    const check = checkUpload('demo-sim.toml', read('demo', 'points.d', 'modbus', 'demo-sim.toml'));
-    expect(check.status).toBe('library');
-    expect(canOpenInEditor(check)).toBe(false);
+  it('adds a point library as a library of its protocol', () => {
+    const check = checkUpload('acme-meter.toml', read('demo', 'points.d', 'modbus', 'demo-sim.toml'));
+    expect(check.status).toBe('ready');
+    expect(check.file?.type).toBe('tedge-dot-points.modbus.acme-meter');
+    expect(check.kind).toBe('library');
+  });
+
+  it('tells a broken library from a broken connector file', () => {
+    expect(checkUpload('x.toml', '[library]\nprotocol = "modbus\n').kind).toBe('library');
+    expect(checkUpload('x.toml', '[connector]\nprotocol = "modbus\n').kind).toBe('connector');
+    const noProtocol = checkUpload('x.toml', '[library]\ntype = "meter"\n');
+    expect([noProtocol.status, noProtocol.kind, canOpenInEditor(noProtocol)]).toEqual(['problems', 'library', true]);
+  });
+
+  it('refuses a connector file name reserved for libraries', () => {
+    expect(checkUpload('points.x.toml', read('demo', 'config', 'modbus.toml')).status).toBe('bad-name');
   });
 
   it('refuses a file that is not a connector file', () => {

@@ -1,10 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { emitToml, getAt, newConfig, parseToml, protocolInfo, setAt } from '../generated/config-builder';
+import { emitToml, getAt, newConfig, parseToml, protocolInfo, setAt, type Config } from '../generated/config-builder';
+import { emitLibraryToml } from './toml-write';
 import {
   addDevice,
+  addLibraryPoint,
   addPoint,
+  newLibrary,
+  removeLibraryPoint,
+  switchLibraryProtocol,
   commentLines,
   displayValue,
   extraKeys,
@@ -18,7 +23,7 @@ import {
   switchProtocol,
   uniqueId,
 } from './form-model';
-import { validateConnectorFile } from './validation';
+import { validateConnectorFile, validateLibraryFile } from './validation';
 
 const repo = join(__dirname, '..', '..', '..');
 const packaged = (name: string) => readFileSync(join(repo, 'packaging', 'config', name), 'utf8');
@@ -185,5 +190,24 @@ describe('labelOf', () => {
     expect(labelOf('node_id')).toBe('Node ID');
     expect(labelOf('mqtt')).toBe('MQTT');
     expect(labelOf('connect_timeout_s')).toBe('Connect timeout (s)');
+  });
+});
+
+describe('point library edits', () => {
+  it('starts a library with one valid point and adds points with new ids', () => {
+    const library = newLibrary('modbus');
+    expect(validateLibraryFile(emitLibraryToml(library)).fields).toEqual([]);
+    const two = addLibraryPoint(library);
+    expect(two.point).toHaveLength(2);
+    expect(two.point[1].id).not.toBe(two.point[0].id);
+    expect(removeLibraryPoint(two, 0).point).toEqual([two.point[1]]);
+  });
+
+  it('switches a library to another protocol, keeping ids and dropping OPC UA namespaces', () => {
+    const opcua: Config = { ...newLibrary('opcua'), library: { protocol: 'opcua', type: 'pump', namespaces: ['http://opcfoundation.org/UA/'] } };
+    const modbus = switchLibraryProtocol(opcua, 'modbus');
+    expect(modbus.library).toEqual({ protocol: 'modbus', type: 'pump' });
+    expect(modbus.point[0].id).toBe(opcua.point[0].id);
+    expect(modbus.point[0].address).toEqual(protocolInfo('modbus').newPoint.address);
   });
 });
