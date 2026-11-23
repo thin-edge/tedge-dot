@@ -12,6 +12,7 @@ import {
 import { RepositoryService } from '@c8y/ngx-components/repository/shared';
 
 import { parseToml } from '../generated/config-builder';
+import { groupTargets } from './gateway';
 import { LibraryCatalog, packagedLibraries, referencedLibraries, referencedLibraryFiles } from './libraries';
 import {
   type EntryLike,
@@ -192,12 +193,13 @@ export class ConnectorOperationsService {
   }
 
   /**
-   * The devices directly in a group, and those of them that do not offer every one of `types`,
-   * with the types each lacks. Subgroups are not searched.
+   * The devices directly in a group, as a bulk operation for the group reaches them, and those of
+   * them that do not offer every one of `types`, with the types each lacks. Subgroups are not
+   * searched.
    */
   async checkGroup(groupId: string | number, types: readonly string[]): Promise<{ devices: number; missing: MissingTypes[] }> {
     const { data } = await this.inventory.childAssetsList(groupId, { pageSize: 2000 });
-    const devices = data.filter(mo => mo['c8y_IsDevice'] !== undefined);
+    const devices = groupTargets(data);
     const missing = devices
       .map(device => ({ device, types: types.filter(type => !this.offers(device, type)) }))
       .filter(m => m.types.length > 0);
