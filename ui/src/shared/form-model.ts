@@ -14,8 +14,60 @@ export type FieldKind = 'text' | 'integer' | 'number' | 'choice' | 'check';
 export interface ShapeField {
   key: string;
   kind: FieldKind;
-  options?: string[];
+  options?: readonly string[];
+  /** A word shown after an option, such as "deprecated". */
+  notes?: Readonly<Record<string, string>>;
   placeholder?: string;
+  /** A short note under the field, such as what an empty field means. */
+  hint?: string;
+}
+
+/** A field of a protocol table offered as a choice, with what an empty field means. */
+export type FieldChoice = Pick<ShapeField, 'options' | 'notes' | 'hint'>;
+
+/**
+ * The `protocol_address` keys of each protocol that the form keeps in a device's collapsed
+ * settings: options most devices leave alone. The others are always shown.
+ */
+export const ADDRESS_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+  opcua: [
+    'password_file',
+    'user_certificate',
+    'user_private_key',
+    'allow_plaintext_password',
+    'allow_deprecated_security',
+    'trust_any_server_certificate',
+  ],
+};
+
+/** Where a device connects, in a few characters, from its `protocol_address`. */
+export function addressSummary(protocol: string, address: unknown): string | undefined {
+  if (!address || typeof address !== 'object' || Array.isArray(address)) {
+    return undefined;
+  }
+  const a = address as Config;
+  const text = (value: unknown) => (typeof value === 'string' || typeof value === 'number' ? String(value) : undefined);
+  const hostPort = (host: unknown, port: unknown) => (text(host) ? (text(port) ? `${text(host)}:${text(port)}` : text(host)) : undefined);
+  switch (protocol) {
+    case 'opcua':
+      return text(a['endpoint']);
+    case 'modbus': {
+      const where = a['transport'] === 'rtu' ? text(a['serial_port']) : hostPort(a['host'], a['port']);
+      return where && text(a['unit_id']) ? `${where}, unit ${text(a['unit_id'])}` : where;
+    }
+    case 'snmp':
+      return hostPort(a['host'], a['port']);
+    case 'canbus':
+      return text(a['interface']);
+    case 'canopen':
+      return text(a['node_id']) && `node ${text(a['node_id'])}`;
+    case 'profibus':
+      return text(a['station_address']) && `station ${text(a['station_address'])}`;
+    case 'aveva-pi':
+      return text(a['base_url']);
+    default:
+      return undefined;
+  }
 }
 
 /**

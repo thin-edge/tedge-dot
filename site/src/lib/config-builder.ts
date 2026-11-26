@@ -9,6 +9,7 @@ import { parse, stringify } from 'smol-toml';
 import configSchema from '../../../doc/contract/schemas/config.schema.json';
 import librarySchema from '../../../doc/contract/schemas/point-library.schema.json';
 import protocols from '../data/protocols.json';
+import { OPCUA_SECURITY_MODES, OPCUA_SECURITY_POLICIES } from './form-options';
 
 export type Config = Record<string, any>;
 export type Protocols = typeof protocols;
@@ -60,7 +61,9 @@ function validator(protocol: string, forLibrary = false): ValidateFunction {
 export function validateConfig(config: Config): FieldError[] {
   const protocol = config?.connector?.protocol ?? '';
   const v = validator(protocol);
-  return v(config) ? [] : toFieldErrors(v.errors ?? []);
+  const errors = v(config) ? [] : toFieldErrors(v.errors ?? []);
+  if (protocol !== 'opcua') return errors;
+  return [...errors, ...opcuaSecurityErrors(config).filter((e) => !errors.some((s) => s.path === e.path))];
 }
 
 /** Validate a point library (demo/points.d). */
@@ -92,6 +95,107 @@ function toFieldErrors(errors: ErrorObject[]): FieldError[] {
     out.push({ path, message });
   }
   return out;
+}
+
+// --- OPC UA security ---------------------------------------------------------------------------
+// The policy and mode checks both OPC UA connector builds make before they connect
+// (doc/connectors/opcua-connector-spec.md §3.3). A device's own policy wins over [connection]'s,
+// and so does its own mode; a device that sets its own policy and no mode gets that policy's
+// default mode, not [connection]'s.
+
+const POLICY_URI_PREFIX = 'http://opcfoundation.org/UA/SecurityPolicy#';
+
+/** The policy a `security_policy` value names: its exact name, or its full URI. */
+export function opcuaPolicy(value: unknown): { name: string; deprecated: boolean } | undefined {
+  if (typeof value !== 'string') return undefined;
+  const name = value.startsWith(POLICY_URI_PREFIX) ? value.slice(POLICY_URI_PREFIX.length) : value;
+  return OPCUA_SECURITY_POLICIES.find((p) => p.name === name);
+}
+
+/** The mode a `security_mode` value names, in any case; `signandencrypt` is an alias. */
+export function opcuaMode(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const mode = value.toLowerCase();
+  return mode === 'signandencrypt' ? 'sign_and_encrypt' : OPCUA_SECURITY_MODES.find((m) => m === mode);
+}
+
+/** The mode a policy gets when no mode is set for it. */
+export function opcuaDefaultMode(policy: string): string {
+  return policy === 'None' ? 'none' : 'sign_and_encrypt';
+}
+
+/** A value and the pointer it is set at. */
+export interface SetValue {
+  value: unknown;
+  path: string;
+}
+
+const table = (value: unknown): Config =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Config) : {};
+
+/**
+ * Where an OPC UA device's policy and mode come from: the device or [connection]. Undefined means
+ * the default: policy None, and the policy's default mode.
+ */
+export function opcuaDeviceSecurity(
+  config: Config,
+  device: number,
+): { policy?: SetValue; mode?: SetValue; allowDeprecated: boolean } {
+  const base = `/device/${device}/protocol_address`;
+  const own = table(getAt(config, base));
+  const connection = table(config?.connection);
+  const policy =
+    own.security_policy !== undefined
+      ? { value: own.security_policy, path: `${base}/security_policy` }
+      : connection.security_policy !== undefined
+        ? { value: connection.security_policy, path: '/connection/security_policy' }
+        : undefined;
+  const mode =
+    own.security_mode !== undefined
+      ? { value: own.security_mode, path: `${base}/security_mode` }
+      : own.security_policy === undefined && connection.security_mode !== undefined
+        ? { value: connection.security_mode, path: '/connection/security_mode' }
+        : undefined;
+  const allowDeprecated =
+    typeof own.allow_deprecated_security === 'boolean'
+      ? own.allow_deprecated_security
+      : connection.allow_deprecated_security === true;
+  return { policy, mode, allowDeprecated };
+}
+
+function opcuaSecurityErrors(config: Config): FieldError[] {
+  const errors: FieldError[] = [];
+  const add = (path: string, message: string) => {
+    if (!errors.some((e) => e.path === path)) errors.push({ path, message });
+  };
+  const quoted = (names: string[]) => names.map((n) => JSON.stringify(n)).join(', ');
+  const checkNames = (base: string, values: Config) => {
+    if (typeof values.security_policy === 'string' && !opcuaPolicy(values.security_policy)) {
+      add(`${base}/security_policy`, `must be one of ${quoted(OPCUA_SECURITY_POLICIES.map((p) => p.name))}, or a policy's full URI`);
+    }
+    if (typeof values.security_mode === 'string' && !opcuaMode(values.security_mode)) {
+      add(`${base}/security_mode`, `must be one of ${quoted(OPCUA_SECURITY_MODES)}`);
+    }
+  };
+  checkNames('/connection', table(config?.connection));
+  const devices: unknown[] = Array.isArray(config?.device) ? config.device : [];
+  devices.forEach((device, d) => {
+    checkNames(`/device/${d}/protocol_address`, table(table(device).protocol_address));
+    const set = opcuaDeviceSecurity(config, d);
+    const policy = set.policy ? opcuaPolicy(set.policy.value) : OPCUA_SECURITY_POLICIES[0];
+    if (!policy) return;
+    if (policy.deprecated && !set.allowDeprecated) {
+      add(set.policy!.path, `"${policy.name}" is deprecated (SHA-1): set allow_deprecated_security to use it`);
+    }
+    const mode = set.mode && opcuaMode(set.mode.value);
+    if (!set.mode || !mode) return;
+    if (policy.name === 'None' && mode !== 'none') {
+      add(set.mode.path, `"${mode}" needs a security_policy other than "None"`);
+    } else if (policy.name !== 'None' && mode === 'none') {
+      add(set.mode.path, `"none" cannot be used with security_policy "${policy.name}": use "sign" or "sign_and_encrypt"`);
+    }
+  });
+  return errors;
 }
 
 export function parseToml(text: string): Config {

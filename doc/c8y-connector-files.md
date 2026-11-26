@@ -76,7 +76,21 @@ the same file.
 The form has the sections of the docs site's config builder: `[connector]` with its reporting,
 grouping and measurement settings, `[mqtt]`, `[connection]`, and each device with its settings,
 `protocol_address` and points. Each field has a help text, and a schema error shows under the
-field it concerns. *Add device*, *Add point* and the remove buttons start from the protocol's
+field it concerns.
+
+A device starts with its name, poll interval and point libraries, then its **Protocol address**,
+which is always shown. The device's heading repeats where it connects, such as its OPC UA
+endpoint or its Modbus host and port. The collapsed **Device settings** hold the type, the default
+mode, the requests in flight and, for OPC UA, the address options most devices leave alone: the
+password file, the user certificate and key, and the switches for plaintext passwords,
+deprecated security and trusting any server certificate. Device settings open by themselves when
+one of their fields has an error.
+
+For OPC UA, **Security policy** and **Security mode** are dropdowns in `[connection]` and in each
+device's protocol address. *Not set* is the first choice, and the hint under the field says what
+then applies: the connection's setting, or the policy's default mode. The deprecated policies
+`Basic128Rsa15` and `Basic256` come last and are marked. Choosing the policy `None` sets a mode
+of `sign` or `sign_and_encrypt` next to it to `none`. *Add device*, *Add point* and the remove buttons start from the protocol's
 templates, and switching the protocol gives every device and point the new protocol's address
 fields while keeping policies. Device names and point ids that are still the old protocol's
 defaults become the new protocol's: from OPC UA to SNMP, `opc1` becomes `switch1` and
@@ -96,6 +110,12 @@ Before saving, the editor validates the file with the same code as the docs site
 builder: TOML syntax, then the contract schema (`doc/contract/schemas/config.schema.json`) and
 each protocol's address shapes. Syntax errors are marked at their line; schema errors are listed
 with the key they concern, for example `device "Pump01" › point "flow" › datatype`.
+
+For OPC UA, it also makes the security checks the connector makes before it connects
+([OPC UA connector spec §3.3](connectors/opcua-connector-spec.md#33-policy-and-mode)): a policy or mode it does not
+know, a deprecated policy without `allow_deprecated_security`, the mode `none` with a secure
+policy, and `sign` or `sign_and_encrypt` with the policy `None`. The error shows at the field that
+sets the value, which may be in `[connection]` when the device takes its setting from there.
 
 Every name in a device's `points_from` must be a point library that exists for the file's
 protocol: one in the repository, or one the tedge-dot packages install (see

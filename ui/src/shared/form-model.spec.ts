@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { emitToml, getAt, newConfig, parseToml, protocolInfo, setAt, type Config } from '../generated/config-builder';
 import { emitLibraryToml } from './toml-write';
 import {
+  ADDRESS_OPTIONS,
   addDevice,
   addLibraryPoint,
+  addressSummary,
   addPoint,
   newLibrary,
   removeLibraryPoint,
@@ -262,5 +264,32 @@ describe('point library edits', () => {
     expect(modbus.library).toEqual({ protocol: 'modbus', type: 'pump' });
     expect(modbus.point[0].id).toBe(opcua.point[0].id);
     expect(modbus.point[0].address).toEqual(protocolInfo('modbus').newPoint.address);
+  });
+});
+
+describe('addressSummary', () => {
+  it('names where a device connects', () => {
+    expect(addressSummary('opcua', { endpoint: 'opc.tcp://192.168.0.20:4840/', security_policy: 'None' })).toBe('opc.tcp://192.168.0.20:4840/');
+    expect(addressSummary('modbus', { transport: 'tcp', host: '192.168.0.10', port: 502, unit_id: 1 })).toBe('192.168.0.10:502, unit 1');
+    expect(addressSummary('modbus', { transport: 'rtu', serial_port: '/dev/ttyRS485', unit_id: 3 })).toBe('/dev/ttyRS485, unit 3');
+    expect(addressSummary('snmp', { host: '192.168.0.30' })).toBe('192.168.0.30');
+    expect(addressSummary('canbus', { interface: 'can0' })).toBe('can0');
+    expect(addressSummary('canopen', { node_id: 5 })).toBe('node 5');
+    expect(addressSummary('profibus', { station_address: 3 })).toBe('station 3');
+    expect(addressSummary('aveva-pi', { base_url: 'https://pi.example.com/piwebapi' })).toBe('https://pi.example.com/piwebapi');
+  });
+
+  it('gives nothing without an address', () => {
+    expect(addressSummary('opcua', undefined)).toBeUndefined();
+    expect(addressSummary('opcua', {})).toBeUndefined();
+    expect(addressSummary('modbus', { transport: 'tcp' })).toBeUndefined();
+    expect(addressSummary('bacnet', { host: 'x' })).toBeUndefined();
+  });
+
+  it('keeps only keys the protocol shape knows as address options', () => {
+    for (const [protocol, keys] of Object.entries(ADDRESS_OPTIONS)) {
+      const known = Object.keys(protocolInfo(protocol).protocol_address.properties);
+      expect(keys.filter(k => !known.includes(k))).toEqual([]);
+    }
   });
 });

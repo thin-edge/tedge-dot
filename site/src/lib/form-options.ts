@@ -20,6 +20,22 @@ export const AGGREGATES: { id: string; label: string; value: string | string[] |
   { id: 'all', label: '["mean", "min", "max", "last"]', value: ['mean', 'min', 'max', 'last'] },
 ];
 
+/**
+ * The OPC UA `security_policy` names both connector builds know (doc/connectors/opcua-connector-spec.md
+ * §3.3), the deprecated SHA-1 ones last. A value may also be a policy's full URI.
+ */
+export const OPCUA_SECURITY_POLICIES: { name: string; deprecated: boolean }[] = [
+  { name: 'None', deprecated: false },
+  { name: 'Basic256Sha256', deprecated: false },
+  { name: 'Aes128_Sha256_RsaOaep', deprecated: false },
+  { name: 'Aes256_Sha256_RsaPss', deprecated: false },
+  { name: 'Basic128Rsa15', deprecated: true },
+  { name: 'Basic256', deprecated: true },
+];
+
+/** The OPC UA `security_mode` values; the connectors read them in any case. */
+export const OPCUA_SECURITY_MODES = ['none', 'sign', 'sign_and_encrypt'];
+
 /** The `report` keys after `on_change`, as the config builder offers them (a test holds them to the schema). */
 export const REPORT_FIELDS = [
   { key: 'deadband', hint: 'A number, or a percentage like "2%"' },

@@ -77,3 +77,55 @@ describe('unknown protocols', () => {
     expect(protocolInfo(undefined as unknown as string).newPoint.id).toBe('point1');
   });
 });
+
+describe('OPC UA security policy and mode', () => {
+  const opcua = (address: Record<string, unknown>, connection?: Record<string, unknown>) => {
+    let cfg = newConfig('opcua');
+    for (const [key, value] of Object.entries(address)) cfg = setAt(cfg, `/device/0/protocol_address/${key}`, value);
+    for (const [key, value] of Object.entries(connection ?? {})) cfg = setAt(cfg, `/connection/${key}`, value);
+    return cfg;
+  };
+  const errorAt = (cfg: ReturnType<typeof newConfig>, path: string) => validateConfig(cfg).find((e) => e.path === path)?.message;
+  const device = '/device/0/protocol_address';
+
+  it('accepts what the connectors accept', () => {
+    expect(validateConfig(opcua({ security_policy: 'Basic256Sha256', security_mode: 'sign' }))).toEqual([]);
+    expect(validateConfig(opcua({ security_policy: 'http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss' }))).toEqual([]);
+    expect(validateConfig(opcua({ security_policy: 'None', security_mode: 'None' }))).toEqual([]);
+    expect(validateConfig(opcua({ security_policy: 'Basic256Sha256', security_mode: 'SignAndEncrypt' }))).toEqual([]);
+  });
+
+  it('flags an unknown policy or mode on its field', () => {
+    expect(errorAt(opcua({ security_policy: 'basic256sha256' }), `${device}/security_policy`)).toMatch(/^must be one of "None", /);
+    expect(errorAt(opcua({}, { security_mode: 'encrypt' }), '/connection/security_mode')).toBe(
+      'must be one of "none", "sign", "sign_and_encrypt"',
+    );
+  });
+
+  it('flags a deprecated policy unless allow_deprecated_security is set', () => {
+    expect(errorAt(opcua({ security_policy: 'Basic256' }), `${device}/security_policy`)).toMatch(/deprecated/);
+    expect(validateConfig(opcua({ security_policy: 'Basic256', allow_deprecated_security: true }))).toEqual([]);
+    expect(errorAt(opcua({}, { security_policy: 'Basic128Rsa15' }), '/connection/security_policy')).toMatch(/deprecated/);
+    expect(validateConfig(opcua({}, { security_policy: 'Basic128Rsa15', allow_deprecated_security: true }))).toEqual([]);
+  });
+
+  it('flags a mode that does not fit the policy, where the mode is set', () => {
+    expect(errorAt(opcua({ security_policy: 'Basic256Sha256', security_mode: 'none' }), `${device}/security_mode`)).toMatch(
+      /cannot be used with security_policy "Basic256Sha256"/,
+    );
+    expect(errorAt(opcua({ security_mode: 'sign' }), `${device}/security_mode`)).toMatch(/needs a security_policy other than "None"/);
+    expect(errorAt(opcua({}, { security_policy: 'Basic256Sha256', security_mode: 'none' }), '/connection/security_mode')).toMatch(
+      /cannot be used/,
+    );
+  });
+
+  it("gives a device with its own policy that policy's default mode, not the connection's", () => {
+    expect(validateConfig(opcua({ security_policy: 'None' }, { security_policy: 'Basic256Sha256', security_mode: 'sign' }))).toEqual([]);
+    expect(validateConfig(opcua({ security_policy: 'Basic256Sha256' }, { security_mode: 'none' }))).toEqual([]);
+  });
+
+  it('leaves other protocols alone', () => {
+    const cfg = setAt(newConfig('modbus'), '/connection/security_mode', 'encrypt');
+    expect(validateConfig(cfg).map((e) => e.path)).not.toContain('/connection/security_mode');
+  });
+});

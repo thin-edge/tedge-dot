@@ -1,17 +1,29 @@
-import { Component, Injectable, computed, inject, input, output, signal } from '@angular/core';
+import { Component, Injectable, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { CoreModule } from '@c8y/ngx-components';
 import { CollapseDirective } from 'ngx-bootstrap/collapse';
 import { PopoverDirective } from 'ngx-bootstrap/popover';
 import { TooltipDirective } from 'ngx-bootstrap/tooltip';
 
-import { PROTOCOL_IDS, SCHEMA, coerce, getAt, protocolInfo, setAt, type Config } from '../generated/config-builder';
+import {
+  PROTOCOL_IDS,
+  SCHEMA,
+  coerce,
+  getAt,
+  opcuaDeviceSecurity,
+  opcuaPolicy,
+  protocolInfo,
+  setAt,
+  type Config,
+} from '../generated/config-builder';
 import { AGGREGATES, OUTPUTS, POLICIES, REPORT_FIELDS } from '../generated/form-options';
 import { HELP, helpForPath } from '../generated/help';
 import LIBRARY_SCHEMA from '../generated/point-library.schema.json';
 import { type LibraryCatalog, type ResolvedDevice, resolveDevice } from '../shared/libraries';
 import {
+  ADDRESS_OPTIONS,
   addDevice,
   addPoint,
+  addressSummary,
   displayValue,
   extraKeys,
   labelOf,
@@ -21,8 +33,11 @@ import {
   shapeFields,
   splitList,
   switchProtocol,
+  type FieldChoice,
   type FieldKind,
+  type ShapeField,
 } from '../shared/form-model';
+import { linkSecurity, securityChoices } from '../shared/opcua-security';
 import { type FieldProblem } from '../shared/validation';
 
 // The form view of a connector file: the sections and fields of the docs site's config builder
@@ -36,6 +51,7 @@ const LIBRARY = LIBRARY_SCHEMA.properties.library.properties as Record<string, {
 const DEPRECATED_OUTPUT: Record<string, string> = { samples: 'single', measurements: 'group' };
 /** The grid columns of one field. */
 const FIELD_COLUMNS = 'col-xs-12 col-sm-6 col-md-3';
+const NO_KEYS: readonly string[] = [];
 
 /** The keys each level of the form has fields for; others are kept and listed. */
 const KNOWN = {
@@ -49,6 +65,8 @@ interface FormSource {
   config: () => Config;
   problems: () => readonly FieldProblem[];
   apply: (next: Config) => void;
+  /** Follow-up changes to a field edit at `path`, such as a mode that must follow its policy. */
+  adjust?: (next: Config, path: string) => Config;
 }
 
 /** The file being edited, shared by the form's parts. The form binds it before its parts exist. */
@@ -93,8 +111,18 @@ export class FormState {
     this.toggled.set(next);
   }
 
+  /** Keeps a section that opened by default open, so fixing what opened it does not close it. */
+  keepOpen(key: string): void {
+    if (!this.toggled().has(key)) {
+      this.toggled.set(new Map(this.toggled()).set(key, true));
+    }
+  }
+
   set(path: string, value: unknown): void {
-    this.edit(config => setAt(config, path, value));
+    this.edit(config => {
+      const next = setAt(config, path, value);
+      return this.source.adjust ? this.source.adjust(next, path) : next;
+    });
   }
 
   edit(change: (config: Config) => Config): void {
@@ -165,7 +193,9 @@ export type FormFieldKind = FieldKind | 'toggle' | 'list';
             <select class="form-control" [id]="id()" [attr.aria-describedby]="id() + '-msg'" (change)="setChoice($event)">
               <option value="" [selected]="value() === undefined">{{ 'Not set' | translate }}</option>
               @for (o of choices(); track o) {
-                <option [value]="o" [selected]="o === shownChoice()">{{ o }}</option>
+                <option [value]="o" [selected]="o === shownChoice()">
+                  {{ o }}@if (notes()[o]; as note) { ({{ note | translate }})}
+                </option>
               }
             </select>
           </div>
@@ -198,6 +228,8 @@ export class FormFieldComponent {
   readonly label = input<string>();
   readonly kind = input<FormFieldKind>('text');
   readonly options = input<readonly unknown[]>([]);
+  /** A word shown after an option, such as "deprecated". */
+  readonly notes = input<Readonly<Record<string, string>>>({});
   /** An example of a valid value, shown as the placeholder. */
   readonly example = input<string>();
   /** A short note under the field, such as what an empty field means. */
@@ -298,25 +330,46 @@ export class FormSectionComponent {
   readonly defaultOpen = input(false);
   readonly open = computed(() => this.state.isOpen(this.key(), this.defaultOpen()));
   readonly regionId = computed(() => `tdot-section${this.key().replace(/[^a-z0-9]+/gi, '-')}`);
+
+  constructor() {
+    effect(() => {
+      if (this.defaultOpen()) {
+        const key = this.key();
+        untracked(() => this.state.keepOpen(key));
+      }
+    });
+  }
 }
 
-/** The fields of a protocol table, from the builder's protocol shape. */
+/**
+ * The fields of a protocol table, from the builder's protocol shape. A table can be split over two
+ * parts: the primary one shows the table's own error and the keys the form has no field for.
+ */
 @Component({
   selector: 'tdot-shape',
   imports: [CoreModule, FormFieldComponent],
   template: `
     <div class="legend form-block">{{ legend() | translate }}</div>
-    @if (state.error(base()); as e) {
-      <div class="alert alert-danger" role="alert">{{ legend() | translate }}: {{ e }}</div>
+    @if (primary()) {
+      @if (state.error(base()); as e) {
+        <div class="alert alert-danger" role="alert">{{ legend() | translate }}: {{ e }}</div>
+      }
     }
     <div class="row d-flex flex-wrap">
       @for (f of fields(); track f.key) {
-        <tdot-field [path]="base() + '/' + f.key" [kind]="f.kind" [options]="f.options ?? []" [example]="f.placeholder" />
+        <tdot-field
+          [path]="base() + '/' + f.key"
+          [kind]="f.kind"
+          [options]="f.options ?? []"
+          [notes]="f.notes ?? {}"
+          [example]="f.placeholder"
+          [hint]="f.hint"
+        />
       } @empty {
         <p class="text-muted col-xs-12">{{ 'The form has no fields for this table on this protocol. Set them in the TOML view.' | translate }}</p>
       }
     </div>
-    @if (extra().length) {
+    @if (primary() && extra().length) {
       <p class="text-muted small">{{ 'Also set, kept as is:' | translate }} @for (k of extra(); track k) {<code>{{ k }}</code> }</p>
     }
   `,
@@ -326,8 +379,22 @@ export class FormShapeComponent {
   readonly base = input.required<string>();
   readonly schema = input<any>();
   readonly legend = input('');
-  readonly fields = computed(() => shapeFields(this.schema()));
-  readonly extra = computed(() => extraKeys(this.state.value(this.base()), this.fields().map(f => f.key)));
+  /** Only these keys; without it, every key but `skip`. */
+  readonly only = input<readonly string[]>();
+  readonly skip = input<readonly string[]>([]);
+  /** Keys offered as a choice, with their options and hint. */
+  readonly choices = input<Readonly<Record<string, FieldChoice>>>({});
+  readonly primary = input(true);
+  private readonly allFields = computed(() => shapeFields(this.schema()));
+  readonly fields = computed<ShapeField[]>(() => {
+    const only = this.only();
+    const skip = this.skip();
+    const choices = this.choices();
+    return this.allFields()
+      .filter(f => (only ? only.includes(f.key) : !skip.includes(f.key)))
+      .map(f => (choices[f.key] ? { ...f, kind: 'choice', placeholder: undefined, ...choices[f.key] } : f));
+  });
+  readonly extra = computed(() => extraKeys(this.state.value(this.base()), this.allFields().map(f => f.key)));
 }
 
 /** A `report` table: the reporting policy of the connector or of one point. */
@@ -772,7 +839,12 @@ export class FormLibrariesComponent {
     @if (hasConnection()) {
       <fieldset class="c8y-fieldset">
         <legend>{{ 'Connection' | translate }} <span class="text-muted text-code m-l-4">[connection]</span></legend>
-        <tdot-shape base="/connection" [schema]="info().connection" legend="Shared connection settings" />
+        <tdot-shape
+          base="/connection"
+          [schema]="info().connection"
+          legend="Shared connection settings"
+          [choices]="security()?.connection ?? noChoices"
+        />
       </fieldset>
     }
 
@@ -780,6 +852,9 @@ export class FormLibrariesComponent {
       <fieldset class="c8y-fieldset">
         <legend>
           {{ 'Device' | translate }} {{ device['name'] || '#' + (d + 1) }}
+          @if (addressOf(device); as where) {
+            <span class="text-muted m-l-4" [title]="where">{{ where }}</span>
+          }
           <span class="text-muted text-code m-l-4">[[device]]</span>
           <button
             type="button"
@@ -797,18 +872,33 @@ export class FormLibrariesComponent {
           <tdot-field [path]="'/device/' + d + '/poll_interval'" hint="Empty: the connector setting" />
           <tdot-libraries [device]="'/device/' + d" [catalog]="catalog()" />
         </div>
+        <tdot-shape
+          [base]="'/device/' + d + '/protocol_address'"
+          [schema]="info().protocol_address"
+          legend="Protocol address"
+          [skip]="addressOptions()"
+          [choices]="security()?.devices?.[d] ?? noChoices"
+        />
         <tdot-section
           [key]="'/device/' + d + '/settings'"
           title="Device settings"
-          detail="type, default mode, requests in flight, protocol address"
-          [defaultOpen]="hasDeviceError(d)"
+          [detail]="settingsDetail()"
+          [defaultOpen]="openSettings(d)"
         >
           <div class="row d-flex flex-wrap">
             <tdot-field [path]="'/device/' + d + '/type'" [hint]="typeHint(d)" />
             <tdot-field [path]="'/device/' + d + '/default_mode'" kind="choice" [options]="defaultModes" />
             <tdot-field [path]="'/device/' + d + '/max_inflight'" kind="integer" hint="Empty: the connector setting" />
           </div>
-          <tdot-shape [base]="'/device/' + d + '/protocol_address'" [schema]="info().protocol_address" legend="Protocol address" />
+          @if (addressOptions().length) {
+            <tdot-shape
+              [base]="'/device/' + d + '/protocol_address'"
+              [schema]="info().protocol_address"
+              legend="Address options"
+              [only]="addressOptions()"
+              [primary]="false"
+            />
+          }
         </tdot-section>
 
         <div class="legend form-block">{{ 'Points' | translate }}</div>
@@ -902,6 +992,14 @@ export class ConnectorFormComponent {
   readonly hasConnection = computed(
     () => Object.keys(this.info()?.connection?.properties ?? {}).length > 0 || this.config()['connection'] !== undefined
   );
+  /** The `protocol_address` keys kept in a device's collapsed settings. */
+  readonly addressOptions = computed(() => ADDRESS_OPTIONS[this.protocol()] ?? NO_KEYS);
+  readonly settingsDetail = computed(() =>
+    this.addressOptions().length ? 'type, default mode, requests in flight, address options' : 'type, default mode, requests in flight'
+  );
+  /** The OPC UA security fields as dropdowns. */
+  readonly security = computed(() => (this.protocol() === 'opcua' ? securityChoices(this.config()) : undefined));
+  readonly noChoices: Readonly<Record<string, FieldChoice>> = {};
 
   /** What each device inherits from its point libraries. */
   readonly resolved = computed<(ResolvedDevice | undefined)[]>(() => {
@@ -917,7 +1015,13 @@ export class ConnectorFormComponent {
       config: () => this.config(),
       problems: () => this.problems(),
       apply: next => this.configChange.emit(next),
+      adjust: linkSecurity,
     });
+  }
+
+  /** Where a device connects, for its legend. */
+  addressOf(device: Config): string | undefined {
+    return addressSummary(this.protocol(), device['protocol_address']);
   }
 
   label(id: string): string {
@@ -957,8 +1061,24 @@ export class ConnectorFormComponent {
     return extraKeys(path ? getAt(this.config(), path) : this.config(), known);
   }
 
-  hasDeviceError(d: number): boolean {
-    return [...this.state.errors().keys()].some(path => path.startsWith(`/device/${d}/`) && !path.includes('/point/'));
+  /**
+   * Whether device `d`'s collapsed settings open by themselves: a field in them has an error, or the
+   * device uses a deprecated OPC UA policy, which needs the switch they hold.
+   */
+  openSettings(d: number): boolean {
+    const device = `/device/${d}/`;
+    const fields = [
+      ...['type', 'default_mode', 'max_inflight'].map(k => device + k),
+      ...this.addressOptions().map(k => `${device}protocol_address/${k}`),
+    ];
+    if ([...this.state.errors().keys()].some(path => fields.some(f => path === f || path.startsWith(`${f}/`)))) {
+      return true;
+    }
+    if (this.protocol() !== 'opcua') {
+      return false;
+    }
+    const security = opcuaDeviceSecurity(this.config(), d);
+    return !!opcuaPolicy(security.policy?.value)?.deprecated && !security.allowDeprecated;
   }
 
   switchTo(event: Event): void {
