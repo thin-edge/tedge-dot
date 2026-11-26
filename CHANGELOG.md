@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.22](https://github.com/thin-edge/tedge-dot/compare/0.0.21...0.0.22) (2026-11-26)
+
+
+### Features
+
+* call device methods from Cumulocity with c8y_CallMethod ([#130](https://github.com/thin-edge/tedge-dot/issues/130)) ([f6d1c42](https://github.com/thin-edge/tedge-dot/commit/f6d1c4235182026d5729a454d51ca1e55820a222))
+* manage OT connector files from Cumulocity (c8y-connector-files) ([#134](https://github.com/thin-edge/tedge-dot/issues/134)) ([94b52c0](https://github.com/thin-edge/tedge-dot/commit/94b52c0c6d7d1561adeea61c4671a4a5d363f982))
+
+
+### Bug Fixes
+
+* **bench:** let mosquitto read the stack config under AppArmor on Ubuntu 26.04 ([#133](https://github.com/thin-edge/tedge-dot/issues/133)) ([a3e7bff](https://github.com/thin-edge/tedge-dot/commit/a3e7bffcbfe0d9ee170f7dea5d332790920feda8))
+
 ## [0.0.21](https://github.com/thin-edge/tedge-dot/compare/0.0.20...0.0.21) (2026-11-17)
 
 

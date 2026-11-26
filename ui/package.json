@@ -1,6 +1,6 @@
 {
   "name": "tedge-dot-ui",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "Cumulocity Device Management plugin to edit tedge-dot connector files and install them on thin-edge.io gateways",
   "license": "Apache-2.0",
   "private": true,
