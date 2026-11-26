@@ -49,7 +49,11 @@ The page lists the configuration repository entries whose type starts with `tedg
 files first, point libraries in a second list (see [Point libraries](#point-libraries)).
 
 - **Add connector file** opens the editor with a starting point for a protocol. Give the entry a
-  name, the file name it gets on gateways, and optionally a device type.
+  name, the file name it gets on gateways, and optionally a device type. The service name
+  follows the file name, `tedge-dot-<file name>`, until you set another one: the starting points
+  use `tedge-dot-<protocol>`, the name of the packaged example file, and two connectors with one
+  service name keep knocking each other off the broker. The editor warns about any connector file
+  that uses a packaged example's service name, and offers `tedge-dot-<file name>`.
 - **Upload connector file** adds an existing `.toml` file. The file is checked like the editor
   checks a file and becomes an entry named after it: `line-3.toml` is the type `tedge-dot-line-3`.
   A file with a `[library]` table becomes a point library of its protocol instead. A valid file is
@@ -163,10 +167,22 @@ libraries:
   the Configuration tab, it leaves out entries without a type, which would replace the connector
   file with unrelated content. *Send configuration to device* installs one; *Edit in repository*
   opens it on the OT connectors page.
-- **Add connector file** installs a repository entry the gateway does not have yet: a connector
-  file, with the libraries it references, or a point library.
-- **Register a file on the gateway** makes a file that is already there, such as a packaged
-  `modbus.toml`, a configuration type, so you can take snapshots of it and send new versions.
+- **Add connector file** starts with a choice:
+  - *From the repository* installs a repository entry the gateway does not have yet: a connector
+    file, with the libraries it references, or a point library.
+  - *New file* opens the editor. When you save, the file is added to the repository and the send
+    dialog opens for this gateway; afterwards you are back on the tab. It needs the roles to add
+    repository entries.
+  - *Already on the gateway* registers a connector file, or a point library with its protocol,
+    that is already there, such as a packaged `modbus.toml`. The file becomes a configuration
+    type, so you can take snapshots of it and send new versions. Registering doesn't create or
+    send the file.
+- When the selected file has no repository entry, **Create connector file** (or **Create point
+  library**) opens the editor with its file name, and a library's protocol, fixed to the
+  registered type's. Saving offers to send it, as *New file* does. **Edit in repository** also
+  returns to the tab.
+- When the latest snapshot request for the selected file failed because the file isn't on the
+  gateway, the tab says that it is registered but missing, and how to put it there.
 
 ## Adding a file to a gateway
 

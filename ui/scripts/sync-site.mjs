@@ -1,9 +1,10 @@
 // Brings the docs site's connector-file model into the UI, so the repository holds one copy of it:
 // the config builder's module (site/src/lib/config-builder.ts) with its protocol shapes
 // (site/src/data/protocols.json) and the contract schemas (doc/contract/schemas), the forms' option
-// lists (site/src/lib/form-options.ts), the field help (site/src/lib/help.ts) and the point libraries
-// the packages install (demo/points.d, as .goreleaser.yaml lists them). The copies go to
-// src/generated/, which is not committed. Run before every build and test (see package.json).
+// lists (site/src/lib/form-options.ts), the field help (site/src/lib/help.ts), the point libraries
+// the packages install (demo/points.d, as .goreleaser.yaml lists them) and the service names of the
+// example connector files they install. The copies go to src/generated/, which is not committed.
+// Run before every build and test (see package.json).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,26 @@ if (!packaged.length) {
   throw new Error('.goreleaser.yaml lists no packaged point libraries; update scripts/sync-site.mjs');
 }
 writeFileSync(join(out, 'packaged-libraries.json'), JSON.stringify(packaged, null, 2) + '\n');
+
+// The example connector files the packages install in /etc/tedge/plugins/ot (.goreleaser.yaml and,
+// for the C build, impl/c/packaging/nfpm.yaml list them), with their service names: a new file
+// with one of those names would clash with the example on a gateway that runs both.
+const exampleFiles = new Map();
+const examplePattern = /src:\s*([^\s]+\.toml)\s*\n\s*dst:\s*\/etc\/tedge\/plugins\/ot\/([^/\s]+)\.toml/g;
+for (const packaging of ['.goreleaser.yaml', 'impl/c/packaging/nfpm.yaml']) {
+  const text = readFileSync(join(repo, packaging), 'utf8');
+  for (const [, source, file] of text.matchAll(examplePattern)) {
+    const serviceName = readFileSync(join(repo, source), 'utf8').match(/^service_name\s*=\s*"([^"]+)"/m)?.[1];
+    if (!serviceName) {
+      throw new Error(`${source} has no service_name; update scripts/sync-site.mjs`);
+    }
+    exampleFiles.set(file, { file, serviceName });
+  }
+}
+if (!exampleFiles.size) {
+  throw new Error('the packaging lists no example connector files; update scripts/sync-site.mjs');
+}
+writeFileSync(join(out, 'packaged-connectors.json'), JSON.stringify([...exampleFiles.values()], null, 2) + '\n');
 
 // Modules without imports, copied as they are.
 for (const source of ['site/src/lib/form-options.ts', 'site/src/lib/help.ts']) {

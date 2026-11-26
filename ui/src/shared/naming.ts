@@ -125,6 +125,18 @@ export function libraryFile(protocol: string, name: string): ManagedFile {
   return { kind: 'library', name, protocol, type: libraryTypeOf(protocol, name), path: libraryPathOf(protocol, name) };
 }
 
+/**
+ * The file of `kind` named `input` as a user typed it and, for a library, of `protocol`; undefined
+ * when the name or the protocol is not valid for that kind.
+ */
+export function managedFile(kind: FileKind, input: string, protocol = ''): ManagedFile | undefined {
+  const name = normalizeName(input);
+  if (kind === 'library') {
+    return isValidName(name) && isValidProtocol(protocol) ? libraryFile(protocol, name) : undefined;
+  }
+  return isValidConnectorName(name) ? connectorFile(name) : undefined;
+}
+
 /** The file a configuration type stands for, or undefined for a type this plugin does not manage. */
 export function fileOfType(type: string | undefined | null): ManagedFile | undefined {
   const library = libraryOf(type);

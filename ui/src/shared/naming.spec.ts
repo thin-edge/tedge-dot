@@ -7,6 +7,7 @@ import {
   isValidName,
   libraryFile,
   libraryOf,
+  managedFile,
   nameOf,
   newestByType,
   normalizeName,
@@ -80,5 +81,23 @@ describe('naming', () => {
     expect(entriesOfKind(entries, 'connector').map(e => e.name)).toEqual(['a']);
     expect(entriesOfKind(entries, 'library').map(e => e.name)).toEqual(['b', 'c']);
     expect(newestByType(entries).get('tedge-dot-points.modbus.meter')?.name).toBe('c');
+  });
+
+  it('builds the file to register from a kind, a typed name and a protocol', () => {
+    expect(managedFile('connector', ' opcua2.toml ')).toEqual({
+      kind: 'connector',
+      name: 'opcua2',
+      type: 'tedge-dot-opcua2',
+      path: '/etc/tedge/plugins/ot/opcua2.toml',
+    });
+    expect(managedFile('library', 'opcua-demo-pump', 'opcua')?.path).toBe('/etc/tedge/plugins/ot/points.d/opcua/opcua-demo-pump.toml');
+    expect(managedFile('library', 'opcua-demo-pump', 'opcua')?.type).toBe('tedge-dot-points.opcua.opcua-demo-pump');
+    // A connector file never takes a library's name; a library may start with "points.".
+    expect(managedFile('connector', 'points.meter')).toBeUndefined();
+    expect(managedFile('library', 'points.meter', 'modbus')?.name).toBe('points.meter');
+    expect(managedFile('library', 'meter', '')).toBeUndefined();
+    expect(managedFile('library', 'meter', 'Mod Bus')).toBeUndefined();
+    expect(managedFile('connector', '../tedge')).toBeUndefined();
+    expect(managedFile('connector', '')).toBeUndefined();
   });
 });

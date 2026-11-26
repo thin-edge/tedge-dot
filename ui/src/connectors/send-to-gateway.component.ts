@@ -1,23 +1,53 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { IManagedObject, InventoryService } from '@c8y/client';
-import { CoreModule } from '@c8y/ngx-components';
+import { CoreModule, Permissions } from '@c8y/ngx-components';
+import { gettext } from '@c8y/ngx-components/gettext';
 import { SharedRepositoryModule } from '@c8y/ngx-components/repository/shared';
 import { BsModalRef } from 'ngx-bootstrap/modal';
 
+import { PROTOCOL_IDS } from '../generated/config-builder';
 import { ConnectorOperationsService, RegistrationCancelled } from '../shared/connector-operations.service';
+import { newFileRoute } from '../shared/editor-context';
 import {
+  type FileKind,
   type ManagedFile,
-  connectorFile,
   entriesOfKind,
   fileOfType,
   isValidConnectorName,
+  isValidName,
+  libraryPathOf,
+  managedFile,
   normalizeName,
+  pathOf,
 } from '../shared/naming';
+import { canAddEntries } from '../shared/permissions';
 import { managedEntriesQuery } from '../shared/queries';
 import { ValidIfDirective } from './valid-if.directive';
 
 type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
+
+/** What "Add connector file" on the device tab does. */
+type Choice = 'repository' | 'new' | 'register';
+
+const CHOICES: { id: Choice; label: string; text: string }[] = [
+  {
+    id: 'repository',
+    label: gettext('From the repository'),
+    text: gettext('Send a connector file or point library from the configuration repository to this gateway.'),
+  },
+  {
+    id: 'new',
+    label: gettext('New file'),
+    text: gettext('Create a connector file or point library in the repository, then send it to this gateway.'),
+  },
+  {
+    id: 'register',
+    label: gettext('Already on the gateway'),
+    text: gettext('Register a file the gateway already has, such as a packaged modbus.toml. Nothing is created or sent.'),
+  },
+];
 
 /**
  * Adds a connector file or point library to one gateway: registers it in thin-edge.io's list of
@@ -25,9 +55,10 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
  * connector file brings the repository libraries it references: those the gateway does not offer
  * are registered in the same edit and sent first.
  *
- * Opened from the OT connectors page (with an entry, to pick a gateway), from the device tab
- * (with a gateway, to pick an entry), or from the device tab to register a file that is already
- * on the gateway (`registerOnly`).
+ * Opened from the OT connectors page (with an entry, to pick a gateway), from the editor (with an
+ * entry and a gateway, after saving), or from the device tab (with a gateway). From the device
+ * tab it starts with a choice: send an entry from the repository, create a new file in the editor,
+ * or register a file that is already on the gateway.
  */
 @Component({
   selector: 'tdot-send-to-gateway',
@@ -59,47 +90,113 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
                 <p class="text-muted">{{ 'No thin-edge.io gateway matches.' | translate }}</p>
               }
             </div>
+          } @else if (entry) {
+            <p>{{ 'Gateway' | translate }}: <strong>{{ device['name'] }}</strong></p>
           }
-          @if (registerOnly) {
-            <c8y-form-group>
-              <label for="tdot-reg-name">{{ 'File in /etc/tedge/plugins/ot' | translate }}</label>
-              <input
-                id="tdot-reg-name"
-                class="form-control"
-                aria-describedby="tdot-reg-name-msg"
-                [(ngModel)]="fileName"
-                [tdotValidIf]="registerNameCheck"
-                (blur)="fileTouched.set(true)"
-                placeholder="modbus"
-              />
-              <c8y-messages id="tdot-reg-name-msg">
-                @if (fileTouched() && !registerNameCheck(fileName())) {
-                  <c8y-message>
-                    {{ 'Letters, digits, ".", "_" and "-" only, starting with a letter or digit. It may not start with "points.", which point libraries use.' | translate }}
-                  </c8y-message>
-                }
-              </c8y-messages>
-            </c8y-form-group>
-            <p class="text-muted">
-              {{ 'The gateway then offers the file as a configuration type, so you can take snapshots of it and send new versions.' | translate }}
-            </p>
-          } @else if (!entry) {
-            <label>{{ 'Connector file' | translate }}</label>
-            <div class="list-group">
-              @for (e of connectorEntries(); track e.id) {
-                <ng-container *ngTemplateOutlet="entryItem; context: { $implicit: e }"></ng-container>
-              } @empty {
-                <p class="text-muted">{{ 'The repository has no connector files yet.' | translate }}</p>
+          @if (entry) {
+            <p>{{ kindLabel(entry) | translate }}: <strong>{{ entry['name'] }}</strong> · {{ fileLabel(entry) }}</p>
+          } @else {
+            <fieldset class="m-b-16">
+              <legend class="sr-only">{{ 'What to add' | translate }}</legend>
+              @for (c of choices; track c.id) {
+                <label class="c8y-radio m-b-8">
+                  <input type="radio" name="tdot-choice" [value]="c.id" [checked]="choice() === c.id" (change)="choose(c.id)" />
+                  <span></span>
+                  <span>
+                    <strong>{{ c.label | translate }}</strong>
+                    <span class="d-block text-muted small">{{ c.text | translate }}</span>
+                  </span>
+                </label>
               }
-            </div>
-            @if (libraryEntries().length) {
-              <label>{{ 'Point library' | translate }}</label>
-              <div class="list-group">
-                @for (e of libraryEntries(); track e.id) {
-                  <ng-container *ngTemplateOutlet="entryItem; context: { $implicit: e }"></ng-container>
+            </fieldset>
+            @switch (choice()) {
+              @case ('repository') {
+                <label>{{ 'Connector file' | translate }}</label>
+                <div class="list-group">
+                  @for (e of connectorEntries(); track e.id) {
+                    <ng-container *ngTemplateOutlet="entryItem; context: { $implicit: e }"></ng-container>
+                  } @empty {
+                    <p class="text-muted">{{ 'The repository has no connector files yet.' | translate }}</p>
+                  }
+                </div>
+                @if (libraryEntries().length) {
+                  <label>{{ 'Point library' | translate }}</label>
+                  <div class="list-group">
+                    @for (e of libraryEntries(); track e.id) {
+                      <ng-container *ngTemplateOutlet="entryItem; context: { $implicit: e }"></ng-container>
+                    }
+                  </div>
                 }
-              </div>
+              }
+              @case ('new') {
+                <ng-container *ngTemplateOutlet="kindPicker"></ng-container>
+                <p class="text-muted">
+                  {{ 'Opens the editor. When you save, the file is added to the repository and you can send it to this gateway.' | translate }}
+                </p>
+              }
+              @case ('register') {
+                <ng-container *ngTemplateOutlet="kindPicker"></ng-container>
+                <div class="row">
+                  @if (kind() === 'library') {
+                    <div class="col-sm-4">
+                      <c8y-form-group>
+                        <label for="tdot-reg-protocol">{{ 'Protocol' | translate }}</label>
+                        <div class="c8y-select-wrapper">
+                          <select id="tdot-reg-protocol" class="form-control" [(ngModel)]="protocol">
+                            <option value="" disabled>{{ 'Select a protocol' | translate }}</option>
+                            @for (p of protocols; track p) {
+                              <option [value]="p">{{ p }}</option>
+                            }
+                          </select>
+                        </div>
+                      </c8y-form-group>
+                    </div>
+                  }
+                  <div [class]="kind() === 'library' ? 'col-sm-8' : 'col-sm-12'">
+                    <c8y-form-group>
+                      <label for="tdot-reg-name">{{ (kind() === 'library' ? 'Library name' : 'File name') | translate }}</label>
+                      <div class="input-group">
+                        <input
+                          id="tdot-reg-name"
+                          class="form-control"
+                          aria-describedby="tdot-reg-name-msg"
+                          [(ngModel)]="fileName"
+                          [tdotValidIf]="registerNameCheck()"
+                          (blur)="fileTouched.set(true)"
+                          [placeholder]="kind() === 'library' ? 'opcua-demo-pump' : 'modbus'"
+                        />
+                        <span class="input-group-addon">.toml</span>
+                      </div>
+                      <c8y-messages id="tdot-reg-name-msg" [defaults]="noDefaultMessages" [helpMessage]="registerNameError() ? '' : registerPath()">
+                        @if (registerNameError()) {
+                          <c8y-message>{{ registerNameRule() | translate }}</c8y-message>
+                        }
+                      </c8y-messages>
+                    </c8y-form-group>
+                  </div>
+                </div>
+                <p class="text-muted">
+                  {{ 'Registering makes a file that is already on the gateway a configuration type, so you can take snapshots of it and send new versions. It does not create or send the file.' | translate }}
+                  @if (canAdd) {
+                    {{ 'For a new file, choose New file.' | translate }}
+                  }
+                </p>
+              }
             }
+            <ng-template #kindPicker>
+              <div class="form-group">
+                <label class="c8y-radio radio-inline">
+                  <input type="radio" name="tdot-kind" value="connector" [checked]="kind() === 'connector'" (change)="kind.set('connector')" />
+                  <span></span>
+                  <span>{{ 'Connector file' | translate }}</span>
+                </label>
+                <label class="c8y-radio radio-inline">
+                  <input type="radio" name="tdot-kind" value="library" [checked]="kind() === 'library'" (change)="kind.set('library')" />
+                  <span></span>
+                  <span>{{ 'Point library' | translate }}</span>
+                </label>
+              </div>
+            </ng-template>
             <ng-template #entryItem let-e>
               <button type="button" class="list-group-item" [class.active]="chosen()?.id === e.id" (click)="chosen.set(e)">
                 <strong>{{ e['name'] }}</strong> · {{ fileLabel(e) }}
@@ -111,8 +208,6 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
                 }
               </button>
             </ng-template>
-          } @else {
-            <p>{{ kindLabel(entry) | translate }}: <strong>{{ entry['name'] }}</strong> · {{ fileLabel(entry) }}</p>
           }
         }
         @case ('running') {
@@ -143,13 +238,13 @@ type State = 'pick' | 'running' | 'confirm' | 'done' | 'error';
         @case ('pick') {
           <button class="btn btn-default" type="button" (click)="close()">{{ 'Cancel' | translate }}</button>
           <button class="btn btn-primary" type="button" [disabled]="!ready" (click)="run()">
-            {{ (registerOnly ? 'Register' : 'Send') | translate }}
+            {{ primaryLabel | translate }}
           </button>
         }
         @case ('confirm') {
           <button class="btn btn-default" type="button" (click)="answer(false)">{{ 'Cancel' | translate }}</button>
           <button class="btn btn-primary" type="button" (click)="answer(true)">
-            {{ (registerOnly ? 'Register' : 'Register and send') | translate }}
+            {{ (registering ? 'Register' : 'Register and send') | translate }}
           </button>
         }
         @case ('running') {
@@ -166,14 +261,22 @@ export class SendToGatewayComponent implements OnInit {
   readonly ops = inject(ConnectorOperationsService);
   private readonly inventory = inject(InventoryService);
   private readonly modalRef = inject(BsModalRef);
+  private readonly router = inject(Router);
+  private readonly permissions = inject(Permissions);
 
   /** Set by the opener. */
   entry?: IManagedObject;
   device?: IManagedObject;
-  registerOnly = false;
   onFinished?: () => void;
 
+  readonly protocols = PROTOCOL_IDS;
+  /** Whether the user can add repository entries; without it, "New file" is not offered. */
+  readonly canAdd = canAddEntries(roles => this.permissions.hasAnyRole(roles));
+  readonly choices = CHOICES.filter(c => c.id !== 'new' || this.canAdd);
+
   readonly state = signal<State>('pick');
+  readonly choice = signal<Choice>('repository');
+  readonly kind = signal<FileKind>('connector');
   readonly term = signal('');
   readonly gateways = signal<IManagedObject[]>([]);
   readonly connectorEntries = signal<IManagedObject[]>([]);
@@ -182,6 +285,7 @@ export class SendToGatewayComponent implements OnInit {
   readonly picked = signal<IManagedObject | undefined>(undefined);
   readonly chosen = signal<IManagedObject | undefined>(undefined);
   readonly fileName = signal('');
+  readonly protocol = signal('');
   readonly fileTouched = signal(false);
   readonly step = signal('');
   readonly block = signal('');
@@ -189,24 +293,54 @@ export class SendToGatewayComponent implements OnInit {
   readonly errorText = signal('');
   private resolveConfirm?: (ok: boolean) => void;
 
+  /** The file "Already on the gateway" registers, once its name (and protocol) are valid. */
+  readonly registerFile = computed(() => managedFile(this.kind(), this.fileName(), this.protocol()));
+  /** An empty name is not an error yet; the Register button waits for a valid one. */
+  readonly registerNameCheck = computed(() =>
+    this.kind() === 'library'
+      ? (value: string) => !value || isValidName(normalizeName(value))
+      : (value: string) => !value || isValidConnectorName(normalizeName(value))
+  );
+  readonly registerNameError = computed(() => this.fileTouched() && !this.registerNameCheck()(this.fileName()));
+  readonly registerNameRule = computed(() =>
+    this.kind() === 'library'
+      ? gettext('Letters, digits, ".", "_" and "-" only, starting with a letter or digit.')
+      : gettext('Letters, digits, ".", "_" and "-" only, starting with a letter or digit. It may not start with "points.", which point libraries use.')
+  );
+  /** Where the registered file is on the gateway, with placeholders until it is valid. */
+  readonly registerPath = computed(() => {
+    const file = this.registerFile();
+    if (file) {
+      return file.path;
+    }
+    return this.kind() === 'library' ? libraryPathOf(this.protocol() || '<protocol>', '<name>') : pathOf('<name>');
+  });
+  /** No built-in texts, such as "This field is required.": the field shows its own. */
+  readonly noDefaultMessages = {};
+
+  /** Whether this run only registers a file, from "Already on the gateway". */
+  get registering(): boolean {
+    return !this.entry && this.choice() === 'register';
+  }
+
   get title(): string {
-    if (this.registerOnly) {
-      return 'Register a file on the gateway';
+    if (!this.entry && this.device) {
+      return 'Add connector file';
     }
     return this.entry && fileOfType(this.entry['configurationType'])?.kind === 'library'
       ? 'Add point library to a gateway'
       : 'Add connector file to a gateway';
   }
 
-  get entryType(): string | undefined {
-    return (this.entry ?? this.chosen())?.['configurationType'];
+  get primaryLabel(): string {
+    if (this.entry) {
+      return 'Send';
+    }
+    return { repository: 'Send', new: 'Open the editor', register: 'Register' }[this.choice()];
   }
 
-  /** An empty name is not an error yet; the Register button waits for a valid one. */
-  readonly registerNameCheck = (value: string) => !value || isValidConnectorName(normalizeName(value));
-
-  get fileValid(): boolean {
-    return isValidConnectorName(normalizeName(this.fileName()));
+  get entryType(): string | undefined {
+    return (this.entry ?? this.chosen())?.['configurationType'];
   }
 
   get ready(): boolean {
@@ -214,18 +348,33 @@ export class SendToGatewayComponent implements OnInit {
     if (!gateway) {
       return false;
     }
-    return this.registerOnly ? this.fileValid : !!(this.entry ?? this.chosen());
+    if (this.entry) {
+      return true;
+    }
+    switch (this.choice()) {
+      case 'repository':
+        return !!this.chosen();
+      case 'new':
+        return this.canAdd;
+      case 'register':
+        return !!this.registerFile();
+    }
   }
 
   async ngOnInit(): Promise<void> {
     if (!this.device) {
       await this.search();
     }
-    if (!this.entry && !this.registerOnly) {
+    if (!this.entry) {
       const { data } = await this.inventory.list({ query: managedEntriesQuery(), pageSize: 2000 });
       this.connectorEntries.set(entriesOfKind(data, 'connector'));
       this.libraryEntries.set(entriesOfKind(data, 'library'));
     }
+  }
+
+  choose(choice: Choice): void {
+    this.choice.set(choice);
+    this.fileTouched.set(false);
   }
 
   /** Where the entry's file lands, relative to /etc/tedge/plugins/ot. */
@@ -251,18 +400,23 @@ export class SendToGatewayComponent implements OnInit {
 
   async run(): Promise<void> {
     const gateway = this.device ?? this.picked();
-    const entry = this.entry ?? this.chosen();
-    const file: ManagedFile | undefined = this.registerOnly
-      ? connectorFile(normalizeName(this.fileName()))
-      : fileOfType(entry?.['configurationType']);
-    if (!gateway || !file) {
+    if (!gateway) {
+      return;
+    }
+    if (!this.entry && this.choice() === 'new') {
+      this.openEditor(gateway);
+      return;
+    }
+    const entry = this.registering ? undefined : (this.entry ?? this.chosen());
+    const file: ManagedFile | undefined = this.registering ? this.registerFile() : fileOfType(entry?.['configurationType']);
+    if (!file) {
       return;
     }
     this.state.set('running');
     this.librariesToSend.set([]);
     try {
       let libraries: IManagedObject[] = [];
-      if (!this.registerOnly && entry && file.kind === 'connector') {
+      if (entry && file.kind === 'connector') {
         this.step.set('Looking up the point libraries the connector file references');
         libraries = await this.ops.librariesOf(entry);
       }
@@ -283,7 +437,7 @@ export class SendToGatewayComponent implements OnInit {
           }),
         step => this.step.set(step)
       );
-      if (this.registerOnly || !entry) {
+      if (!entry) {
         this.doneText.set(`${gateway['name']} offers ${file.type} for ${file.path}.`);
       } else {
         for (const library of toSend) {
@@ -307,6 +461,13 @@ export class SendToGatewayComponent implements OnInit {
       this.errorText.set(e instanceof Error ? e.message : String(e));
       this.state.set('error');
     }
+  }
+
+  /** "New file": the editor, which offers to send the saved file to this gateway. */
+  private openEditor(gateway: IManagedObject): void {
+    const route = newFileRoute(this.kind(), String(gateway.id));
+    this.modalRef.hide();
+    void this.router.navigate(route.commands, { queryParams: route.queryParams });
   }
 
   close(): void {
