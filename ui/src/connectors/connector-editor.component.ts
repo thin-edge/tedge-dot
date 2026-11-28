@@ -26,6 +26,7 @@ import {
   typeOf,
 } from '../shared/naming';
 import { PendingFileService } from '../shared/pending-file.service';
+import { PickerContextService } from '../shared/picker-context.service';
 import { emitLibraryToml, writeKeepingLayout } from '../shared/toml-write';
 import { TOML_LANGUAGE_ID, tomlLanguage } from '../shared/toml-language';
 import { type ValidationResult, describePointer, isValid, validateConnectorFile, validateLibraryFile } from '../shared/validation';
@@ -60,6 +61,9 @@ const MARKER_OWNER = 'tedge-dot';
       <div class="inner-scroll">
         <div class="card-block">
           @if (copyNote(); as note) {
+            <div class="alert alert-info" role="status">{{ note }}</div>
+          }
+          @if (handedNote(); as note) {
             <div class="alert alert-info" role="status">{{ note }}</div>
           }
           <div class="row">
@@ -166,14 +170,14 @@ const MARKER_OWNER = 'tedge-dot';
                     {{ 'This file has no [library] table, so the form cannot show it. Edit it in the TOML view.' | translate }}
                   </div>
                 } @else {
-                  <tdot-library-form [config]="r.config!" [errors]="r.fields" [protocolFixed]="!isNew()" (configChange)="onFormChange($event)" />
+                  <tdot-library-form [config]="r.config!" [errors]="r.fields" [protocolFixed]="!isNew()" (configChange)="onFormChange($event)" (pointsFromNamespace)="fromNamespace()" />
                 }
               } @else if (!r.config?.['connector']) {
                 <div class="alert alert-info" role="status">
                   {{ 'This file has no [connector] table, so the form cannot show it. Edit it in the TOML view.' | translate }}
                 </div>
               } @else {
-                <tdot-connector-form [config]="r.config!" [errors]="r.fields" [catalog]="catalog()" (configChange)="onFormChange($event)" />
+                <tdot-connector-form [config]="r.config!" [errors]="r.fields" [catalog]="catalog()" (configChange)="onFormChange($event)" (pointsFromNamespace)="fromNamespace($event)" />
               }
             }
           } @else {
@@ -258,6 +262,7 @@ export class ConnectorEditorComponent {
   private readonly alert = inject(AlertService);
   private readonly modal = inject(ModalService);
   private readonly pending = inject(PendingFileService);
+  private readonly pickerContext = inject(PickerContextService);
   private readonly ops = inject(ConnectorOperationsService);
 
   readonly protocols = PROTOCOL_IDS;
@@ -301,6 +306,8 @@ export class ConnectorEditorComponent {
       (service ? ` Its service name is ${service}, so it can run next to the original on the same gateway.` : '')
     );
   });
+  /** Where handed content came from, e.g. points from a namespace file; until it is saved. */
+  readonly handedNote = signal<string | undefined>(undefined);
   readonly view = signal<'form' | 'toml'>('form');
 
   readonly heading = computed(() =>
@@ -400,6 +407,7 @@ export class ConnectorEditorComponent {
       // An uploaded file that needs fixing, or a copy of an entry, comes here from the page.
       const uploaded = this.pending.take();
       this.copyOf.set(uploaded?.copyOf);
+      this.handedNote.set(uploaded?.note);
       if (uploaded) {
         this.kind.set(uploaded.kind);
         this.name.set(uploaded.name ?? uploaded.fileName);
@@ -418,6 +426,7 @@ export class ConnectorEditorComponent {
     }
     this.isNew.set(false);
     this.copyOf.set(undefined);
+    this.handedNote.set(undefined);
     try {
       const { data } = await this.inventory.detail(id);
       if (this.route.snapshot.paramMap.get('id') !== id) {
@@ -432,6 +441,16 @@ export class ConnectorEditorComponent {
       this.deviceType.set(data['deviceType'] ?? '');
       this.fileName.set(file?.name ?? '');
       this.content.set(data['url'] ? await this.repository.getBinaryText(data['url'], { allowExternal: false }) : '');
+      // Changes made elsewhere, such as points from a namespace file, replace the saved text.
+      const handed = this.pending.takeFor(id);
+      if (handed) {
+        this.content.set(handed.text);
+        this.handedNote.set(handed.note);
+        // Coming back from Create from namespace: the editor's own fields, unsaved edits included.
+        if (handed.name !== undefined) this.name.set(handed.name);
+        if (handed.description !== undefined) this.description.set(handed.description);
+        if (handed.deviceType !== undefined) this.deviceType.set(handed.deviceType);
+      }
       // A file the form cannot read opens as TOML, where the problem is marked.
       if (this.result().config) {
         this.showForm();
@@ -441,6 +460,28 @@ export class ConnectorEditorComponent {
     } catch (e) {
       this.alert.addServerFailure(e);
     }
+  }
+
+  /**
+   * Opens Create from namespace for this file (and, for a connector file, device `d`), with the
+   * editor's current text: the picker adds the points to it and comes back here, unsaved edits
+   * included.
+   */
+  fromNamespace(d?: number): void {
+    const config = this.result().config;
+    const device = d === undefined ? undefined : String(config?.['device']?.[d]?.['name'] ?? '') || undefined;
+    this.pickerContext.set({
+      kind: this.kind(),
+      protocol: String((this.isLibrary() ? config?.['library']?.['protocol'] : config?.['connector']?.['protocol']) ?? ''),
+      entryId: this.isNew() ? undefined : String(this.entry()?.id ?? '') || undefined,
+      name: this.name(),
+      description: this.description(),
+      fileName: normalizeName(this.fileName()),
+      deviceType: this.deviceType(),
+      text: this.content(),
+      device,
+    });
+    void this.router.navigate(['/ot-connectors', 'namespace'], { queryParams: { from: 'editor' } });
   }
 
   useTemplate(protocol: ProtocolId): void {

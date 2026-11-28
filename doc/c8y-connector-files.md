@@ -102,6 +102,12 @@ protocol: one in the repository, or one the tedge-dot packages install (see
 [Point libraries](#point-libraries)). A path is refused, because Cumulocity can neither deliver
 nor check the file it names. Like a schema error, an unknown reference keeps *Save* disabled.
 
+A method point (`access = "call_method"`) takes no value settings: `datatype`, `poll_interval`,
+`subscribe` and the other fields that describe a value are refused with "does not apply to a
+call_method point", as the connectors refuse them. For OPC UA, the method address keys
+(`object_id`, `method_id`, `inputs`) apply only to a method point, and the variable keys not to
+one.
+
 The check cannot see what only the gateway knows, such as whether a file named by a setting can
 be read. **A file that tedge-dot refuses still counts as installed in Cumulocity**: the connector
 logs the problem and keeps its previous configuration until the next restart, after which it
@@ -149,6 +155,59 @@ A group send stays one bulk operation and adds no files: its check also lists th
 lack a library the file references, and reminds you to send changed libraries to the group
 first.
 
+## Points from a namespace scan
+
+Instead of copying node ids from an OPC UA client, build a library or a device's points from a
+scan of the server. The third list on the OT connectors page, **Namespaces**, holds the scans
+stored in Cumulocity ([namespace files](namespace-files.md)):
+
+- **Scan address space** asks a gateway to scan one of its OPC UA devices, with the device's own
+  connection settings, and adds the result to the list. The gateway needs
+  [opcua-scan](namespace-files.md#install-opcua-scan). A scope (start node, depth, include and
+  exclude patterns, node classes, children per node) keeps large address spaces manageable. A
+  device keeps one namespace file: a new scan replaces the previous one once it succeeds.
+- **Upload namespace file** stores a file written by
+  `opcua-scan browse ... --output tedge-dot-namespace` elsewhere, such as on a laptop. It replaces
+  an earlier upload of the same server.
+- **Download** saves a file as `.json.gz`, and **Delete** removes it. Libraries made from it stay.
+
+**Create from namespace** opens a file as a tree. Expand it, search by name or path, and filter by
+node class, data type, writable nodes, or nodes with points. Check a variable to take its proposed
+point, or an object to take the points of the variables below it; a structure proposes one point
+per field. Methods are actions, not values: check a method itself to add its `call_method` point,
+which Cumulocity can then trigger with a `c8y_CallMethod` operation (an object with nothing but
+methods below it takes those). A node marked with a ban sign has no point, and its details say why
+(an array, a property, an unsupported type). *truncated* marks a branch the scan did not read in
+full.
+
+The checked points are listed on the right. Change a point's id, name or unit in place, or mark
+several and set subscribe or poll with an interval, the access, and the measurement type and
+fragment at once. Method points take only an id and a name: a change of several points leaves
+their other settings alone and says so. Two points with the same id are marked, and the result cannot be created until
+one is renamed.
+
+Choose where the points go:
+
+- **New point library**: a name and an optional device type. The library gets the scan's
+  namespace table.
+- **Existing point library**, or a **device in a connector file**: the points the target already
+  has for nodes in the scan start checked. Unchecking one removes it, checking a node adds its
+  point, and the target's other points, settings and comments stay. New points are written in the
+  target's namespace numbering; a namespace it lacks is appended to its table.
+
+**Open in editor** opens the result unsaved, with a note on what changed. Check it and save it as
+any other entry, then send it to the gateway.
+
+When a scan's connector file and device are in the repository, the picker starts with that device
+as the target, so a scan made from a gateway lands in the right file without choosing it.
+
+You can also start from the file: in the editor of an OPC UA connector file, each device has
+**Add points from namespace** next to *Add point*; an OPC UA library has it too. The picker opens
+with the device's scan (one made from the same connector file first, then the newest; choose
+another at the top) and the file you are editing as the target, unsaved changes included. If the
+device has no scan yet, scan it or upload a file from there. **Open in editor** brings you back
+with the points added; **Back to the editor** brings you back unchanged.
+
 ## The OT connectors tab
 
 Every device that offers the configuration type `tedge-configuration-plugin` gets an **OT
@@ -167,6 +226,9 @@ libraries:
   file, with the libraries it references, or a point library.
 - **Register a file on the gateway** makes a file that is already there, such as a packaged
   `modbus.toml`, a configuration type, so you can take snapshots of it and send new versions.
+
+Below them, **Namespaces** lists the namespace files this gateway's scans produced, with **Scan
+address space** when the gateway offers it ([Points from a namespace scan](#points-from-a-namespace-scan)).
 
 ## Adding a file to a gateway
 
